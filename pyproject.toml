@@ -1,0 +1,27 @@
+[project]
+name = "study-agent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Aditya", email = "adityaalt9090@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "google-api-python-client>=2.201.0",
+    "google-genai>=2.29.0",
+    "httpx>=0.28.1",
+    "playwright>=1.63.0",
+    "pymupdf>=1.28.2",
+    "python-dotenv>=1.2.4",
+    "python-telegram-bot>=22.8",
+    "streamlit>=1.65.0",
+    "todoist-api-python>=4.0.0",
+]
+
+[project.scripts]
+study-agent = "study_agent:main"
+
+[build-system]
+requires = ["uv_build>=0.12.20,<0.13.0"]
+build-backend = "uv_build"
