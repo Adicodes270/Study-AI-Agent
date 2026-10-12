@@ -1,63 +1,56 @@
-import json
-import re
-
-from ..config import DEFAULT_CLASS_LEVEL, ROOT
+from ..config import DEFAULT_CLASS_LEVEL
+from ..db import get_db
 from .models import Syllabus
-
-DATA_DIR = ROOT / "data"
-
-
-def slugify(name: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
-
-
-def find_known_class(chat_dir) -> int | None:
-    """Look through already-saved subjects for a class."""
-    for path in chat_dir.glob("syllabus_*.json"):
-        data = json.loads(path.read_text(encoding="utf-8"))
-        # "class_level" is the old key name from earlier files
-        known = data.get("class") or data.get("class_level")
-        if known is not None:
-            return known
-    return None
 
 
 def save_syllabus(chat_id: int, syllabus: Syllabus) -> dict[str, str]:
-    """Save each subject to its own file. Returns {label: added/updated/unchanged}."""
-    chat_dir = DATA_DIR / str(chat_id)
-    chat_dir.mkdir(parents=True, exist_ok=True)
-
-    # Priority: class in the message > class already saved > CLASS_LEVEL from .env
-    class_level = (
-        syllabus.class_level
-        or find_known_class(chat_dir)
-        or DEFAULT_CLASS_LEVEL
-    )
-    exam_slug = slugify(syllabus.exam) if syllabus.exam else ""
-
+    """Save each subject. Returns {label: added/updated/unchanged}."""
+    exam = syllabus.exam or ""
     results = {}
-    for subject in syllabus.subjects:
-        parts = ["syllabus", slugify(subject.name), exam_slug]
-        path = chat_dir / ("_".join(p for p in parts if p) + ".json")
 
-        new_data = {
-            "class": class_level,
-            "exam": syllabus.exam,
-            "name": subject.name,
-            "chapters": [c.model_dump() for c in subject.chapters],
-        }
-        label = f"{subject.name} ({syllabus.exam})" if syllabus.exam else subject.name
+    with get_db() as db:
+        # Class priority: in the message > already saved > CLASS_LEVEL from .env
+        row = db.execute(
+            "SELECT class FROM chats WHERE chat_id = ?", (chat_id,)
+        ).fetchone()
+        saved_class = row["class"] if row else None
+        class_value = syllabus.class_level or saved_class or DEFAULT_CLASS_LEVEL
 
-        if path.exists():
-            old_data = json.loads(path.read_text(encoding="utf-8"))
-            if new_data == old_data:
+        db.execute(
+            "INSERT INTO chats (chat_id, class) VALUES (?, ?) "
+            "ON CONFLICT(chat_id) DO UPDATE SET class = excluded.class",
+            (chat_id, class_value),
+        )
+
+        for subject in syllabus.subjects:
+            label = f"{subject.name} ({syllabus.exam})" if syllabus.exam else subject.name
+            new = [(c.number, c.title) for c in subject.chapters]
+            old = [
+                (r["number"], r["title"])
+                for r in db.execute(
+                    "SELECT number, title FROM syllabus_chapters "
+                    "WHERE chat_id = ? AND subject = ? AND exam = ? ORDER BY id",
+                    (chat_id, subject.name, exam),
+                )
+            ]
+
+            if old == new:
                 results[label] = "unchanged"
                 continue
-            results[label] = "updated"
-        else:
-            results[label] = "added"
 
-        path.write_text(
-            json.dumps(new_data, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
+            results[label] = "updated" if old else "added"
+            db.execute(
+                "DELETE FROM syllabus_chapters "
+                "WHERE chat_id = ? AND subject = ? AND exam = ?",
+                (chat_id, subject.name, exam),
+            )
+            db.executemany(
+                "INSERT INTO syllabus_chapters "
+                "(chat_id, class, subject, exam, number, title) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    (chat_id, class_value, subject.name, exam, num, title)
+                    for num, title in new
+                ],
+            )
     return results

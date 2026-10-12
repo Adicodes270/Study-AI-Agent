@@ -2,6 +2,7 @@ import asyncio
 import re
 
 from telegram import Update
+from telegram.error import NetworkError
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -11,9 +12,9 @@ from telegram.ext import (
 )
 
 from ..config import TELEGRAM_BOT_TOKEN
-from .pdf_reader import extract_pdf_text
+from ..db import init_db
 from .storage import save_syllabus
-from .syllabus_parser import parse_syllabus
+from .syllabus_parser import parse_syllabus, parse_syllabus_pdf
 
 MAX_PDF_BYTES = 20 * 1024 * 1024  # Telegram bots can't download files over 20 MB
 
@@ -37,20 +38,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def process_syllabus_text(update: Update, text: str):
-    """Shared by text messages and PDFs: parse, save, reply."""
+async def process_syllabus(update: Update, parse_fn, payload, hint_text: str):
+    """Shared by text and PDF: parse, save, reply."""
     group = in_group(update)
 
-    await update.effective_chat.send_action("typing")
-
-    if group and not SYLLABUS_HINTS.search(text):
+    if group and not SYLLABUS_HINTS.search(hint_text):
+        print("Ignored: no syllabus keywords found")
         return
 
     if not group:
         await update.message.reply_text("Got it, reading your syllabus...")
+    await update.effective_chat.send_action("typing")
 
     try:
-        syllabus = await asyncio.to_thread(parse_syllabus, text)
+        syllabus = await asyncio.to_thread(parse_fn, payload)
     except Exception as e:
         print(f"Parse error: {e}")
         if not group:
@@ -58,6 +59,7 @@ async def process_syllabus_text(update: Update, text: str):
         return
 
     if not syllabus.subjects:
+        print("Gemini found no subjects")
         if not group:
             await update.message.reply_text("I couldn't find any subjects in that.")
         return
@@ -74,43 +76,59 @@ async def process_syllabus_text(update: Update, text: str):
 
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await process_syllabus_text(update, update.message.text)
+    text = update.message.text
+    await process_syllabus(update, parse_syllabus, text, text)
 
 
 async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    
     group = in_group(update)
     doc = update.message.document
+    print(f"PDF received: {doc.file_name} ({doc.file_size} bytes)")
 
     if doc.file_size and doc.file_size > MAX_PDF_BYTES:
         if not group:
             await update.message.reply_text("That PDF is over 20 MB, which is too big for me.")
         return
 
+    # In groups, decide from the file name and caption, since we aren't reading the text ourselves
+    hint = f"{doc.file_name or ''} {update.message.caption or ''}"
+    if group and not SYLLABUS_HINTS.search(hint):
+        print("Ignored PDF: file name has no syllabus keywords")
+        return
+
     try:
         tg_file = await doc.get_file()
         pdf_bytes = bytes(await tg_file.download_as_bytearray())
-        text = await asyncio.to_thread(extract_pdf_text, pdf_bytes)
     except Exception as e:
         print(f"PDF error: {e}")
         if not group:
-            await update.message.reply_text(f"Sorry, I couldn't open that PDF: {e}")
+            await update.message.reply_text(f"Sorry, I couldn't download that PDF: {e}")
         return
 
-    if not text:
-        if not group:
-            await update.message.reply_text(
-                "That PDF has no readable text. It might be a scanned image."
-            )
-        return
+    await process_syllabus(update, parse_syllabus_pdf, pdf_bytes, hint)
 
-    await process_syllabus_text(update, text)
+
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
+    if isinstance(context.error, NetworkError):
+        print(f"Network hiccup, retrying automatically: {context.error}")
+        return
+    print(f"Unexpected error: {context.error!r}")
 
 
 def run_bot():
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    init_db()
+    app = (
+        Application.builder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .connect_timeout(30)
+        .read_timeout(30)
+        .write_timeout(30)
+        .pool_timeout(30)
+        .build()
+    )
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.Document.PDF, handle_pdf))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    app.add_error_handler(on_error)
     print("Bot is running. Press Ctrl+C to stop.")
-    app.run_polling()
+    app.run_polling(bootstrap_retries=-1)
