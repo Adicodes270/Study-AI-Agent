@@ -1,0 +1,24 @@
+{
+  "name": "study-agent",
+  "version": "0.1.0",
+  "description": "Add your description here",
+  "type": "module",
+  "main": "src/index.js",
+  "bin": {
+    "study-agent": "src/index.js"
+  },
+  "scripts": {
+    "start": "node src/main.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "author": "Aditya <adityaalt9090@gmail.com>",
+  "dependencies": {
+    "@google/genai": "^1.0.0",
+    "better-sqlite3": ">=11.0.0",
+    "dotenv": "^16.4.5",
+    "grammy": "^1.30.0",
+    "zod": "^3.23.8"
+  }
+}
