@@ -1,0 +1,50 @@
+/* ==========================================================================
+   theme.css — Strict HSL Design Token System
+   ========================================================================== */
+
+:root {
+
+  --bg-primary: hsl(230, 25%, 5%);
+  --bg-surface: hsl(230, 20%, 9%);
+  --bg-elevated: hsl(230, 18%, 14%);
+
+  --text-primary: hsl(220, 20%, 98%);
+  --text-secondary: hsl(220, 12%, 65%);
+  --text-muted: hsl(220, 10%, 42%);
+
+  --accent-primary: hsl(250, 92%, 68%);    
+  --accent-secondary: hsl(165, 82%, 51%);  
+  --accent-warning: hsl(38, 92%, 50%);     
+  --accent-danger: hsl(0, 84%, 60%);      
+
+  --border-subtle: hsla(220, 20%, 90%, 0.08);
+  --border-highlight: hsla(250, 92%, 68%, 0.35);
+
+
+  --nav-glass-bg: hsla(230, 20%, 9%, 0.75);
+  --glow-primary: hsla(250, 92%, 68%, 0.25);
+  --grid-line: hsla(220, 20%, 90%, 0.035);
+}
+
+
+html.light {
+  --bg-primary: hsl(220, 25%, 98%);
+  --bg-surface: hsl(0, 0%, 100%);
+  --bg-elevated: hsl(220, 20%, 94%);
+
+  --text-primary: hsl(230, 25%, 10%);
+  --text-secondary: hsl(220, 12%, 38%);
+  --text-muted: hsl(220, 10%, 55%);
+
+  --accent-primary: hsl(250, 92%, 60%);
+  --accent-secondary: hsl(165, 82%, 38%);
+  --accent-warning: hsl(38, 92%, 45%);
+  --accent-danger: hsl(0, 84%, 55%);
+
+  --border-subtle: hsla(230, 25%, 10%, 0.08);
+  --border-highlight: hsla(250, 92%, 55%, 0.3);
+
+  --nav-glass-bg: hsla(0, 0%, 100%, 0.85);
+  --glow-primary: hsla(250, 92%, 60%, 0.15);
+  --grid-line: hsla(230, 25%, 10%, 0.04);
+}

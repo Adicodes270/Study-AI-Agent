@@ -1,0 +1,204 @@
+/* ==========================================================================
+   style.css — Layout & Vengeance-Style Navbar
+   ========================================================================== */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  scroll-behavior: smooth;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+body {
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  line-height: 1.6;
+  min-height: 100vh;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  overflow-x: hidden;
+  position: relative;
+}
+
+/* Background grid pattern */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background-size: 48px 48px;
+  background-image: 
+    linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+  mask-image: radial-gradient(ellipse 80% 60% at 50% 20%, hsl(0, 0%, 0%) 40%, transparent 100%);
+  -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 20%, hsl(0, 0%, 0%) 40%, transparent 100%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ==========================================================================
+   Header & Navigation (Vengeance Reference Style)
+   ========================================================================== */
+
+.header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  width: 100%;
+  z-index: 100;
+  /* background: var(--nav-glass-bg); */
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  /* border-bottom: 1px solid var(--border-subtle); */
+}
+
+.nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1.1rem 2rem;
+  width: 100%;
+}
+
+/* 1. Brand Logo (Text Only, Bold White) */
+.brand-logo {
+  font-size: 1.25rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: var(--text-primary);
+  text-decoration: none;
+  transition: opacity 0.2s ease;
+}
+
+.brand-logo:hover {
+  opacity: 0.85;
+}
+
+/* 2. Center Nav Links */
+.nav-links {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: 15px;
+  padding: 0.8rem 0.8rem;
+}
+
+.nav-links a {
+  text-decoration: none;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  padding: 0.45rem 1.1rem;
+  border-radius: 9999px;
+  transition: all 0.2s ease;
+}
+
+
+.nav-links a:hover,
+.nav-links a.active {
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  box-shadow: 0 2px 8px -2px var(--glow-primary);
+}
+
+/* 3. Right Action Buttons */
+.nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 1.75rem;
+}
+
+/* Base Nav Button */
+.nav-btn {
+  text-decoration: none;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Text / Ghost Link (Like "Support" in the screenshot) */
+.nav-btn-text {
+  color: var(--text-secondary);
+}
+
+.nav-btn-text:hover {
+  color: var(--text-primary);
+}
+
+/* Framed Rounded Button (Like "Invite" in the screenshot) */
+.nav-btn-primary {
+  color: var(--text-primary);
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 0.55rem 1.4rem;
+}
+
+.nav-btn-primary:hover {
+  border-color: var(--border-highlight);
+  background-color: var(--bg-elevated);
+  transform: translateY(-1px);
+}
+
+/* ==========================================================================
+   Hero Section Placeholder
+   ========================================================================== */
+
+main {
+  position: relative;
+  z-index: 1;
+  padding-top: 8rem;
+  padding-bottom: 4rem;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding-left: 1.5rem;
+  padding-right: 1.5rem;
+}
+
+.hero {
+  min-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+}
+
+.hero h1 {
+  font-size: clamp(2.2rem, 5vw, 4rem);
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -0.035em;
+  color: var(--text-primary);
+  max-width: 800px;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .nav {
+    padding: 1rem 1.25rem;
+  }
+  
+  .nav-links {
+    display: none; /* Can be toggled with a mobile menu */
+  }
+
+  .nav-actions {
+    gap: 1rem;
+  }
+}

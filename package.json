@@ -8,7 +8,8 @@
     "study-agent": "src/index.js"
   },
   "scripts": {
-    "start": "node src/main.js"
+    "start": "node src/main.js",
+    "dev": "node --watch src/main.js"
   },
   "engines": {
     "node": ">=20"
