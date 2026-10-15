@@ -1,3 +1,4 @@
+// src/db.js
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
@@ -32,6 +33,7 @@ CREATE TABLE IF NOT EXISTS syllabus_chapters (
     number       INTEGER,
     title        TEXT NOT NULL,
     note         TEXT,
+    pdf_url      TEXT,
     ncert_id     INTEGER REFERENCES ncert_chapters(id),
     match_status TEXT NOT NULL DEFAULT 'pending'
 );
@@ -59,5 +61,9 @@ export function withDb(fn) {
 export function initDb() {
   withDb((conn) => {
     conn.exec(SCHEMA);
+    const cols = conn.pragma("table_info(syllabus_chapters)").map((c) => c.name);
+    if (!cols.includes("pdf_url")) {
+      conn.exec("ALTER TABLE syllabus_chapters ADD COLUMN pdf_url TEXT;");
+    }
   });
 }

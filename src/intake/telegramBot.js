@@ -1,6 +1,7 @@
+// src/intake/telegramBot.js
 import { Bot, HttpError } from "grammy";
 
-import { TELEGRAM_BOT_TOKEN } from "../config.js";
+import { GEMINI_MODEL, TELEGRAM_BOT_TOKEN } from "../config.js";
 import { initDb } from "../db.js";
 import { saveSyllabus } from "./storage.js";
 import { parseSyllabus, parseSyllabusPdf } from "./syllabusParser.js";
@@ -19,7 +20,9 @@ const SYLLABUS_HINTS = new RegExp(
 const inGroup = (ctx) => ["group", "supergroup"].includes(ctx.chat.type);
 
 async function start(ctx) {
-  await ctx.reply("Hi! Send your syllabus as text or as a PDF and I'll read it.");
+  await ctx.reply(
+    `Hi! Send your syllabus as text or as a PDF and I'll read it.\n(Using model: ${GEMINI_MODEL})`
+  );
 }
 
 /** Shared by text and PDF: parse, save, reply. */
@@ -136,7 +139,7 @@ export async function runBot() {
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
 
-  console.log("Bot is running. Press Ctrl+C to stop.");
+  console.log(`Bot is running with Gemini model: ${GEMINI_MODEL}. Press Ctrl+C to stop.`);
 
   // keep retrying if the connection drops while polling (like bootstrap_retries=-1)
   let stopping = false;
