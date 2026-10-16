@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Study Agent — Setup</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+        rel="stylesheet">
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/7.3.1/css/all.min.css">
+
+    <link rel="stylesheet" href="./theme.css">
+    <link rel="stylesheet" href="./style.css">
+</head>
+
+<body>
+    <!-- Background FX Containers required by script.js -->
+    <!-- <div id="webgl-container" aria-hidden="true"></div>
+    <div class="bg-fx" aria-hidden="true">
+        <div class="orb orb-1"></div>
+        <div class="orb orb-2"></div>
+    </div>
+    <div class="bg-strips" aria-hidden="true"></div> -->
+
+    <header class="header">
+        <nav class="nav" aria-label="Main Navigation">
+            <a href="index.html" class="brand-logo">Study Agent</a>
+
+            <ul class="nav-links" id="nav-menu">
+                <li><a href="index.html">Home</a></li>
+                <li><a href="setup.html" class="active">Setup</a></li>
+                <li><a href="quizzes.html">Quizzes</a></li>
+                <li><a href="resources.html">Resources</a></li>
+                <li class="nav-cta-mobile">
+                    <a href="https://web.telegram.org/a/#8996972210" target="_blank" rel="noopener noreferrer">Start</a>
+                </li>
+            </ul>
+
+            <button class="nav-toggle" type="button" aria-label="Open menu" aria-expanded="false"
+                aria-controls="nav-menu">
+                <i class="fa-solid fa-bars" aria-hidden="true"></i>
+            </button>
+
+            <div class="nav-actions">
+                <a href="setup.html" class="nav-btn nav-btn-text">Setup Telegram</a>
+                <a href="https://web.telegram.org/a/#8996972210" class="nav-btn nav-btn-primary" target="_blank" rel="noopener noreferrer">Start</a>
+            </div>
+        </nav>
+    </header>
+
+    <!-- <main id="top" style="padding-top: 10rem;">
+        <section class="section">
+            <div class="reveal">
+                <h1>Setup Telegram Bot</h1>
+                <p class="lead">Connect Study Agent to your student group chats in minutes.</p>
+            </div>
+        </section>
+    </main> -->
+
+    <!-- External Libraries (GSAP, Lenis, Three.js) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lenis@1.1.20/dist/lenis.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="./script.js"></script>
+</body>
+
+</html>
