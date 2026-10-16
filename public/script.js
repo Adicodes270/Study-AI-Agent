@@ -137,3 +137,36 @@ if (navEl && brandEl) {
   });
   $('.nav-links')?.addEventListener('pointerleave', hideTrace);
 }
+
+
+// Background: flush grey strips (hero only), brightest in the middle, near-black at the sides
+const stripWrap = $('.bg-strips');
+if (stripWrap) {
+  // [width %, brightness]. Widths add up to 100, so there are no gaps.
+  let x = 0;
+  [[10,.10],[12,.35],[9,.18],[14,.75],[12,1],[10,.45],[13,.2],[9,.55],[11,.08]]
+    .forEach(([w, o]) => {
+      const s = document.createElement('span');
+      s.style.cssText = `left:${x}%;width:calc(${w}% + 1px);--o:${o}`;
+      stripWrap.appendChild(s);
+      x += w;
+    });
+  const strips = $$('.bg-strips span');
+
+  // Strips drop down from the top on load
+  if (!reduce) {
+    gsap.from(strips, { scaleY: 0, opacity: 0, duration: 1.4, ease: 'power3.out', stagger: { each: 0.07, from: 'center' } });
+  }
+
+  // The whole strip block drifts slightly with the cursor (no gaps open up)
+  if (!reduce && fine) {
+    const mx = gsap.quickTo(stripWrap, 'x', { duration: 1, ease: 'power3' });
+    window.addEventListener('pointermove', (e) => mx((e.clientX / innerWidth - 0.5) * -40));
+  }
+
+  // Strips fade out as the hero scrolls away
+  gsap.to(stripWrap, {
+    opacity: 0, yPercent: -12, ease: 'none',
+    scrollTrigger: { trigger: '.hero', start: 'top top', end: 'bottom 25%', scrub: true },
+  });
+}

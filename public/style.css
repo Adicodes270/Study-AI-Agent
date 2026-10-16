@@ -27,19 +27,103 @@ body {
   position: relative;
 }
 
-/* Background grid pattern */
-body::before {
+/* Hero background: grey strips on black (fade out on scroll) */
+/* Hero background: wide grey -> black strips, a white top bloom and a light sweep */
+.bg-strips {
+  position: absolute;
+  top: 0;
+  left: -3vw;               /* slight overscan so the cursor drift never shows an edge */
+  right: -3vw;
+  height: 115vh;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 40%, transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 40%, transparent 100%);
+}
+
+
+
+/* white light from the top, plus a soft wash on the left edge */
+.bg-strips::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 55% 45% at 50% 0%, hsl(0 0% 100% / 0.1), transparent 70%),
+    radial-gradient(ellipse 30% 70% at 0% 30%, hsl(0 0% 100% / 0.08), transparent 70%);
+}
+
+
+
+.bg-strips span {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  opacity: var(--o, 0.6);
+  transform-origin: top center;
+  background:
+    linear-gradient(90deg, transparent 45%, var(--strip-edge)),
+    linear-gradient(to bottom, var(--strip-hi), var(--strip-lo) 40%, transparent 88%);
+  box-shadow: inset 1px 0 0 hsl(0 0% 100% / 0.1);
+}
+
+/* a soft white light that passes over the strips every few seconds */
+.bg-strips::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 38%;
+  background: linear-gradient(90deg, transparent, hsl(0 0% 100% / 0.09), transparent);
+  filter: blur(6px);
+  animation: strip-sweep 11s ease-in-out infinite;
+}
+
+@keyframes strip-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+
+  60%,
+  100% {
+    transform: translateX(280%);
+  }
+}
+
+/* Below the hero: slow grey/white haze (no colour) */
+.bg-aurora {
+  position: fixed;
+  inset: -20%;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0;
+  will-change: transform;
+  background: conic-gradient(from 0deg at 50% 50%,
+      hsl(0 0% 100% / 0.1),
+      transparent 25%,
+      hsl(0 0% 65% / 0.08) 50%,
+      transparent 75%,
+      hsl(0 0% 100% / 0.1));
+  filter: blur(90px);
+}
+
+/* Fine film grain over the whole page for texture */
+body::after {
   content: "";
   position: fixed;
   inset: 0;
-  background-size: 48px 48px;
-  background-image:
-    linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
-    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
-  mask-image: radial-gradient(ellipse 80% 60% at 50% 20%, hsl(0, 0%, 0%) 40%, transparent 100%);
-  -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 20%, hsl(0, 0%, 0%) 40%, transparent 100%);
-  pointer-events: none;
   z-index: 0;
+  pointer-events: none;
+  opacity: 0.06;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+@media (max-width: 700px) {
+  .bg-strips span:nth-child(even) {
+    display: none;
+  }
 }
 
 /* ==========================================================================
