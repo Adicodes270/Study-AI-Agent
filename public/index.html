@@ -1,138 +1,258 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Study Agent</title>
 
-    
+
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    
-    
+    <link
+        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+        rel="stylesheet">
+
+
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/7.3.1/css/all.min.css">
 
-   
+
     <link rel="stylesheet" href="./theme.css">
     <link rel="stylesheet" href="./style.css">
 </head>
+
 <body>
+    <div class="orb orb-1" aria-hidden="true"></div>
+    <div class="orb orb-2" aria-hidden="true"></div>
+    
 
     <header class="header">
         <nav class="nav" aria-label="Main Navigation">
-           
-            <a href="/" class="brand-logo">Study Agent</a>
 
-      
+            <a href="index.html" class="brand-logo">Study Agent</a>
+
+
             <ul class="nav-links">
-                <li><a href="/" class="active">Home</a></li>
-                <li><a href="#setup">Setup</a></li>
-                <li><a href="#quizzes">Quizzes</a></li>
-                <li><a href="#notebooklm">Resources</a></li>
+                <li><a href="index.html" class="active">Home</a></li>
+                <li><a href="setup.html">Setup</a></li>
+                <li><a href="quizzes.html">Quizzes</a></li>
+                <li><a href="resources.html">Resources</a></li>
             </ul>
 
-      
+
             <div class="nav-actions">
-                <a href="#setup" class="nav-btn nav-btn-text">Setup Telegram</a>
-                <a href="#get-started" class="nav-btn nav-btn-primary">Start</a>
+                <a href="setup.html" class="nav-btn nav-btn-text">Setup Telegram</a>
+                <a href="https://t.me/your_bot_username" class="nav-btn nav-btn-primary">Start</a>
             </div>
         </nav>
     </header>
 
     <main id="top">
         <section class="hero">
-            <h1>Master Every Chapter on Autopilot.</h1>
-            <p class="hero-sub">Send your syllabus to a Telegram group. Study Agent finds the NCERT chapters, builds a day-by-day plan in Todoist, and reschedules it after every quiz.</p>
-            <div class="cta-row">
-                <a href="#get-started" class="btn btn-solid">Start studying</a>
-                <a href="#setup" class="btn btn-ghost">See how it works</a>
+            <div class="hero-copy">
+                <h1>Master Every Chapter on Autopilot.</h1>
+                <p class="hero-sub">Send your syllabus to a Telegram group. Study Agent finds the NCERT chapters, builds
+                    a day-by-day plan in Todoist, and reschedules it after every quiz.</p>
+                <div class="cta-row">
+                    <a href="https://t.me/your_bot_username" class="btn btn-solid"><i class="fa-brands fa-telegram"></i>
+                        Start studying</a>
+                    <a href="#how" class="btn btn-ghost">See how it works</a>
+                </div>
+                <div class="stats">
+                    <div><b>8 to 12</b><span>CBSE classes</span></div>
+                    <div><b>4</b><span>plan checkpoints per exam</span></div>
+                    <div><b>0</b><span>manual scheduling</span></div>
+                </div>
             </div>
-            <div class="win hero-chat" aria-label="Example Telegram chat">
-                <div class="win-bar"><i class="fa-brands fa-telegram"></i> Class 9 Study Group <span class="live">online</span></div>
-                <div class="msg me"><span class="file"><i class="fa-solid fa-file-pdf"></i> science_portion.pdf</span>Half yearly portion for Science</div>
-                <div class="msg">Saved: Class 9 Science, Half Yearly, 8 chapters.</div>
-                <div class="msg">Matching NCERT chapters now. Your plan follows.</div>
+            <div class="hero-visual">
+                <div class="float-card fc-1" data-depth="34"><span><i class="fa-solid fa-list-check"></i> Revise Describing Motion Around Us</span><small>Due tomorrow</small></div>
+                <div class="win hero-chat" aria-label="Example Telegram chat">
+                    <div class="win-bar"><i class="fa-brands fa-telegram"></i> Class 9 Study Group <span
+                            class="live">online</span></div>
+                    <div class="msg me"><span class="file"><i class="fa-solid fa-file-pdf"></i>
+                            science_portion.pdf</span>Half yearly portion for Science</div>
+                    <div class="msg">Saved: Class 9 Science, Half Yearly, 8 chapters.</div>
+                    <div class="msg">Matching NCERT chapters now. Your plan follows.</div>
+                </div>
+                <div class="float-card fc-2" data-depth="-26"><span><i class="fa-solid fa-circle-check"></i> Quiz score
+                        86%</span><small>Chapter mastered</small></div>
             </div>
         </section>
 
-        <section class="story" id="setup">
+        <div class="strip" aria-label="Works with">
+            <div class="strip-track">
+                <span><i class="fa-brands fa-telegram"></i> Telegram</span>
+                <span><i class="fa-solid fa-wand-magic-sparkles"></i> Gemini</span>
+                <span><i class="fa-solid fa-book"></i> NCERT</span>
+                <span><i class="fa-brands fa-youtube"></i> YouTube</span>
+                <span><i class="fa-solid fa-list-check"></i> Todoist</span>
+                <span><i class="fa-solid fa-database"></i> SQLite</span>
+            </div>
+        </div>
+
+        <section class="story" id="how">
             <div class="story-pin">
                 <div class="story-text">
                     <h2>From one message to a full study plan.</h2>
                     <ol class="steps">
-                        <li class="step is-active"><b>Send your syllabus</b><p>Paste text or drop a PDF in the Telegram group. The agent ignores chat and only reacts to portions.</p></li>
-                        <li class="step"><b>Chapters get matched</b><p>Gemini reads the portion, saves it per subject, and finds each NCERT chapter PDF.</p></li>
-                        <li class="step"><b>A plan lands in Todoist</b><p>Tasks are spread across 30, 21, 14 and 7 days before the exam.</p></li>
-                        <li class="step"><b>Quizzes reshape the plan</b><p>Your score decides what is closed, revised tomorrow, or redone.</p></li>
+                        <li class="step is-active"><b>Send your syllabus</b>
+                            <p>Paste text or drop a PDF in the Telegram group. The agent ignores chat and only reacts to
+                                portions.</p>
+                        </li>
+                        <li class="step"><b>Chapters get matched</b>
+                            <p>Gemini reads the portion, saves it per subject, and finds each NCERT chapter PDF.</p>
+                        </li>
+                        <li class="step"><b>A plan lands in Todoist</b>
+                            <p>Tasks are spread across 30, 21, 14 and 7 days before the exam.</p>
+                        </li>
+                        <li class="step"><b>Quizzes reshape the plan</b>
+                            <p>Your score decides what is closed, revised tomorrow, or redone.</p>
+                        </li>
                     </ol>
                     <div class="story-bar"><span></span></div>
                 </div>
                 <div class="stage" aria-live="polite">
-                    <div class="panel is-active"><div class="win">
-                        <div class="win-bar"><i class="fa-brands fa-telegram"></i> Class 9 Study Group</div>
-                        <div class="msg me rise"><span class="file"><i class="fa-solid fa-file-pdf"></i> science_portion.pdf</span>Term test portion</div>
-                        <div class="msg rise">Reading your PDF. This can take a minute.</div>
-                        <div class="msg rise">Saved Mathematics, Term Test. Send the next subject any time.</div>
-                    </div></div>
-                    <div class="panel"><div class="win">
-                        <div class="win-bar"><i class="fa-solid fa-book-open"></i> NCERT matches</div>
-                        <div class="row rise"><span>1. Chemical Reactions</span><em class="chip ok">PDF ready</em></div>
-                        <div class="row rise"><span>2. Acids, Bases and Salts</span><em class="chip ok">PDF ready</em></div>
-                        <div class="row rise"><span>3. Metals and Non-metals</span><em class="chip ok">PDF ready</em></div>
-                        <div class="row rise"><span>4. Carbon Compounds</span><em class="chip wait">Matching</em></div>
-                    </div></div>
-                    <div class="panel"><div class="win">
-                        <div class="win-bar"><i class="fa-solid fa-list-check"></i> Todoist: Science</div>
-                        <div class="row rise"><span>30 days out: read and note</span><em class="chip ok">Scheduled</em></div>
-                        <div class="row rise"><span>21 days out: watch videos</span><em class="chip ok">Scheduled</em></div>
-                        <div class="row rise"><span>14 days out: take quiz</span><em class="chip ok">Scheduled</em></div>
-                        <div class="row rise"><span>7 days out: light revision</span><em class="chip wait">Waiting on quiz</em></div>
-                    </div></div>
-                    <div class="panel"><div class="win">
-                        <div class="win-bar"><i class="fa-solid fa-circle-question"></i> Quiz result</div>
-                        <div class="score rise">64%</div>
-                        <div class="row rise"><span>Chemical Reactions</span><em class="chip wait">Needs revision</em></div>
-                        <div class="msg rise">Revision task added to Todoist for tomorrow.</div>
-                    </div></div>
+                    <div class="panel is-active">
+                        <div class="win">
+                            <div class="win-bar"><i class="fa-brands fa-telegram"></i> Class 9 Study Group</div>
+                            <div class="msg me rise"><span class="file"><i class="fa-solid fa-file-pdf"></i>
+                                    science_portion.pdf</span>Term test portion</div>
+                            <div class="msg rise">Reading your PDF. This can take a minute.</div>
+                            <div class="msg rise">Saved Science, Term Test. Send the next subject any time.</div>
+                        </div>
+                    </div>
+                    <div class="panel">
+                        <div class="win">
+                            <div class="win-bar"><i class="fa-solid fa-book-open"></i> NCERT matches</div>
+                            <div class="row rise"><span>2. Cell: The Building Block of Life</span><em
+                                    class="chip ok">Ready</em></div>
+                            <div class="row rise"><span>4. Describing Motion Around Us</span><em
+                                    class="chip ok">Ready</em></div>
+                            <div class="row rise"><span>5. Exploring Mixtures and their Separation</span><em
+                                    class="chip ok">Ready</em></div>
+                            <div class="row rise"><span>6. How Forces Affect Motion</span><em
+                                    class="chip wait">Matching</em></div>
+                        </div>
+                    </div>
+                    <div class="panel">
+                        <div class="win">
+                            <div class="win-bar"><i class="fa-solid fa-list-check"></i> Todoist: Science</div>
+                            <div class="row rise"><span>30 days out: read and note</span><em
+                                    class="chip ok">Scheduled</em></div>
+                            <div class="row rise"><span>21 days out: watch videos</span><em
+                                    class="chip ok">Scheduled</em></div>
+                            <div class="row rise"><span>14 days out: take quiz</span><em class="chip ok">Scheduled</em>
+                            </div>
+                            <div class="row rise"><span>7 days out: light revision</span><em class="chip wait">Waiting
+                                    on quiz</em></div>
+                        </div>
+                    </div>
+                    <div class="panel">
+                        <div class="win">
+                            <div class="win-bar"><i class="fa-solid fa-circle-question"></i> Quiz result</div>
+                            <div class="score rise">64%</div>
+                            <div class="row rise"><span>Describing Motion Around Us</span><em class="chip wait">Needs revision</em></div>
+                            <div class="msg rise">Revision task added to Todoist for tomorrow.</div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </section>
 
-        <section class="section" id="quizzes">
-            <h2 class="reveal">Every quiz score changes tomorrow's plan.</h2>
-            <p class="lead reveal">Drag the slider to see what the agent does with a score.</p>
-            <div class="demo win reveal">
-                <label for="score">Quiz score: <b id="scoreVal">64</b>%</label>
-                <input type="range" id="score" min="0" max="100" value="64">
-                <div class="tier" id="tier" data-tier="mid"><strong id="tierName"></strong><span id="tierText"></span></div>
-            </div>
-        </section>
-
-        <section class="section" id="notebooklm">
-            <h2 class="reveal">Everything you need for each chapter.</h2>
-            <p class="lead reveal">One task in Todoist opens all of this, so you never hunt for material.</p>
-            <div class="cards">
-                <article class="card reveal"><i class="fa-solid fa-book-open"></i><h3>NCERT chapter PDF</h3><p>The exact chapter from your portion, downloaded and ready.</p><span class="file"><i class="fa-solid fa-file-pdf"></i> chapter_1.pdf</span></article>
-                <article class="card reveal"><i class="fa-solid fa-wand-magic-sparkles"></i><h3>Short summary</h3><p>Key ideas written by Gemini from the chapter itself.</p><div class="lines"><s></s><s></s><s></s></div></article>
-                <article class="card reveal"><i class="fa-brands fa-youtube"></i><h3>Picked videos</h3><p>Exam-prep videos matched to the chapter title.</p><div class="thumbs"><b><i class="fa-solid fa-play"></i></b><b><i class="fa-solid fa-play"></i></b></div></article>
+        <section class="section" id="features">
+            <h2 class="reveal">One agent, with a page for every part.</h2>
+            <p class="lead reveal">Start here for the overview, then open a page to go deeper.</p>
+            <div class="bento">
+                <a class="bento-card b-wide reveal" href="setup.html">
+                    <h3>Set up Telegram</h3>
+                    <p>Create the bot, add it to your study group, and send your first portion.</p>
+                    <div class="mini">
+                        <div class="msg me">Science portion for half yearly</div>
+                        <div class="msg">Saved. 8 chapters found.</div>
+                    </div>
+                    <span class="more">Open the setup guide <i class="fa-solid fa-arrow-right"></i></span>
+                </a>
+                <a class="bento-card b-narrow reveal" href="quizzes.html">
+                    <h3>Quizzes that reschedule</h3>
+                    <p>Your score decides what happens next.</p>
+                    <div class="mini">
+                        <div class="tierbar" style="--c: var(--accent-secondary); --w: 90%"><span>80% and
+                                up</span><s></s></div>
+                        <div class="tierbar" style="--c: var(--accent-warning); --w: 60%"><span>50 to 79%</span><s></s>
+                        </div>
+                        <div class="tierbar" style="--c: var(--accent-danger); --w: 30%"><span>Below 50%</span><s></s>
+                        </div>
+                    </div>
+                    <span class="more">See how quizzes work <i class="fa-solid fa-arrow-right"></i></span>
+                </a>
+                <a class="bento-card b-narrow reveal" href="resources.html">
+                    <h3>Material for each chapter</h3>
+                    <p>NCERT PDF, a short summary and picked videos.</p>
+                    <div class="mini"><span class="file"><i class="fa-solid fa-file-pdf"></i> chapter_1.pdf</span>
+                        <div class="lines"><s></s><s></s><s></s></div>
+                    </div>
+                    <span class="more">Browse resources <i class="fa-solid fa-arrow-right"></i></span>
+                </a>
+                <div class="bento-card b-wide reveal">
+                    <h3>A plan that counts down to the exam</h3>
+                    <p>Tasks are placed at four checkpoints so nothing piles up at the end.</p>
+                    <div class="timeline">
+                        <div><b>30 days</b>Read and note</div>
+                        <div><b>21 days</b>Watch videos</div>
+                        <div><b>14 days</b>Take the quiz</div>
+                        <div><b>7 days</b>Light revision</div>
+                    </div>
+                </div>
             </div>
         </section>
 
         <section class="section" id="get-started">
             <div class="cta-card reveal">
                 <h2>Send your first syllabus today.</h2>
-                <p class="lead">Add the bot to your study group and drop in a portion. Your plan is ready in minutes.</p>
-                <a href="https://t.me/your_bot_username" class="btn btn-solid"><i class="fa-brands fa-telegram"></i> Open the Telegram bot</a>
+                <p class="lead">Add the bot to your study group and drop in a portion. Your plan is ready in minutes.
+                </p>
+                <a href="https://t.me/your_bot_username" class="btn btn-solid"><i class="fa-brands fa-telegram"></i>
+                    Open the Telegram bot</a>
             </div>
         </section>
     </main>
 
-    <footer class="foot">Study Agent. Built for CBSE students, Classes 9 to 12.</footer>
+    <footer class="foot">
+        <div class="foot-grid">
+            <div class="foot-brand">
+                <a href="index.html" class="brand-logo">Study Agent</a>
+                <p>A Telegram-first study planner for CBSE students in Classes 8 to 12.</p>
+                <div class="socials">
+                    <a href="https://t.me/your_bot_username" aria-label="Telegram"><i
+                            class="fa-brands fa-telegram"></i></a>
+                    <a href="https://github.com/your-username/Study-AI-Agent" aria-label="GitHub"><i
+                            class="fa-brands fa-github"></i></a>
+                    <a href="https://youtube.com/" aria-label="YouTube"><i class="fa-brands fa-youtube"></i></a>
+                </div>
+            </div>
+            <nav aria-label="Product">
+                <h4>Product</h4><a href="setup.html">Setup</a><a href="quizzes.html">Quizzes</a><a
+                    href="resources.html">Resources</a>
+            </nav>
+            <nav aria-label="Project">
+                <h4>Project</h4><a href="https://github.com/your-username/Study-AI-Agent">GitHub repo</a><a
+                    href="https://t.me/your_bot_username">Telegram bot</a><a href="index.html">Home</a>
+            </nav>
+            <nav aria-label="Built with">
+                <h4>Built with</h4><a href="https://ai.google.dev/">Gemini API</a><a
+                    href="https://developer.todoist.com/">Todoist API</a><a href="https://ncert.nic.in/">NCERT</a>
+            </nav>
+        </div>
+        <div class="foot-bottom">
+            <span>&copy; 2026 Study Agent. NCERT books belong to NCERT.</span>
+            <button type="button" class="to-top">Back to top <i class="fa-solid fa-arrow-up"></i></button>
+        </div>
+    </footer>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/lenis@1.1.20/dist/lenis.min.js"></script>
     <script src="./script.js"></script>
 </body>
+
 </html>

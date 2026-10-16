@@ -57,6 +57,8 @@ html.light {
   --accent-warning-soft: hsla(38, 92%, 50%, 0.14);
   --accent-danger-soft: hsla(0, 84%, 60%, 0.14);
   --shadow-window: 0 30px 80px -30px hsla(250, 92%, 68%, 0.35);
+  --orb-primary: hsla(250, 92%, 68%, 0.28);
+  --orb-secondary: hsla(165, 82%, 51%, 0.14);
 }
 
 html.light {
@@ -65,4 +67,6 @@ html.light {
   --accent-warning-soft: hsla(38, 92%, 45%, 0.14);
   --accent-danger-soft: hsla(0, 84%, 55%, 0.1);
   --shadow-window: 0 30px 70px -30px hsla(250, 92%, 60%, 0.25);
+  --orb-primary: hsla(250, 92%, 60%, 0.16);
+  --orb-secondary: hsla(165, 82%, 38%, 0.1);
 }
