@@ -278,7 +278,6 @@ body::after {
 .nav-btn-primary:hover {
   border-color: var(--border-highlight);
   background-color: var(--bg-elevated);
-  transform: translateY(-1px);
 }
 
 /* ==========================================================================
@@ -391,10 +390,6 @@ input:focus-visible {
   font-size: 0.9375rem;
   text-decoration: none;
   transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
-}
-
-.btn:hover {
-  transform: translateY(-2px);
 }
 
 .btn-solid {
@@ -1235,4 +1230,335 @@ input:focus-visible {
   .timeline {
     grid-template-columns: 1fr 1fr;
   }
+}
+
+/* ==========================================================================
+   Mobile menu toggle (hidden on desktop)
+   ========================================================================== */
+
+.nav-toggle {
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  width: 42px;
+  height: 42px;
+  padding: 0 10px;
+  border-radius: 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  cursor: pointer;
+}
+
+.nav-toggle span {
+  display: block;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--text-primary);
+  transition: transform 0.3s ease, opacity 0.2s ease;
+}
+
+.menu-open .nav-toggle span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+.menu-open .nav-toggle span:nth-child(2) { opacity: 0; }
+.menu-open .nav-toggle span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+
+/* ==========================================================================
+   Tablet (up to 1024px)
+   ========================================================================== */
+
+@media (max-width: 1024px) {
+  main {
+    padding-inline: 1.25rem;
+  }
+
+  .nav {
+    padding-inline: 1.25rem;
+  }
+
+  .nav-links a {
+    padding-inline: 0.7rem;
+  }
+
+  .hero {
+    gap: 2rem;
+  }
+
+  .stats {
+    gap: 1.75rem;
+  }
+
+  .section {
+    padding: 4.5rem 0;
+  }
+
+  .foot-brand {
+    margin-right: 2rem;
+  }
+}
+
+/* ==========================================================================
+   Mobile nav + layout (up to 768px)
+   ========================================================================== */
+
+@media (max-width: 768px) {
+  .nav {
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+
+  .brand-logo {
+    margin-right: auto;
+  }
+
+  .nav-toggle {
+    display: flex;
+  }
+
+  .nav-actions .nav-btn-text {
+    display: none;
+  }
+
+  .nav-btn-primary {
+    padding: 0.5rem 1.1rem;
+  }
+
+  /* Dropdown panel */
+  .nav-links {
+    display: none;
+    order: 5;
+    flex-basis: 100%;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.25rem;
+    padding: 0.5rem;
+    border-radius: 16px;
+    background: var(--nav-glass-bg);
+    border: 1px solid var(--border-subtle);
+  }
+
+  .menu-open .nav-links {
+    display: flex;
+  }
+
+  .nav-links a {
+    display: block;
+    padding: 0.85rem 1rem;
+    font-size: 1rem;
+  }
+
+  main {
+    padding-top: 6rem;
+  }
+
+  .nav-trace {
+    display: none;
+  }
+}
+
+/* ==========================================================================
+   Phone (up to 600px)
+   ========================================================================== */
+
+@media (max-width: 600px) {
+  main {
+    padding-inline: 1rem;
+    padding-top: 5.5rem;
+  }
+
+  .hero {
+    padding-bottom: 2rem;
+  }
+
+  .hero h1 {
+    font-size: clamp(2rem, 9vw, 2.6rem);
+  }
+
+  .hero-sub {
+    font-size: 1rem;
+  }
+
+  .cta-row {
+    width: 100%;
+  }
+
+  .cta-row .btn {
+    flex: 1 1 100%;
+    justify-content: center;
+  }
+
+  .stats {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.75rem;
+  }
+
+  .stats b {
+    font-size: 1.2rem;
+  }
+
+  .win,
+  .hero-chat,
+  .panel .win {
+    width: 100%;
+  }
+
+  .stage {
+    height: 400px;
+  }
+
+  .row {
+    font-size: 0.8125rem;
+    flex-wrap: wrap;
+  }
+
+  .section {
+    padding: 3.5rem 0;
+  }
+
+  .bento-card {
+    padding: 1.25rem;
+  }
+
+  .tierbar {
+    grid-template-columns: 5.5rem 1fr;
+  }
+
+  .cta-card {
+    padding: 2.5rem 1.25rem;
+    border-radius: 22px;
+  }
+
+  .strip-track {
+    gap: 2rem;
+  }
+
+  .foot-grid {
+    grid-template-columns: 1fr;
+    padding: 2.25rem 1rem 1.5rem;
+  }
+
+  .foot-brand {
+    grid-column: auto;
+  }
+
+  .foot-bottom {
+    padding: 1rem 1rem 1.5rem;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+/* Touch devices: make tap targets comfortable */
+@media (hover: none) and (pointer: coarse) {
+  .btn,
+  .nav-btn-primary,
+  .to-top {
+    min-height: 44px;
+  }
+}
+
+
+/* ==========================================================================
+   3D buttons (tilt, lift, shine, shockwave and spring are driven by script.js)
+   ========================================================================== */
+
+.btn,
+.nav-btn-primary,
+.to-top {
+  --depth: 5px;
+  --sx: 50%;
+  --sy: 50%;
+  position: relative;
+  transform-style: preserve-3d;
+  will-change: transform;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.to-top {
+  --depth: 3px;
+}
+
+/* Label and icon float at different heights above the button face */
+.btn-txt {
+  display: inline-block;
+  transform: translateZ(22px);
+}
+
+.btn>i,
+.nav-btn-primary>i,
+.to-top>i {
+  display: inline-block;
+  transform: translateZ(36px);
+}
+
+.to-top:hover>i {
+  transform: translateZ(36px) translateY(-3px);
+}
+
+/* Thickness under each button; it shrinks when pressed */
+.btn-solid {
+  box-shadow: 0 var(--depth) 0 hsl(250, 70%, 42%), 0 16px 30px -10px var(--glow-primary);
+}
+
+.btn-ghost,
+.nav-btn-primary,
+.to-top {
+  box-shadow: 0 var(--depth) 0 hsl(230, 20%, 4%), 0 12px 24px -12px hsl(0, 0%, 0%);
+}
+
+/* Glossy shine that follows the cursor across the button face */
+.btn::after,
+.nav-btn-primary::after,
+.to-top::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(circle 90px at var(--sx) var(--sy), hsl(0 0% 100% / 0.28), transparent 70%);
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.btn:hover::after,
+.nav-btn-primary:hover::after,
+.to-top:hover::after {
+  opacity: 1;
+}
+
+/* Pulsing halo on the main call-to-action */
+.btn-solid::before {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  border: 2px solid var(--accent-primary);
+  pointer-events: none;
+  opacity: 0;
+  animation: halo 2.6s ease-out infinite;
+}
+
+@keyframes halo {
+  0% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+
+  70%,
+  100% {
+    opacity: 0;
+    transform: scale(1.15, 1.5);
+  }
+}
+
+/* Click shockwave */
+.btn-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 2px solid var(--accent-secondary);
+  pointer-events: none;
 }

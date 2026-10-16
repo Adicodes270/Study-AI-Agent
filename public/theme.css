@@ -41,38 +41,6 @@
 }
 
 
-html.light {
-  /* in html.light */
-  --strip-hi: hsla(230, 25%, 10%, 0.1);
-  --strip-lo: hsla(230, 25%, 10%, 0.03);
-  --bg-primary: hsl(220, 25%, 98%);
-  --bg-surface: hsl(0, 0%, 100%);
-  --bg-elevated: hsl(220, 20%, 94%);
-
-
-  /* in html.light */
-  --strip-hi: hsl(230 25% 10% / 0.12);
-  --strip-lo: hsl(230 25% 10% / 0.04);
-  --strip-edge: hsl(0 0% 100% / 0.5);
-  --orb-primary: hsla(250, 92%, 60%, 0.16);
-  --orb-secondary: hsla(165, 82%, 38%, 0.1);
-
-  --text-primary: hsl(230, 25%, 10%);
-  --text-secondary: hsl(220, 12%, 38%);
-  --text-muted: hsl(220, 10%, 55%);
-
-  --accent-primary: hsl(250, 92%, 60%);
-  --accent-secondary: hsl(165, 82%, 38%);
-  --accent-warning: hsl(38, 92%, 45%);
-  --accent-danger: hsl(0, 84%, 55%);
-
-  --border-subtle: hsla(230, 25%, 10%, 0.08);
-  --border-highlight: hsla(250, 92%, 55%, 0.3);
-
-  --nav-glass-bg: hsla(0, 0%, 100%, 0.85);
-  --glow-primary: hsla(250, 92%, 60%, 0.15);
-  --grid-line: hsla(230, 25%, 10%, 0.04);
-}
 
 /* Added for landing sections */
 :root {
@@ -86,12 +54,3 @@ html.light {
   --orb-secondary: hsla(165, 82%, 51%, 0.14);
 }
 
-html.light {
-  --accent-primary-soft: hsla(250, 92%, 60%, 0.1);
-  --accent-secondary-soft: hsla(165, 82%, 38%, 0.12);
-  --accent-warning-soft: hsla(38, 92%, 45%, 0.14);
-  --accent-danger-soft: hsla(0, 84%, 55%, 0.1);
-  --shadow-window: 0 30px 70px -30px hsla(250, 92%, 60%, 0.25);
-  --orb-primary: hsla(250, 92%, 60%, 0.16);
-  --orb-secondary: hsla(165, 82%, 38%, 0.1);
-}
