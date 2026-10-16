@@ -139,28 +139,58 @@ if (navEl && brandEl) {
 }
 
 
+// Mobile menu (hamburger)
+const toggle = $('.nav-toggle');
+if (navEl && toggle) {
+  const icon = toggle.querySelector('i');
+  const setMenu = (open) => {
+    navEl.classList.toggle('is-open', open);
+    toggle.setAttribute('aria-expanded', String(open));
+    toggle.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+    icon.className = open ? 'fa-solid fa-xmark' : 'fa-solid fa-bars';
+  };
+  toggle.addEventListener('click', () => setMenu(!navEl.classList.contains('is-open')));
+  $$('.nav-links a').forEach((a) => a.addEventListener('click', () => setMenu(false)));
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setMenu(false); });
+  document.addEventListener('click', (e) => { if (!navEl.contains(e.target)) setMenu(false); });
+  matchMedia('(min-width: 769px)').addEventListener('change', (e) => { if (e.matches) setMenu(false); });
+}
+
 // Background: flush grey strips (hero only), brightest in the middle, near-black at the sides
 const stripWrap = $('.bg-strips');
 if (stripWrap) {
-  // [width %, brightness]. Widths add up to 100, so there are no gaps.
-  let x = 0;
-  [[10,.10],[12,.35],[9,.18],[14,.75],[12,1],[10,.45],[13,.2],[9,.55],[11,.08]]
-    .forEach(([w, o]) => {
+  // [width %, brightness]. Each set adds up to 100, so there are no gaps.
+  const SETS = {
+    wide: [[10,.10],[12,.35],[9,.18],[14,.75],[12,1],[10,.45],[13,.2],[9,.55],[11,.08]],
+    phone: [[16,.08],[22,.5],[24,1],[22,.45],[16,.08]],
+  };
+  // The inner layer holds the strips and overscans/drifts; the outer box clips it.
+  const inner = document.createElement('div');
+  inner.className = 'bg-strips-inner';
+  stripWrap.appendChild(inner);
+
+  const phone = matchMedia('(max-width: 700px)');
+  const build = () => {
+    inner.innerHTML = '';
+    let x = 0;
+    SETS[phone.matches ? 'phone' : 'wide'].forEach(([w, o]) => {
       const s = document.createElement('span');
       s.style.cssText = `left:${x}%;width:calc(${w}% + 1px);--o:${o}`;
-      stripWrap.appendChild(s);
+      inner.appendChild(s);
       x += w;
     });
-  const strips = $$('.bg-strips span');
+  };
+  build();
+  phone.addEventListener('change', build);
 
   // Strips drop down from the top on load
   if (!reduce) {
-    gsap.from(strips, { scaleY: 0, opacity: 0, duration: 1.4, ease: 'power3.out', stagger: { each: 0.07, from: 'center' } });
+    gsap.from(inner.children, { scaleY: 0, opacity: 0, duration: 1.4, ease: 'power3.out', stagger: { each: 0.07, from: 'center' } });
   }
 
-  // The whole strip block drifts slightly with the cursor (no gaps open up)
+  // The strip block drifts slightly with the cursor (clipped, so it never widens the page)
   if (!reduce && fine) {
-    const mx = gsap.quickTo(stripWrap, 'x', { duration: 1, ease: 'power3' });
+    const mx = gsap.quickTo(inner, 'x', { duration: 1, ease: 'power3' });
     window.addEventListener('pointermove', (e) => mx((e.clientX / innerWidth - 0.5) * -40));
   }
 

@@ -12,6 +12,7 @@
 
 html {
   scroll-behavior: smooth;
+  overflow-x: clip;
   background-color: var(--bg-primary);
   color: var(--text-primary);
   transition: background-color 0.3s ease, color 0.3s ease;
@@ -23,7 +24,7 @@ body {
   min-height: 100vh;
   background-color: var(--bg-primary);
   color: var(--text-primary);
-  overflow-x: hidden;
+  overflow-x: clip;
   position: relative;
 }
 
@@ -32,8 +33,8 @@ body {
 .bg-strips {
   position: absolute;
   top: 0;
-  left: -3vw;               /* slight overscan so the cursor drift never shows an edge */
-  right: -3vw;
+  left: 0;
+  right: 0;
   height: 115vh;
   z-index: 0;
   pointer-events: none;
@@ -120,11 +121,6 @@ body::after {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
-@media (max-width: 700px) {
-  .bg-strips span:nth-child(even) {
-    display: none;
-  }
-}
 
 /* ==========================================================================
    Header & Navigation (Vengeance Reference Style)
@@ -315,18 +311,117 @@ main {
 }
 
 /* Responsive adjustments */
+/* Mobile / tablet navigation (hamburger) */
+.nav-toggle,
+.nav-cta-mobile {
+  display: none;
+}
+
+.nav-links a.active {
+  color: var(--text-primary);
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 @media (max-width: 768px) {
+  .header {
+    padding: 0.75rem clamp(0.75rem, 3vw, 1.5rem) 0;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
   .nav {
-    padding: 1rem 1.25rem;
+    padding: 0.5rem 0.6rem 0.5rem 1.1rem;
+    min-height: 3.5rem;
+    border: 1px solid var(--border-subtle);
+    border-radius: 22px;
+    background: var(--nav-glass-bg);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+
+  .nav-trace,
+  .nav-actions {
+    display: none;
+  }
+
+  .nav-toggle {
+    display: inline-grid;
+    place-items: center;
+    flex: none;
+    width: 2.5rem;
+    height: 2.5rem;
+    margin-left: auto;
+    border: 0;
+    border-radius: 12px;
+    background: none;
+    color: var(--text-primary);
+    font-size: 1.25rem;
+    cursor: pointer;
   }
 
   .nav-links {
     display: none;
-    /* Can be toggled with a mobile menu */
+    flex: 1;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    padding: 0.2rem 0.5rem 0.2rem 0;
   }
 
-  .nav-actions {
-    gap: 1rem;
+  .nav.is-open {
+    align-items: flex-start;
+  }
+
+  .nav.is-open .brand-logo {
+    display: none;
+  }
+
+  .nav.is-open .nav-links {
+    display: flex;
+    animation: menu-in 0.25s ease both;
+  }
+
+  .nav-cta-mobile {
+    display: block;
+  }
+
+  .nav-links a,
+  .nav-links a:hover {
+    display: block;
+    border-radius: 9999px;
+  }
+
+  .nav-links a {
+    padding: 0.5rem 1rem;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    font-weight: 600;
+  }
+
+  .nav-links a:hover {
+    box-shadow: none;
+  }
+
+  .nav-links a.active {
+    border-color: var(--border-highlight);
+  }
+
+  .nav-cta-mobile a,
+  .nav-cta-mobile a:hover {
+    background: var(--accent-primary);
+    border-color: transparent;
+    color: var(--bg-primary);
   }
 }
 
@@ -521,7 +616,7 @@ input:focus-visible {
 .story-pin {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 1fr 1.1fr;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
   gap: 3rem;
   align-items: center;
   padding-top: 5rem;
@@ -541,7 +636,6 @@ input:focus-visible {
   display: grid;
   gap: 0.35rem;
   margin-top: 1.75rem;
-  counter-reset: s;
 }
 
 .step {
@@ -562,8 +656,7 @@ input:focus-visible {
 }
 
 .step b::before {
-  counter-increment: s;
-  content: counter(s);
+  content: attr(data-n);
   display: inline-grid;
   place-items: center;
   width: 1.5rem;
@@ -911,7 +1004,7 @@ input:focus-visible {
 
 .tierbar {
   display: grid;
-  grid-template-columns: 7rem 1fr;
+  grid-template-columns: 7rem minmax(0, 1fr);
   gap: 0.75rem;
   align-items: center;
   font-size: 0.8125rem;
@@ -948,7 +1041,7 @@ input:focus-visible {
 
 .timeline {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0.75rem;
   margin-top: 0.75rem;
 }
@@ -987,7 +1080,7 @@ input:focus-visible {
   margin: 0 auto;
   padding: 3.5rem 2rem 2.5rem;
   display: grid;
-  grid-template-columns: 1fr repeat(3, auto);
+  grid-template-columns: minmax(0, 1fr) repeat(3, auto);
   /* brand left, links pushed right */
   column-gap: 3.5rem;
   /* Product / Project / Built with sit close together */
@@ -1143,7 +1236,7 @@ input:focus-visible {
 
 /* Ambient + cursor microinteractions */
 .orb {
-  position: fixed;
+  position: absolute;
   width: 46vw;
   max-width: 640px;
   aspect-ratio: 1;
@@ -1234,5 +1327,51 @@ input:focus-visible {
 @media (max-width: 600px) {
   .timeline {
     grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* Containment: nothing in the background can make the page wider than the screen */
+.bg-fx {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.bg-strips-inner {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3vw;
+  right: -3vw;
+}
+
+@media (min-width: 901px) and (max-width: 1100px) {
+  .foot-grid {
+    column-gap: 2rem;
+  }
+
+  .foot-brand {
+    margin-right: 2rem;
+  }
+}
+
+/* Phones: fewer, wider strips; shorter and softer fade */
+@media (max-width: 700px) {
+  .bg-strips {
+    height: 85vh;
+    -webkit-mask-image: linear-gradient(to bottom, #000 25%, transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 25%, transparent 100%);
+  }
+
+  .bg-strips::after {
+    width: 60%;
+  }
+
+  .orb {
+    width: 80vw;
+    filter: blur(70px);
+    opacity: 0.75;
   }
 }
