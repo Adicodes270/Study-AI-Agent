@@ -96,108 +96,18 @@ if (!reduce && fine) {
     card.style.setProperty('--my', `${e.clientY - r.top}px`);
   }));
 
-}
-
-// 3D buttons: layered depth, tilt, magnetic pull, glossy shine, click shockwave, spring release
-const btnSel = '.btn, .nav-btn-primary, .to-top';
-
-// Wrap the label so it can float above the button face (icons already are elements)
-$$(btnSel).forEach((btn) => {
-  [...btn.childNodes].forEach((n) => {
-    if (n.nodeType === 3 && n.textContent.trim()) {
-      const s = document.createElement('span');
-      s.className = 'btn-txt';
-      s.textContent = n.textContent.replace(/\s+/g, ' ').trim();
-      n.replaceWith(s);
-    }
-  });
-});
-
-if (!reduce) {
-  $$(`${btnSel}, .socials a`).forEach((btn) => {
-    const base = btn.classList.contains('to-top') ? 3 : 5;
-    const lift = fine ? 20 : 0;
-    const icon = btn.querySelector('i');
-    gsap.set(btn, { transformPerspective: 500, '--depth': `${base}px` });
-    const rx = gsap.quickTo(btn, 'rotationX', { duration: 0.35, ease: 'power3' });
-    const ry = gsap.quickTo(btn, 'rotationY', { duration: 0.35, ease: 'power3' });
-    const mx = gsap.quickTo(btn, 'x', { duration: 0.4, ease: 'power3' });
-    const my = gsap.quickTo(btn, 'y', { duration: 0.4, ease: 'power3' });
-    let pressed = false;
-
-    btn.addEventListener('pointerenter', () => {
-      gsap.to(btn, { z: lift, '--depth': `${base + 3}px`, duration: 0.3, ease: 'power3.out' });
-      if (icon) gsap.fromTo(icon, { rotationY: 0 }, { rotationY: 360, duration: 0.8, ease: 'power3.inOut' });
-    });
-
+  // Buttons lean toward the cursor
+  $$('.btn, .nav-btn-primary').forEach((btn) => {
+    const qx = gsap.quickTo(btn, 'x', { duration: 0.4, ease: 'power3' });
+    const qy = gsap.quickTo(btn, 'y', { duration: 0.4, ease: 'power3' });
     btn.addEventListener('pointermove', (e) => {
       const r = btn.getBoundingClientRect();
-      const px = (e.clientX - r.left) / r.width - 0.5;
-      const py = (e.clientY - r.top) / r.height - 0.5;
-      ry(px * 26);
-      rx(-py * 26);
-      if (fine && !pressed) { mx(px * 12); my(py * 9); }
-      btn.style.setProperty('--sx', `${e.clientX - r.left}px`);
-      btn.style.setProperty('--sy', `${e.clientY - r.top}px`);
+      qx((e.clientX - r.left - r.width / 2) * 0.25);
+      qy((e.clientY - r.top - r.height / 2) * 0.25);
     });
-
-    btn.addEventListener('pointerdown', () => {
-      pressed = true;
-      gsap.to(btn, { z: 0, scale: 0.95, '--depth': '1px', duration: 0.1, ease: 'power2.out' });
-      // Shockwave ring that expands out of the button
-      const ring = document.createElement('span');
-      ring.className = 'btn-ring';
-      ring.setAttribute('aria-hidden', 'true');
-      btn.appendChild(ring);
-      gsap.fromTo(ring, { scale: 1, opacity: 0.9 },
-        { scale: 1.45, opacity: 0, duration: 0.7, ease: 'power3.out', onComplete: () => ring.remove() });
-    });
-
-    const release = () => {
-      pressed = false;
-      gsap.to(btn, { z: lift, scale: 1, '--depth': `${base + 3}px`, duration: 0.9, ease: 'elastic.out(1, 0.45)' });
-    };
-    btn.addEventListener('pointerup', release);
-    btn.addEventListener('pointercancel', release);
-
-    btn.addEventListener('pointerleave', () => {
-      pressed = false;
-      rx(0); ry(0); mx(0); my(0);
-      gsap.to(btn, { z: 0, scale: 1, '--depth': `${base}px`, duration: 0.6, ease: 'elastic.out(1, 0.6)' });
-    });
-  });
-
-  // Hero buttons flip in from the side in 3D
-  gsap.from('.hero .cta-row .btn', {
-    rotationY: -90, rotationX: 25, y: 30, opacity: 0, duration: 1, delay: 1,
-    ease: 'back.out(1.7)', stagger: 0.15,
+    btn.addEventListener('pointerleave', () => { qx(0); qy(0); });
   });
 }
-
-// Mobile menu: the toggle is added here so every page with the same navbar gets it
-const navRoot = $('.nav');
-const navList = $('.nav-links');
-if (navRoot && navList) {
-  const toggle = document.createElement('button');
-  toggle.type = 'button';
-  toggle.className = 'nav-toggle';
-  toggle.setAttribute('aria-label', 'Open menu');
-  toggle.setAttribute('aria-expanded', 'false');
-  toggle.innerHTML = '<span></span><span></span><span></span>';
-  navRoot.appendChild(toggle);
-
-  const setMenu = (open) => {
-    navRoot.classList.toggle('menu-open', open);
-    toggle.setAttribute('aria-expanded', String(open));
-    toggle.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
-    open ? lenis.stop() : lenis.start();
-  };
-  toggle.addEventListener('click', () => setMenu(!navRoot.classList.contains('menu-open')));
-  navList.querySelectorAll('a').forEach((a) => a.addEventListener('click', () => setMenu(false)));
-  window.addEventListener('keydown', (e) => { if (e.key === 'Escape') setMenu(false); });
-  matchMedia('(min-width: 769px)').addEventListener('change', (m) => { if (m.matches) setMenu(false); });
-}
-
 // Navbar trace line: runs from the logo to the hovered link
 const navEl = $('.nav');
 const brandEl = $('.brand-logo');
@@ -229,28 +139,75 @@ if (navEl && brandEl) {
 }
 
 
+// Navbar: shrinks into a floating pill after a little scroll (styles in style.css, 1024px and up)
+const headerEl = $('.header');
+if (headerEl) {
+  gsap.set(headerEl, { '--p': 0 });
+  let compact = false;
+  const setCompact = (on) => {
+    if (on === compact) return;
+    compact = on;
+    headerEl.classList.toggle('is-compact', on);
+    gsap.to(headerEl, { '--p': on ? 1 : 0, duration: reduce ? 0 : 0.8, ease: 'power3.out', overwrite: 'auto' });
+  };
+  // a little hysteresis so it doesn't flicker around the threshold
+  const check = (y) => setCompact(compact ? y > 40 : y > 80);
+  lenis.on('scroll', ({ scroll }) => check(scroll));
+  check(window.scrollY);
+}
+
+// Mobile menu (hamburger)
+const toggle = $('.nav-toggle');
+if (navEl && toggle) {
+  const icon = toggle.querySelector('i');
+  const setMenu = (open) => {
+    navEl.classList.toggle('is-open', open);
+    toggle.setAttribute('aria-expanded', String(open));
+    toggle.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+    icon.className = open ? 'fa-solid fa-xmark' : 'fa-solid fa-bars';
+  };
+  toggle.addEventListener('click', () => setMenu(!navEl.classList.contains('is-open')));
+  $$('.nav-links a').forEach((a) => a.addEventListener('click', () => setMenu(false)));
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setMenu(false); });
+  document.addEventListener('click', (e) => { if (!navEl.contains(e.target)) setMenu(false); });
+  matchMedia('(min-width: 769px)').addEventListener('change', (e) => { if (e.matches) setMenu(false); });
+}
+
 // Background: flush grey strips (hero only), brightest in the middle, near-black at the sides
 const stripWrap = $('.bg-strips');
 if (stripWrap) {
-  // [width %, brightness]. Widths add up to 100, so there are no gaps.
-  let x = 0;
-  [[10,.10],[12,.35],[9,.18],[14,.75],[12,1],[10,.45],[13,.2],[9,.55],[11,.08]]
-    .forEach(([w, o]) => {
+  // [width %, brightness]. Each set adds up to 100, so there are no gaps.
+  const SETS = {
+    wide: [[10,.10],[12,.35],[9,.18],[14,.75],[12,1],[10,.45],[13,.2],[9,.55],[11,.08]],
+    phone: [[16,.08],[22,.5],[24,1],[22,.45],[16,.08]],
+  };
+  // The inner layer holds the strips and overscans/drifts; the outer box clips it.
+  const inner = document.createElement('div');
+  inner.className = 'bg-strips-inner';
+  stripWrap.appendChild(inner);
+
+  const phone = matchMedia('(max-width: 700px)');
+  const build = () => {
+    inner.innerHTML = '';
+    let x = 0;
+    SETS[phone.matches ? 'phone' : 'wide'].forEach(([w, o]) => {
       const s = document.createElement('span');
       s.style.cssText = `left:${x}%;width:calc(${w}% + 1px);--o:${o}`;
-      stripWrap.appendChild(s);
+      inner.appendChild(s);
       x += w;
     });
-  const strips = $$('.bg-strips span');
+  };
+  build();
+  phone.addEventListener('change', build);
 
   // Strips drop down from the top on load
   if (!reduce) {
-    gsap.from(strips, { scaleY: 0, opacity: 0, duration: 1.4, ease: 'power3.out', stagger: { each: 0.07, from: 'center' } });
+    gsap.from(inner.children, { scaleY: 0, opacity: 0, duration: 1.4, ease: 'power3.out', stagger: { each: 0.07, from: 'center' } });
   }
 
-  // The whole strip block drifts slightly with the cursor (no gaps open up)
+  // The strip block drifts slightly with the cursor (clipped, so it never widens the page)
   if (!reduce && fine) {
-    const mx = gsap.quickTo(stripWrap, 'x', { duration: 1, ease: 'power3' });
+    const mx = gsap.quickTo(inner, 'x', { duration: 1, ease: 'power3' });
     window.addEventListener('pointermove', (e) => mx((e.clientX / innerWidth - 0.5) * -40));
   }
 
