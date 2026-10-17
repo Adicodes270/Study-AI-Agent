@@ -139,6 +139,23 @@ if (navEl && brandEl) {
 }
 
 
+// Navbar: shrinks into a floating pill after a little scroll (styles in style.css, 1024px and up)
+const headerEl = $('.header');
+if (headerEl) {
+  gsap.set(headerEl, { '--p': 0 });
+  let compact = false;
+  const setCompact = (on) => {
+    if (on === compact) return;
+    compact = on;
+    headerEl.classList.toggle('is-compact', on);
+    gsap.to(headerEl, { '--p': on ? 1 : 0, duration: reduce ? 0 : 0.8, ease: 'power3.out', overwrite: 'auto' });
+  };
+  // a little hysteresis so it doesn't flicker around the threshold
+  const check = (y) => setCompact(compact ? y > 40 : y > 80);
+  lenis.on('scroll', ({ scroll }) => check(scroll));
+  check(window.scrollY);
+}
+
 // Mobile menu (hamburger)
 const toggle = $('.nav-toggle');
 if (navEl && toggle) {
