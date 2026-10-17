@@ -258,6 +258,25 @@
         </div>
     </footer>
 
+    <!-- Floating chat bubble -->
+    <div class="cw" id="chat-widget">
+        <div class="cw-panel" id="cw-panel" role="dialog" aria-label="Chat with Study Agent">
+            <div class="cw-head">
+                <span class="cw-avatar"><i class="fa-solid fa-book-open"></i></span>
+                <div class="cw-title"><b>Study Agent</b><small><i class="cw-dot"></i> bot · online</small></div>
+                <button type="button" class="cw-close" aria-label="Close chat"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="cw-body" role="log" aria-live="polite" data-lenis-prevent></div>
+            <div class="cw-chips"></div>
+            <a class="cw-open" href="https://web.telegram.org/a/#8996972210" target="_blank" rel="noopener noreferrer"><i class="fa-brands fa-telegram"></i> Open in Telegram</a>
+        </div>
+        <div class="cw-teaser">Hi! Want a 20-second tour?</div>
+        <button class="cw-fab" type="button" aria-label="Chat with Study Agent" aria-expanded="false" aria-controls="cw-panel">
+            <i class="fa-brands fa-telegram cw-ico-open"></i><i class="fa-solid fa-xmark cw-ico-close"></i>
+            <span class="cw-badge">1</span>
+        </button>
+    </div>
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/lenis@1.1.20/dist/lenis.min.js"></script>
