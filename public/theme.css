@@ -1,97 +1,85 @@
 /* ==========================================================================
-   theme.css — Strict HSL Design Token System
+   theme.css — Royal Dark Blue & Obsidian Black Design Token System
+   Palette:
+   - Obsidian Base: hsl(225, 40%, 4%) / Pure Black: hsl(0, 0%, 0%)
+   - Deep Royal Navy Surfaces: hsl(224, 38%, 9%) to hsl(224, 35%, 15%)
+   - Electric Royal Blue: hsl(222, 95%, 62%)
+   - Ice Blue-White Typography: hsl(220, 30%, 97%)
    ========================================================================== */
 
 :root {
+  /* Core Backgrounds (Pitch Obsidian & Deep Midnight) */
+  --bg-primary: hsl(225, 40%, 4%);     /* Deepest obsidian midnight black */
+  --bg-surface: hsl(224, 38%, 9%);     /* Dark royal navy cards */
+  --bg-elevated: hsl(224, 35%, 15%);   /* Elevated interactive pills & chat bubbles */
 
-  /* in :root */
-  --bg-primary: hsl(0, 0%, 0%);
-  --strip-hi: hsla(0, 0%, 70%, 0.22);
-  --strip-lo: hsla(0, 0%, 45%, 0.08);
+  /* Hero Strips & Ambient 3D Atmosphere */
+  --strip-hi: hsla(222, 95%, 62%, 0.22);
+  --strip-lo: hsla(224, 38%, 15%, 0.08);
+  --strip-edge: hsla(225, 40%, 2%, 0.75);
+  --orb-primary: hsla(222, 95%, 62%, 0.32);   /* Glowing Royal Sapphire Blue orb */
+  --orb-secondary: hsla(215, 85%, 48%, 0.18); /* Deep imperial navy ambient wash */
 
+  /* Typography */
+  --text-primary: hsl(220, 30%, 97%);  /* Pure ice white for crisp contrast */
+  --text-secondary: hsl(218, 25%, 72%);/* Soft cool slate for descriptions */
+  --text-muted: hsl(220, 18%, 48%);    /* Subdued navy-slate for labels */
 
-  /* in :root */
-  --strip-hi: hsl(0 0% 62% / 0.32);
-  --strip-lo: hsl(0 0% 38% / 0.14);
-  --strip-edge: hsl(0 0% 0% / 0.5);
-  --orb-primary: hsla(250, 92%, 68%, 0.28);
-  --orb-secondary: hsla(165, 82%, 51%, 0.14);
-  
-
-
-  --bg-surface: hsl(230, 20%, 9%);
-  --bg-elevated: hsl(230, 18%, 14%);
-
-  --text-primary: hsl(220, 20%, 98%);
-  --text-secondary: hsl(220, 12%, 65%);
-  --text-muted: hsl(220, 10%, 42%);
-
-  --accent-primary: hsl(250, 92%, 68%);
-  --accent-secondary: hsl(165, 82%, 51%);
+  /* Royal Blue Accents & Interactive Highlights */
+  --accent-primary: hsl(222, 95%, 62%);   /* Radiant Royal Blue for buttons & main accents */
+  --accent-secondary: hsl(190, 95%, 52%); /* Electric Cyan-Blue secondary highlight */
   --accent-warning: hsl(38, 92%, 50%);
   --accent-danger: hsl(0, 84%, 60%);
 
-  --border-subtle: hsla(220, 20%, 90%, 0.08);
-  --border-highlight: hsla(250, 92%, 68%, 0.35);
+  --accent-primary-soft: hsla(222, 95%, 62%, 0.16);
+  --accent-secondary-soft: hsla(190, 95%, 52%, 0.14);
+  --accent-warning-soft: hsla(38, 92%, 50%, 0.14);
+  --accent-danger-soft: hsla(0, 84%, 60%, 0.14);
 
+  /* Glassmorphism, Outlines & Luminous Shadows */
+  --border-subtle: hsla(222, 95%, 62%, 0.14);
+  --border-highlight: hsla(222, 95%, 62%, 0.45);
 
-  --nav-glass-bg: hsla(230, 20%, 9%, 0.75);
-  --glow-primary: hsla(250, 92%, 68%, 0.25);
-  --grid-line: hsla(220, 20%, 90%, 0.035);
+  --nav-glass-bg: hsla(225, 40%, 6%, 0.82);
+  --glow-primary: hsla(222, 95%, 62%, 0.32);
+  --grid-line: hsla(222, 95%, 62%, 0.045);
+
+  --radius-card: 20px;
+  --shadow-window: 0 30px 80px -30px hsla(222, 95%, 45%, 0.38);
 }
 
-
 html.light {
-  /* in html.light */
-  --strip-hi: hsla(230, 25%, 10%, 0.1);
-  --strip-lo: hsla(230, 25%, 10%, 0.03);
-  --bg-primary: hsl(220, 25%, 98%);
+  /* Crisp Light Mode (Inverted Royal Blue on Snow White) */
+  --bg-primary: hsl(220, 30%, 98%);
   --bg-surface: hsl(0, 0%, 100%);
-  --bg-elevated: hsl(220, 20%, 94%);
+  --bg-elevated: hsl(220, 28%, 93%);
 
+  --strip-hi: hsla(222, 85%, 52%, 0.14);
+  --strip-lo: hsla(224, 38%, 20%, 0.05);
+  --strip-edge: hsla(220, 30%, 98%, 0.6);
+  --orb-primary: hsla(222, 85%, 52%, 0.16);
+  --orb-secondary: hsla(215, 80%, 40%, 0.08);
 
-  /* in html.light */
-  --strip-hi: hsl(230 25% 10% / 0.12);
-  --strip-lo: hsl(230 25% 10% / 0.04);
-  --strip-edge: hsl(0 0% 100% / 0.5);
-  --orb-primary: hsla(250, 92%, 60%, 0.16);
-  --orb-secondary: hsla(165, 82%, 38%, 0.1);
+  --text-primary: hsl(224, 45%, 12%);  /* Deep navy-black headings */
+  --text-secondary: hsl(220, 20%, 38%);/* Balanced slate body text */
+  --text-muted: hsl(220, 15%, 56%);
 
-  --text-primary: hsl(230, 25%, 10%);
-  --text-secondary: hsl(220, 12%, 38%);
-  --text-muted: hsl(220, 10%, 55%);
-
-  --accent-primary: hsl(250, 92%, 60%);
-  --accent-secondary: hsl(165, 82%, 38%);
+  --accent-primary: hsl(222, 85%, 52%);   /* Bold Royal Blue */
+  --accent-secondary: hsl(190, 90%, 40%);
   --accent-warning: hsl(38, 92%, 45%);
   --accent-danger: hsl(0, 84%, 55%);
 
-  --border-subtle: hsla(230, 25%, 10%, 0.08);
-  --border-highlight: hsla(250, 92%, 55%, 0.3);
-
-  --nav-glass-bg: hsla(0, 0%, 100%, 0.85);
-  --glow-primary: hsla(250, 92%, 60%, 0.15);
-  --grid-line: hsla(230, 25%, 10%, 0.04);
-}
-
-/* Added for landing sections */
-:root {
-  --radius-card: 20px;
-  --accent-primary-soft: hsla(250, 92%, 68%, 0.14);
-  --accent-secondary-soft: hsla(165, 82%, 51%, 0.14);
-  --accent-warning-soft: hsla(38, 92%, 50%, 0.14);
-  --accent-danger-soft: hsla(0, 84%, 60%, 0.14);
-  --shadow-window: 0 30px 80px -30px hsla(250, 92%, 68%, 0.35);
-  --orb-primary: hsla(250, 92%, 68%, 0.28);
-  --orb-secondary: hsla(165, 82%, 51%, 0.14);
-}
-
-html.light {
-  --accent-primary-soft: hsla(250, 92%, 60%, 0.1);
-  --accent-secondary-soft: hsla(165, 82%, 38%, 0.12);
+  --accent-primary-soft: hsla(222, 85%, 52%, 0.1);
+  --accent-secondary-soft: hsla(190, 90%, 40%, 0.12);
   --accent-warning-soft: hsla(38, 92%, 45%, 0.14);
   --accent-danger-soft: hsla(0, 84%, 55%, 0.1);
-  --shadow-window: 0 30px 70px -30px hsla(250, 92%, 60%, 0.25);
-  --orb-primary: hsla(250, 92%, 60%, 0.16);
-  --orb-secondary: hsla(165, 82%, 38%, 0.1);
+
+  --border-subtle: hsla(222, 45%, 15%, 0.1);
+  --border-highlight: hsla(222, 85%, 52%, 0.32);
+
+  --nav-glass-bg: hsla(0, 0%, 100%, 0.85);
+  --glow-primary: hsla(222, 85%, 52%, 0.18);
+  --grid-line: hsla(222, 45%, 15%, 0.04);
+
+  --shadow-window: 0 30px 60px -34px hsla(222, 85%, 35%, 0.2);
 }
