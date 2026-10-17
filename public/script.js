@@ -160,11 +160,40 @@ if (headerEl) {
 const toggle = $('.nav-toggle');
 if (navEl && toggle) {
   const icon = toggle.querySelector('i');
+  const links = $('.nav-links');
+
+  // Thin scroll line under the pills (the row scrolls sideways instead of wrapping)
+  const line = document.createElement('span');
+  line.className = 'nav-scroll';
+  line.setAttribute('aria-hidden', 'true');
+  line.innerHTML = '<span></span>';
+  navEl.appendChild(line);
+  const thumb = line.firstChild;
+  const updateScroll = () => {
+    const max = links.scrollWidth - links.clientWidth;
+    const can = max > 1;
+    navEl.classList.toggle('can-scroll', can);
+    if (!can) return;
+    const size = Math.max((links.clientWidth / links.scrollWidth) * 100, 14);
+    thumb.style.width = `${size}%`;
+    thumb.style.left = `${(links.scrollLeft / max) * (100 - size)}%`;
+  };
+  links.addEventListener('scroll', updateScroll, { passive: true });
+  addEventListener('resize', updateScroll);
+  // while the menu is open, the mouse wheel scrolls the pills sideways (narrow desktop windows)
+  links.addEventListener('wheel', (e) => {
+    if (!navEl.classList.contains('is-open') || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+    links.scrollLeft += e.deltaY;
+    e.preventDefault();
+  }, { passive: false });
+
   const setMenu = (open) => {
+    links.toggleAttribute('data-lenis-prevent', open);
     navEl.classList.toggle('is-open', open);
     toggle.setAttribute('aria-expanded', String(open));
     toggle.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
     icon.className = open ? 'fa-solid fa-xmark' : 'fa-solid fa-bars';
+    if (open) { links.scrollLeft = 0; requestAnimationFrame(updateScroll); }
   };
   toggle.addEventListener('click', () => setMenu(!navEl.classList.contains('is-open')));
   $$('.nav-links a').forEach((a) => a.addEventListener('click', () => setMenu(false)));

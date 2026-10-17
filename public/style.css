@@ -1470,3 +1470,63 @@ html.light {
 .float-card {
   box-shadow: 0 14px 30px -18px hsl(0 0% 0% / 0.55);
 }
+
+/* ==========================================================================
+   Mobile menu: one row of pills that scrolls sideways (no wrapping, so the bar
+   keeps the same height), with a thin scroll line underneath.
+   ========================================================================== */
+.nav-scroll {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .nav.is-open {
+    align-items: center;
+    padding: 0.5rem 0.6rem 0.9rem 0.4rem;
+  }
+
+  .nav.is-open .nav-links {
+    flex: 1;
+    flex-wrap: nowrap;
+    min-width: 0;
+    gap: 0.5rem;
+    padding: 0.2rem 0.9rem;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 0.9rem, #000 calc(100% - 0.9rem), transparent 100%);
+    mask-image: linear-gradient(90deg, transparent 0, #000 0.9rem, #000 calc(100% - 0.9rem), transparent 100%);
+  }
+
+  .nav.is-open .nav-links::-webkit-scrollbar {
+    display: none;
+  }
+
+  .nav-links li {
+    flex: none;
+  }
+
+  .nav-links a {
+    white-space: nowrap;
+  }
+
+  .nav.is-open.can-scroll .nav-scroll {
+    display: block;
+    position: absolute;
+    left: 1.3rem;
+    right: 3.6rem;
+    bottom: 0.4rem;
+    height: 3px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: hsl(0 0% 100% / 0.1);
+  }
+
+  .nav-scroll span {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    border-radius: inherit;
+    background: var(--accent-primary);
+  }
+}
