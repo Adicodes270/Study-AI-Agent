@@ -360,6 +360,9 @@ if (stripWrap) {
 // ~230 points + 10 wireframes, no lights, 30fps, paused when the tab is hidden. Skipped for reduced motion / data-saver.
 // ==========================================================================
 (() => {
+  // Only the home page gets the 3D background ('/', '/index.html', or a folder URL like '/repo/')
+  const isHome = /(^|\/)(index\.html)?$/.test(location.pathname);
+  if (!isHome) return;
   if (reduce) { console.info('[3D background] skipped: your system has "reduce motion" turned on'); return; }
   if (navigator.connection && navigator.connection.saveData) { console.info('[3D background] skipped: data saver is on'); return; }
   try {
