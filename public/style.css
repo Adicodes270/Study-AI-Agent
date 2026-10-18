@@ -1746,3 +1746,70 @@ html.light {
     animation: menu-in 0.25s ease both;
   }
 }
+
+/* ==========================================================================
+   Mobile navbar: one fixed-height row. Links scroll sideways (no wrapping),
+   with a thin accent line underneath showing the scroll position.
+   ========================================================================== */
+.nav-progress { display: none; }
+
+@media (max-width: 768px) {
+  .nav.is-open,
+  .menu-open .nav {
+    align-items: center;
+  }
+
+  .nav-links {
+    flex-wrap: nowrap;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 0.1rem 0.5rem 0.1rem 0;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    -webkit-mask-image: linear-gradient(90deg, transparent, #000 var(--fade-l, 0px), #000 calc(100% - var(--fade-r, 0px)), transparent);
+    mask-image: linear-gradient(90deg, transparent, #000 var(--fade-l, 0px), #000 calc(100% - var(--fade-r, 0px)), transparent);
+  }
+
+  .nav-links::-webkit-scrollbar { display: none; }
+
+  .nav-links li { flex: none; }
+
+  .nav-links a {
+    white-space: nowrap;
+    padding: 0.35rem 0.9rem;
+    font-size: 0.8125rem;
+  }
+
+  /* the scroll line */
+  .nav-progress {
+    display: block;
+    position: absolute;
+    bottom: 5px;
+    left: var(--pl, 0);
+    width: var(--pw, 0);
+    height: 2px;
+    border-radius: 2px;
+    background: var(--border-subtle);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease;
+  }
+
+  .nav.is-open .nav-progress,
+  .menu-open .nav .nav-progress { opacity: 1; }
+
+  /* nothing to scroll (wide tablets): hide the line */
+  .nav-progress.is-static { opacity: 0 !important; }
+
+  .nav-progress span {
+    display: block;
+    height: 100%;
+    width: var(--tw, 40%);
+    border-radius: inherit;
+    background: var(--accent-primary);
+    box-shadow: 0 0 8px var(--glow-primary);
+    transform: translateX(var(--tx, 0px));
+  }
+}

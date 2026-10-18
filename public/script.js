@@ -239,7 +239,8 @@ if (headerEl) {
 }
 
 // Mobile menu (hamburger). The toggle is created here if the HTML doesn't have one,
-// so every page with the same navbar gets it.
+// so every page with the same navbar gets it. On phones the links stay in ONE row and
+// scroll sideways, with a thin accent line underneath showing the scroll position.
 const navList = $('.nav-links');
 if (navEl && navList) {
   let toggle = $('.nav-toggle');
@@ -254,18 +255,57 @@ if (navEl && navList) {
   toggle.setAttribute('aria-expanded', 'false');
   const icon = toggle.querySelector('i');
 
+  // Scroll line under the links
+  const bar = document.createElement('span');
+  bar.className = 'nav-progress';
+  bar.setAttribute('aria-hidden', 'true');
+  bar.innerHTML = '<span></span>';
+  navEl.appendChild(bar);
+  const thumb = bar.firstElementChild;
+
+  const updateBar = () => {
+    const w = navList.clientWidth;
+    const max = navList.scrollWidth - w;
+    const tw = max > 0 ? Math.max(28, (w * w) / navList.scrollWidth) : w;
+    const x = max > 0 ? (navList.scrollLeft / max) * (w - tw) : 0;
+    bar.classList.toggle('is-static', max <= 0);
+    bar.style.setProperty('--pl', `${navList.offsetLeft}px`);
+    bar.style.setProperty('--pw', `${w}px`);
+    thumb.style.setProperty('--tw', `${tw}px`);
+    thumb.style.setProperty('--tx', `${x}px`);
+    navList.style.setProperty('--fade-l', navList.scrollLeft > 4 ? '18px' : '0px');
+    navList.style.setProperty('--fade-r', navList.scrollLeft < max - 4 ? '18px' : '0px');
+  };
+
   const setMenu = (open) => {
     navEl.classList.toggle('is-open', open);
     toggle.setAttribute('aria-expanded', String(open));
     toggle.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
     if (icon) icon.className = open ? 'fa-solid fa-xmark' : 'fa-solid fa-bars';
     open ? lenis.stop() : lenis.start();
+    if (open) {
+      updateBar();
+      // start with the current page's link in view
+      const a = navList.querySelector('a.active');
+      if (a) {
+        navList.scrollLeft = a.getBoundingClientRect().left - navList.getBoundingClientRect().left
+          + navList.scrollLeft - (navList.clientWidth - a.offsetWidth) / 2;
+      }
+      updateBar();
+    }
   };
   toggle.addEventListener('click', () => setMenu(!navEl.classList.contains('is-open')));
   navList.querySelectorAll('a').forEach((a) => a.addEventListener('click', () => setMenu(false)));
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setMenu(false); });
   document.addEventListener('click', (e) => { if (!navEl.contains(e.target)) setMenu(false); });
   matchMedia('(min-width: 769px)').addEventListener('change', (e) => { if (e.matches) setMenu(false); });
+
+  navList.addEventListener('scroll', updateBar, { passive: true });
+  addEventListener('resize', updateBar);
+  // mouse wheel scrolls the links sideways (for tablets with a mouse)
+  navList.addEventListener('wheel', (e) => {
+    if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) { navList.scrollLeft += e.deltaY; e.preventDefault(); }
+  }, { passive: false });
 }
 
 // ==========================================================================
