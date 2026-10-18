@@ -1,5 +1,6 @@
 /* ==========================================================================
-   style.css — Layout & Vengeance-Style Navbar
+   style.css — Layout & Vengeance-Style Navbar (merged)
+   Base: style.css  +  additions from style (1).css
    ========================================================================== */
 
 *,
@@ -28,7 +29,6 @@ body {
   position: relative;
 }
 
-/* Hero background: grey strips on black (fade out on scroll) */
 /* Hero background: wide grey -> black strips, a white top bloom and a light sweep */
 .bg-strips {
   position: absolute;
@@ -43,19 +43,26 @@ body {
   mask-image: linear-gradient(to bottom, #000 40%, transparent 100%);
 }
 
-
-
 /* white light from the top, plus a soft wash on the left edge */
 .bg-strips::before {
   content: "";
   position: absolute;
   inset: 0;
+  z-index: 1;
   background:
     radial-gradient(ellipse 55% 45% at 50% 0%, hsl(0 0% 100% / 0.1), transparent 70%),
     radial-gradient(ellipse 30% 70% at 0% 30%, hsl(0 0% 100% / 0.08), transparent 70%);
 }
 
-
+/* Lightweight Three.js background (shapes + particles), behind the page content */
+.bg-3d {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  pointer-events: none;
+}
 
 .bg-strips span {
   position: absolute;
@@ -133,10 +140,8 @@ body::after {
   right: 0;
   width: 100%;
   z-index: 100;
-  /* background: var(--nav-glass-bg); */
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
-  /* border-bottom: 1px solid var(--border-subtle); */
 }
 
 .nav {
@@ -169,8 +174,6 @@ body::after {
   display: flex;
   align-items: center;
   gap: 0.35rem;
-  /* background: var(--bg-elevated);
-  border: 1px solid var(--border-subtle); */
   border-radius: 15px;
   padding: 0.8rem 0.8rem;
 }
@@ -184,7 +187,6 @@ body::after {
   border-radius: 5px;
   transition: all 0.2s ease;
 }
-
 
 .nav-links a:hover {
   color: var(--text-primary);
@@ -208,7 +210,10 @@ body::after {
   z-index: 1;
   background: linear-gradient(90deg, transparent, var(--accent-primary) 40%);
   box-shadow: 0 0 10px var(--glow-primary);
-  transition: width 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+  /* draws out from the logo, glides between links, retracts when you leave */
+  transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1),
+    top 0.45s cubic-bezier(0.22, 1, 0.36, 1),
+    left 0.45s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .nav-trace.on {
@@ -226,13 +231,15 @@ body::after {
   background: var(--accent-primary);
   box-shadow: 0 0 10px 2px var(--accent-primary),
     0 0 26px 8px var(--glow-primary);
-  transform: translate(50%, -50%);
+  transform: translate(50%, -50%) scale(0);
   opacity: 0;
-  transition: opacity 0.25s ease;
+  transition: opacity 0.3s ease, transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 .nav-trace.on::after {
   opacity: 1;
+  transform: translate(50%, -50%) scale(1);
+  transition-delay: 0.25s;
 }
 
 /* 3. Right Action Buttons */
@@ -242,7 +249,6 @@ body::after {
   gap: 1.75rem;
 }
 
-/* Base Nav Button */
 .nav-btn {
   text-decoration: none;
   font-size: 0.9375rem;
@@ -253,7 +259,6 @@ body::after {
   justify-content: center;
 }
 
-/* Text / Ghost Link (Like "Support" in the screenshot) */
 .nav-btn-text {
   color: var(--text-secondary);
 }
@@ -262,7 +267,7 @@ body::after {
   color: var(--text-primary);
 }
 
-/* Framed Rounded Button (Like "Invite" in the screenshot) */
+/* Framed Rounded Button */
 .nav-btn-primary {
   color: var(--text-primary);
   background-color: var(--bg-surface);
@@ -271,10 +276,10 @@ body::after {
   padding: 0.55rem 1.4rem;
 }
 
+/* (transform on hover is handled by the 3D tilt in script.js) */
 .nav-btn-primary:hover {
   border-color: var(--border-highlight);
   background-color: var(--bg-elevated);
-  transform: translateY(-1px);
 }
 
 /* ==========================================================================
@@ -310,7 +315,6 @@ main {
   max-width: 800px;
 }
 
-/* Responsive adjustments */
 /* Mobile / tablet navigation (hamburger) */
 .nav-toggle,
 .nav-cta-mobile {
@@ -488,10 +492,6 @@ input:focus-visible {
   transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
 }
 
-.btn:hover {
-  transform: translateY(-2px);
-}
-
 .btn-solid {
   background: var(--accent-primary);
   color: var(--bg-primary);
@@ -636,6 +636,7 @@ input:focus-visible {
   display: grid;
   gap: 0.35rem;
   margin-top: 1.75rem;
+  counter-reset: s;
 }
 
 .step {
@@ -656,7 +657,8 @@ input:focus-visible {
 }
 
 .step b::before {
-  content: attr(data-n);
+  counter-increment: s;
+  content: counter(s);
   display: inline-grid;
   place-items: center;
   width: 1.5rem;
@@ -761,7 +763,6 @@ input:focus-visible {
   margin-top: 0.75rem;
 }
 
-
 .cta-card {
   text-align: center;
   display: grid;
@@ -790,11 +791,12 @@ input:focus-visible {
   }
 }
 
+/* Only applies when RESPECT_REDUCED_MOTION is switched on in script.js */
 @media (prefers-reduced-motion: reduce) {
 
-  *,
-  *::before,
-  *::after {
+  html[data-respect-motion] *,
+  html[data-respect-motion] *::before,
+  html[data-respect-motion] *::after {
     animation: none !important;
     transition: none !important;
   }
@@ -1061,7 +1063,6 @@ input:focus-visible {
 }
 
 /* Footer */
-/* Footer */
 .foot {
   position: relative;
   z-index: 1;
@@ -1081,14 +1082,12 @@ input:focus-visible {
   padding: 3.5rem 2rem 2.5rem;
   display: grid;
   grid-template-columns: minmax(0, 1fr) repeat(3, auto);
-  /* brand left, links pushed right */
   column-gap: 3.5rem;
-  /* Product / Project / Built with sit close together */
   row-gap: 2.5rem;
   align-items: start;
 }
 
-/* Big gap between the Study Agent block and the links */
+/* Big gap between the brand block and the links */
 .foot-brand {
   margin-right: clamp(3rem, 12vw, 14rem);
 }
@@ -1210,9 +1209,7 @@ input:focus-visible {
   transform: translateY(-3px);
 }
 
-/* Footer glow (delete this block if you don't want it) */
-
-
+/* Footer top accent line */
 .foot::after {
   content: "";
   position: absolute;
@@ -1249,8 +1246,6 @@ input:focus-visible {
   top: 45vh;
   background: var(--orb-secondary);
 }
-
-
 
 .fx-ring {
   position: fixed;
@@ -1428,6 +1423,239 @@ input:focus-visible {
 }
 
 /* ==========================================================================
+   Tablet / phone refinements (from the earlier stylesheet)
+   ========================================================================== */
+
+@media (max-width: 1024px) {
+  main {
+    padding-inline: 1.25rem;
+  }
+
+  .hero {
+    gap: 2rem;
+  }
+
+  .stats {
+    gap: 1.75rem;
+  }
+
+  .section {
+    padding: 4.5rem 0;
+  }
+}
+
+@media (min-width: 769px) and (max-width: 1024px) {
+  .nav-links a {
+    padding-inline: 0.7rem;
+  }
+}
+
+@media (max-width: 768px) {
+  main {
+    padding-top: 6rem;
+  }
+}
+
+@media (max-width: 600px) {
+  main {
+    padding-inline: 1rem;
+    padding-top: 5.5rem;
+  }
+
+  .hero {
+    padding-bottom: 2rem;
+  }
+
+  .hero h1 {
+    font-size: clamp(2rem, 9vw, 2.6rem);
+  }
+
+  .hero-sub {
+    font-size: 1rem;
+  }
+
+  .cta-row {
+    width: 100%;
+  }
+
+  .cta-row .btn {
+    flex: 1 1 100%;
+    justify-content: center;
+  }
+
+  .stats {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.75rem;
+  }
+
+  .stats b {
+    font-size: 1.2rem;
+  }
+
+  .win,
+  .hero-chat,
+  .panel .win {
+    width: 100%;
+  }
+
+  .stage {
+    height: 400px;
+  }
+
+  .row {
+    font-size: 0.8125rem;
+    flex-wrap: wrap;
+  }
+
+  .section {
+    padding: 3.5rem 0;
+  }
+
+  .bento-card {
+    padding: 1.25rem;
+  }
+
+  .tierbar {
+    grid-template-columns: 5.5rem minmax(0, 1fr);
+  }
+
+  .cta-card {
+    padding: 2.5rem 1.25rem;
+    border-radius: 22px;
+  }
+
+  .strip-track {
+    gap: 2rem;
+  }
+
+  .foot-grid {
+    grid-template-columns: 1fr;
+    padding: 2.25rem 1rem 1.5rem;
+  }
+
+  .foot-brand {
+    grid-column: auto;
+  }
+
+  .foot-bottom {
+    padding: 1rem 1rem 1.5rem;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+/* Touch devices: make tap targets comfortable */
+@media (hover: none) and (pointer: coarse) {
+  .btn,
+  .nav-btn-primary,
+  .to-top {
+    min-height: 44px;
+  }
+}
+
+/* ==========================================================================
+   3D buttons (tilt, lift, shine, shockwave and spring are driven by script.js)
+   ========================================================================== */
+
+.btn,
+.nav-btn-primary,
+.to-top {
+  --depth: 5px;
+  --sx: 50%;
+  --sy: 50%;
+  position: relative;
+  transform-style: preserve-3d;
+  will-change: transform;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.to-top {
+  --depth: 3px;
+}
+
+/* Label and icon float at different heights above the button face */
+.btn-txt {
+  display: inline-block;
+  transform: translateZ(22px);
+}
+
+.btn>i,
+.nav-btn-primary>i,
+.to-top>i {
+  display: inline-block;
+  transform: translateZ(36px);
+}
+
+.to-top:hover>i {
+  transform: translateZ(36px) translateY(-3px);
+}
+
+/* Thickness under each button; it shrinks when pressed */
+.btn-ghost,
+.nav-btn-primary,
+.to-top {
+  box-shadow: 0 var(--depth) 0 hsl(230, 20%, 4%), 0 12px 24px -12px hsl(0, 0%, 0%);
+}
+
+/* Glossy shine that follows the cursor across the button face */
+.btn::after,
+.nav-btn-primary::after,
+.to-top::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(circle 90px at var(--sx) var(--sy), hsl(0 0% 100% / 0.28), transparent 70%);
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.btn:hover::after,
+.nav-btn-primary:hover::after,
+.to-top:hover::after {
+  opacity: 1;
+}
+
+/* Pulsing halo on the main call-to-action */
+.btn-solid::before {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  border: 2px solid var(--accent-primary);
+  pointer-events: none;
+  opacity: 0;
+  animation: halo 2.6s ease-out infinite;
+}
+
+@keyframes halo {
+  0% {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+
+  70%,
+  100% {
+    opacity: 0;
+    transform: scale(1.15, 1.5);
+  }
+}
+
+/* Click shockwave */
+.btn-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 2px solid var(--accent-secondary);
+  pointer-events: none;
+}
+
+/* ==========================================================================
    Softer glows. The background lighting (orbs, hero strips, footer wash, CTA
    tint) is untouched. Accent glows are lighter, and a few are removed.
    ========================================================================== */
@@ -1441,9 +1669,9 @@ html.light {
   --shadow-window: 0 30px 60px -34px hsla(250, 92%, 60%, 0.12);
 }
 
-/* lighter: main button, cursor spotlight on cards, nav trace dot */
+/* lighter: main button (keeps its 3D thickness), cursor spotlight on cards, nav trace dot */
 .btn-solid {
-  box-shadow: 0 6px 18px -10px var(--glow-primary);
+  box-shadow: 0 var(--depth) 0 hsl(250, 70%, 42%), 0 10px 20px -12px var(--glow-primary);
 }
 
 .bento-card::before {
@@ -1469,4 +1697,52 @@ html.light {
 
 .float-card {
   box-shadow: 0 14px 30px -18px hsl(0 0% 0% / 0.55);
+}
+
+/* ==========================================================================
+   Mobile menu compatibility: works with either script version
+   - toggle with a class of .is-open on .nav            (newer script)
+   - toggle with a class of .menu-open on any ancestor  (older script)
+   - toggle button containing three <span> bars OR an <i> icon
+   ========================================================================== */
+
+/* three-bar hamburger inside .nav-toggle */
+.nav-toggle:has(> span) {
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 10px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+}
+
+.nav-toggle > span {
+  display: block;
+  width: 100%;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--text-primary);
+  transition: transform 0.3s ease, opacity 0.2s ease;
+}
+
+.menu-open .nav-toggle > span:nth-child(1),
+.nav.is-open .nav-toggle > span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+.menu-open .nav-toggle > span:nth-child(2),
+.nav.is-open .nav-toggle > span:nth-child(2) { opacity: 0; }
+.menu-open .nav-toggle > span:nth-child(3),
+.nav.is-open .nav-toggle > span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+
+@media (max-width: 768px) {
+  .menu-open .nav {
+    align-items: flex-start;
+  }
+
+  .menu-open .brand-logo {
+    display: none;
+  }
+
+  .menu-open .nav-links {
+    display: flex;
+    animation: menu-in 0.25s ease both;
+  }
 }
