@@ -31,7 +31,7 @@
       status: 'disconnected', // 'disconnected' | 'pending' | 'connected'
       backendUrl: 'http://localhost:8000',
       accountEmail: '',
-      authMethod: null,       // 'local_playwright_bridge' | 'google_popup_window' | 'storage_state_json'
+      authMethod: null,       // 'local_playwright_bridge' | 'notebooklm_login' | 'storage_state_json'
       sessionData: null,
       sessionStored: false,
       connectedAt: null
@@ -76,6 +76,48 @@
     updatePayloadInspector();
     if (!silent) {
       showToast('Configuration saved to browser storage', 'fa-solid fa-circle-check');
+    }
+  }
+
+  // NotebookLM session waiting to be saved (kept in memory only, never in localStorage)
+  let pendingLoginId = null;
+
+  // Save Telegram id + Gemini keys + Google account to the database (Save Configuration button)
+  async function saveConfigToDb() {
+    const userId = String(state.telegram.userId || state.telegram.chatId || '').trim();
+    const keys = state.geminiKeys.map((k) => k.key.trim()).filter(isValidGeminiKeyFormat);
+    if (!/^\d+$/.test(userId)) {
+      showToast('Pair your Telegram account first (Step 2) so we know whose settings to save', 'fa-solid fa-triangle-exclamation');
+      return false;
+    }
+    const body = {
+      telegram_user_id: userId,
+      gemini_api_keys: keys,
+      google_email: (state.notebooklm.accountEmail || '').trim() || undefined,
+      notebooklm_login_id: pendingLoginId || undefined
+    };
+    if (!keys.length && !pendingLoginId && !body.google_email) {
+      showToast('Add a Gemini key or sign in to your Google account first', 'fa-solid fa-key');
+      return false;
+    }
+    try {
+      const res = await fetch('/api/user-keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
+      const parts = [];
+      if (data.keys_saved) parts.push(`${data.keys_saved} Gemini key${data.keys_saved > 1 ? 's' : ''}`);
+      if (data.email_saved) parts.push('Google email');
+      if (data.session_saved) parts.push('NotebookLM Google session');
+      if (data.session_saved) pendingLoginId = null;
+      showToast(`Saved to database for Telegram ID ${userId}: ${parts.join(' + ')}`, 'fa-solid fa-database');
+      return true;
+    } catch (e) {
+      showToast('Could not save to the database: ' + e.message, 'fa-solid fa-circle-exclamation');
+      return false;
     }
   }
 
@@ -377,6 +419,7 @@
 
   chatIdInput?.addEventListener('input', (e) => {
     state.telegram.chatId = e.target.value.trim();
+    state.telegram.userId = state.telegram.chatId;
     state.telegram.verified = Boolean(state.telegram.chatId);
     state.telegram.updatedAt = new Date().toISOString();
     saveState(true);
@@ -430,6 +473,7 @@
           const username = matchedMsg.chat.username || matchedMsg.from?.username || '';
 
           state.telegram.chatId = newChatId;
+          state.telegram.userId = String(matchedMsg.from?.id || newChatId);
           state.telegram.chatFirstName = firstName;
           state.telegram.chatUsername = username;
           state.telegram.verified = true;
@@ -553,7 +597,7 @@
           : 'Google NotebookLM account connected';
       }
       if (subtext) {
-        subtext.innerHTML = `Authenticated via <code>${escapeHtml(state.notebooklm.authMethod || 'google_popup_window')}</code> · Ready for Study Agent.`;
+        subtext.innerHTML = `Authenticated via <code>${escapeHtml(state.notebooklm.authMethod || 'notebooklm_login')}</code> · Ready for Study Agent.`;
       }
       if (launchBtn) {
         launchBtn.innerHTML = `<i class="fa-solid fa-rotate"></i> <span class="btn-txt">Switch / Reconnect Google Account</span>`;
@@ -569,11 +613,11 @@
         nlmModeBadge.className = 'chip wait';
         nlmModeBadge.textContent = 'Signing In...';
       }
-      if (headline) headline.textContent = 'Google NotebookLM login window is open...';
+      if (headline) headline.textContent = 'Waiting for you to sign in...';
       if (subtext) {
-        subtext.innerHTML = 'Sign in to your Google account in the popup window. Once you see your NotebookLM homepage, <b>close the popup window</b> (or click <em>I\'ve Signed In — Confirm</em> below).';
+        subtext.innerHTML = 'Sign in to your Google account in the window that just opened on this computer. It closes by itself as soon as you reach NotebookLM.';
       }
-      if (confirmPopupBtn) confirmPopupBtn.hidden = false;
+      if (confirmPopupBtn) confirmPopupBtn.hidden = true;
     } else {
       s1?.classList.add('is-current');
       s1?.classList.remove('is-done');
@@ -625,131 +669,49 @@
     showToast('Google NotebookLM account linked!', 'fa-solid fa-circle-check');
   }
 
-  // Hybrid Sign-In:
-  // 1. Tries local `notebooklm_server.py` bridge (`POST /api/notebooklm/login`) which runs `notebooklm login`
-  // 2. If local bridge isn't running, immediately opens a centered Google NotebookLM login popup window
+  // Sign in: the server opens a Google login window on this computer, captures the session
+  // automatically, and closes the window. The session is saved with Save Configuration.
   $id('launch-notebooklm-auth-btn')?.addEventListener('click', async () => {
     stopNlmTimers();
-    const baseUrl = (state.notebooklm.backendUrl || 'http://localhost:8000').replace(/\/+$/, '');
+    let loginId;
+    try {
+      const res = await fetch('/api/notebooklm/login', { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
+      loginId = data.login_id;
+    } catch (e) {
+      showToast(e.message.startsWith('Failed') ? 'Could not reach the Study Agent server' : e.message, 'fa-solid fa-circle-exclamation');
+      return;
+    }
     state.notebooklm.status = 'pending';
     syncNotebookLMUI();
+    showToast('A Google login window opened. Sign in there and it will close by itself', 'fa-brands fa-google');
 
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 1600);
-      const res = await fetch(`${baseUrl}/api/notebooklm/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accountHint: state.notebooklm.accountEmail || null }),
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
-
-      if (res.ok) {
-        const data = await res.json().catch(() => ({}));
-        if (data.authenticated || data.status === 'connected') {
-          markNotebookLMConnected('local_playwright_bridge', data.email, data.storage_state || null);
-          return;
-        }
-        showToast('Launched automated NotebookLM login window!', 'fa-brands fa-google');
-        startPollingLocalBridge(baseUrl);
-        return;
-      }
-    } catch (e) {
-      // Local Python bridge not running -> Open direct Google NotebookLM popup window right in browser!
-    }
-
-    openDirectNotebookLMPopup();
-  });
-
-  function openDirectNotebookLMPopup() {
-    const w = 540;
-    const h = 680;
-    const left = Math.max(0, Math.round((window.screen.width - w) / 2));
-    const top = Math.max(0, Math.round((window.screen.height - h) / 2));
-
-    nlmPopupWin = window.open(
-      'https://notebooklm.google.com/',
-      'StudyAgentNotebookLMAuth',
-      `width=${w},height=${h},left=${left},top=${top},menubar=no,toolbar=no,location=yes,status=no`
-    );
-
-    showToast('Sign in to Google in the popup window, then close it when done', 'fa-brands fa-google');
-
-    // Monitor when the user closes the popup after signing in
-    const openedAt = Date.now();
-    nlmPopupMonitor = setInterval(() => {
-      if (!nlmPopupWin || nlmPopupWin.closed) {
-        clearInterval(nlmPopupMonitor);
-        nlmPopupMonitor = null;
-        if (Date.now() - openedAt > 1500 && state.notebooklm.status === 'pending') {
-          markNotebookLMConnected('google_popup_window', state.notebooklm.accountEmail);
-        }
-      }
-    }, 800);
-  }
-
-  $id('confirm-popup-login-btn')?.addEventListener('click', () => {
-    if (nlmPopupWin && !nlmPopupWin.closed) {
-      try { nlmPopupWin.close(); } catch (e) {}
-    }
-    markNotebookLMConnected('google_popup_window', state.notebooklm.accountEmail);
-  });
-
-  function startPollingLocalBridge(baseUrl) {
     let attempts = 0;
     nlmPollTimer = setInterval(async () => {
       attempts++;
       try {
-        const res = await fetch(`${baseUrl}/api/notebooklm/status`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data.authenticated || data.status === 'connected') {
-            markNotebookLMConnected('local_playwright_bridge', data.email, data.storage_state || null);
-            return;
-          }
-        }
-      } catch (e) {}
-      if (attempts >= 60) {
-        stopNlmTimers();
-      }
-    }, 2000);
-  }
-
-  $id('check-notebooklm-status-btn')?.addEventListener('click', async () => {
-    const baseUrl = (state.notebooklm.backendUrl || 'http://localhost:8000').replace(/\/+$/, '');
-    try {
-      const res = await fetch(`${baseUrl}/api/notebooklm/status`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.authenticated || data.status === 'connected') {
-          markNotebookLMConnected('local_playwright_bridge', data.email, data.storage_state || null);
+        const r = await fetch(`/api/notebooklm/login/${loginId}`).then((x) => x.json());
+        if (r.status === 'done') {
+          pendingLoginId = loginId;
+          markNotebookLMConnected('notebooklm_login', state.notebooklm.accountEmail);
+          showToast('Google account linked. Press Save Configuration to store it', 'fa-solid fa-circle-check');
           return;
         }
-        showToast('Local bridge online—click "Sign in with Google" to authenticate', 'fa-solid fa-server');
-        return;
+        if (r.status === 'error' || r.status === 'none') {
+          stopNlmTimers();
+          state.notebooklm.status = 'disconnected';
+          syncNotebookLMUI();
+          showToast(r.error || 'Login did not finish', 'fa-solid fa-circle-exclamation');
+          return;
+        }
+      } catch (e) {}
+      if (attempts > 620) {
+        stopNlmTimers();
+        state.notebooklm.status = 'disconnected';
+        syncNotebookLMUI();
       }
-    } catch (e) {}
-    showToast('Local Python bridge not running (using direct browser popup mode)', 'fa-solid fa-circle-info');
-  });
-
-  // Import existing storage_state.json
-  $id('nlm-storage-file-input')?.addEventListener('change', (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const parsed = JSON.parse(String(reader.result));
-        markNotebookLMConnected('storage_state_json', state.notebooklm.accountEmail, {
-          cookie_count: Array.isArray(parsed.cookies) ? parsed.cookies.length : 0,
-          imported_file: file.name
-        });
-      } catch (err) {
-        showToast('Invalid JSON file—select a valid storage_state.json', 'fa-solid fa-triangle-exclamation');
-      }
-    };
-    reader.readAsText(file);
+    }, 1000);
   });
 
   // ==========================================================================
@@ -888,7 +850,10 @@
       : JSON.stringify(buildCleanPayload(), null, 2);
   }
 
-  $id('save-all-config-btn')?.addEventListener('click', () => saveState(false));
+  $id('save-all-config-btn')?.addEventListener('click', async () => {
+    saveState(true);
+    await saveConfigToDb();
+  });
 
   $id('toggle-json-preview-btn')?.addEventListener('click', () => {
     const inspector = $id('payload-inspector');

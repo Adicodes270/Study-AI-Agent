@@ -4,7 +4,30 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { DEFAULT_CLASS_LEVEL, GEMINI_API_KEY, GEMINI_MODEL } from "../config.js";
 import { Syllabus } from "./models.js";
 
-const client = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+const clients = new Map();
+/** One Gemini client per API key (each Telegram user brings their own). */
+function getClient(key) {
+  if (!clients.has(key)) clients.set(key, new GoogleGenAI({ apiKey: key }));
+  return clients.get(key);
+}
+
+/** apiKeys: a key or a list (primary first). Tries the next key if one fails. */
+async function generate(apiKeys, request) {
+  const keys = [].concat(apiKeys || [], GEMINI_API_KEY).filter(Boolean);
+  if (!keys.length) {
+    throw new Error("No Gemini API key set. Save one on the setup page or send /setkey YOUR_KEY to the bot.");
+  }
+  let lastErr;
+  for (const key of keys) {
+    try {
+      return await getClient(key).models.generateContent(request);
+    } catch (e) {
+      lastErr = e;
+      console.log(`Gemini key ...${key.slice(-4)} failed (${e.message}); trying next`);
+    }
+  }
+  throw lastErr;
+}
 
 const CLASS_9_AND_10_NCERT_REFERENCE = `
 Complete Class 9 NCERT Books & Chapters Reference:
@@ -152,7 +175,7 @@ const UNMATCHED_RESOLVER_SCHEMA = {
  * and asks Gemini to figure out if they correspond to an existing NCERT chapter
  * under a different phrasing, branch introduction, poem title, or sub-topic.
  */
-async function resolveUnmatchedChapters(syllabus) {
+async function resolveUnmatchedChapters(syllabus, apiKey) {
   const classLevel = syllabus.class_level || DEFAULT_CLASS_LEVEL || 9;
   const unmatchedRefs = [];
 
@@ -196,7 +219,7 @@ Unmatched items to verify for Class ${classLevel}:
 ${JSON.stringify(payloadForAi, null, 2)}`;
 
   try {
-    const response = await client.models.generateContent({
+    const response = await generate(apiKey, {
       model: GEMINI_MODEL,
       contents: resolverPrompt,
       config: {
@@ -225,8 +248,8 @@ ${JSON.stringify(payloadForAi, null, 2)}`;
   return syllabus;
 }
 
-async function ask(contents) {
-  const response = await client.models.generateContent({
+async function ask(contents, apiKey) {
+  const response = await generate(apiKey, {
     model: GEMINI_MODEL,
     contents,
     config: {
@@ -246,19 +269,19 @@ async function ask(contents) {
     throw new Error("Could not read the syllabus.");
   }
 
-  return resolveUnmatchedChapters(parsed);
+  return resolveUnmatchedChapters(parsed, apiKey);
 }
 
-export function parseSyllabus(rawText) {
-  return ask(`${PROMPT}\nDOCUMENT:\n${rawText}`);
+export function parseSyllabus(rawText, apiKey) {
+  return ask(`${PROMPT}\nDOCUMENT:\n${rawText}`, apiKey);
 }
 
-export function parseSyllabusPdf(pdfBytes) {
+export function parseSyllabusPdf(pdfBytes, apiKey) {
   const pdf = {
     inlineData: {
       data: Buffer.from(pdfBytes).toString("base64"),
       mimeType: "application/pdf",
     },
   };
-  return ask([pdf, { text: PROMPT }]);
+  return ask([pdf, { text: PROMPT }], apiKey);
 }

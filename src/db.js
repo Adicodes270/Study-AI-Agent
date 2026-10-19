@@ -8,6 +8,16 @@ import { ROOT } from "./config.js";
 export const DB_PATH = path.join(ROOT, "data", "study_agent.db");
 
 const SCHEMA = `
+CREATE TABLE IF NOT EXISTS users (
+    telegram_user_id INTEGER PRIMARY KEY,
+    gemini_api_key   TEXT NOT NULL,
+    gemini_fallback_keys TEXT NOT NULL DEFAULT '[]',
+    google_email     TEXT,
+    notebooklm_state TEXT,
+    notebooklm_saved_at TEXT,
+    updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS chats (
     chat_id INTEGER PRIMARY KEY,
     class   INTEGER
@@ -62,6 +72,17 @@ export function initDb() {
   withDb((conn) => {
     conn.exec(SCHEMA);
     const cols = conn.pragma("table_info(syllabus_chapters)").map((c) => c.name);
+    const userCols = conn.pragma("table_info(users)").map((c) => c.name);
+    if (!userCols.includes("gemini_fallback_keys")) {
+      conn.exec("ALTER TABLE users ADD COLUMN gemini_fallback_keys TEXT NOT NULL DEFAULT '[]';");
+    }
+    for (const [col, ddl] of [
+      ["google_email", "TEXT"],
+      ["notebooklm_state", "TEXT"],
+      ["notebooklm_saved_at", "TEXT"],
+    ]) {
+      if (!userCols.includes(col)) conn.exec(`ALTER TABLE users ADD COLUMN ${col} ${ddl};`);
+    }
     if (!cols.includes("pdf_url")) {
       conn.exec("ALTER TABLE syllabus_chapters ADD COLUMN pdf_url TEXT;");
     }

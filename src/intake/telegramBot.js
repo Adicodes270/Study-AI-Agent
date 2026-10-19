@@ -1,9 +1,10 @@
 // src/intake/telegramBot.js
 import { Bot, HttpError } from "grammy";
 
-import { GEMINI_MODEL, TELEGRAM_BOT_TOKEN } from "../config.js";
+import { GEMINI_API_KEY, GEMINI_MODEL, TELEGRAM_BOT_TOKEN } from "../config.js";
 import { initDb } from "../db.js";
 import { saveSyllabus } from "./storage.js";
+import { deleteUserKey, getUserKeys, isValidKey, saveUserKey } from "./userKeys.js";
 import { parseSyllabus, parseSyllabusPdf } from "./syllabusParser.js";
 
 const MAX_PDF_BYTES = 20 * 1024 * 1024; // Telegram bots can't download files over 20 MB
@@ -21,8 +22,31 @@ const inGroup = (ctx) => ["group", "supergroup"].includes(ctx.chat.type);
 
 async function start(ctx) {
   await ctx.reply(
-    `Hi! Send your syllabus as text or as a PDF and I'll read it.\n(Using model: ${GEMINI_MODEL})`
+    `Hi! First add your Gemini API key on the setup page (or send it here in private: /setkey YOUR_KEY).\n\n` +
+      `Then send your syllabus as text or as a PDF and I'll read it.\n(Using model: ${GEMINI_MODEL})\n\n` +
+      `/removekey deletes your saved key.`
   );
+}
+
+async function setKey(ctx) {
+  if (inGroup(ctx)) {
+    await ctx.reply("For safety, send /setkey in a private chat with me, not in a group.");
+    return;
+  }
+  const key = (ctx.match || "").trim();
+  // Remove the message holding the key from the chat history when possible
+  await ctx.deleteMessage().catch(() => {});
+  if (!isValidKey(key)) {
+    await ctx.reply("That doesn't look like a Gemini key . Usage: /setkey YOUR_KEY");
+    return;
+  }
+  saveUserKey(ctx.from.id, key);
+  await ctx.reply("Saved your Gemini key. I deleted your message so the key isn't left in the chat. Now send your syllabus!");
+}
+
+async function removeKey(ctx) {
+  const removed = deleteUserKey(ctx.from.id);
+  await ctx.reply(removed ? "Your Gemini key has been deleted." : "You don't have a saved key.");
 }
 
 /** Shared by text and PDF: parse, save, reply. */
@@ -34,6 +58,14 @@ async function processSyllabus(ctx, parseFn, payload, hintText) {
     return;
   }
 
+  // The key belongs to the Telegram user (ctx.from.id), falling back to the .env key
+  const apiKey = getUserKeys(ctx.from.id);
+  if (!apiKey.length && !GEMINI_API_KEY) {
+    console.log(`No Gemini key for user ${ctx.from.id}`);
+    await ctx.reply("I need your Gemini API key first. Add it on the setup page, or in a private chat with me send:\n/setkey YOUR_KEY");
+    return;
+  }
+
   if (!group) {
     await ctx.reply("Got it, reading your syllabus...");
   }
@@ -41,7 +73,7 @@ async function processSyllabus(ctx, parseFn, payload, hintText) {
 
   let syllabus;
   try {
-    syllabus = await parseFn(payload);
+    syllabus = await parseFn(payload, apiKey);
   } catch (e) {
     console.log(`Parse error: ${e.message}`);
     if (!group) {
@@ -129,6 +161,8 @@ export async function runBot() {
   const bot = new Bot(TELEGRAM_BOT_TOKEN);
 
   bot.command("start", start);
+  bot.command("setkey", setKey);
+  bot.command("removekey", removeKey);
   bot.on("message:document", (ctx, next) =>
     ctx.message.document.mime_type === "application/pdf" ? handlePdf(ctx) : next()
   );

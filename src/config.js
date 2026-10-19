@@ -13,3 +13,4 @@ export const GEMINI_MODEL = (process.env.GEMINI_MODEL ?? "").trim() || "gemini-3
 
 const _class = (process.env.CLASS_LEVEL ?? "").trim();
 export const DEFAULT_CLASS_LEVEL = /^\d+$/.test(_class) ? parseInt(_class, 10) : null;
+

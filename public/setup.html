@@ -362,9 +362,9 @@
                     <div class="card-head-row">
                         <div>
                             <h3><i class="fa-brands fa-google icon-accent"></i> Connect Google NotebookLM</h3>
-                            <p>Sign in through the popup window below—no terminal commands required.</p>
+                            <p>Sign in once in the window that opens—no files or terminal commands required.</p>
                         </div>
-                        <span class="chip wait" id="nlm-mode-badge">Popup Auth</span>
+                        <span class="chip wait" id="nlm-mode-badge">One-Click Auth</span>
                     </div>
 
                     <!-- Visual 3-Stage Process Flow -->
@@ -372,7 +372,7 @@
                         <div class="auth-stage is-current" id="nlm-stage-1">
                             <div class="stage-circle"><i class="fa-solid fa-arrow-pointer"></i></div>
                             <b>1. Click Sign In</b>
-                            <small>Opens Google login popup</small>
+                            <small>Opens Google login window</small>
                         </div>
                         <div class="auth-connector" aria-hidden="true"></div>
                         <div class="auth-stage" id="nlm-stage-2">
@@ -384,7 +384,7 @@
                         <div class="auth-stage" id="nlm-stage-3">
                             <div class="stage-circle"><i class="fa-solid fa-circle-check"></i></div>
                             <b>3. Connected!</b>
-                            <small>Close popup to finish</small>
+                            <small>Window closes by itself</small>
                         </div>
                     </div>
 
@@ -397,7 +397,7 @@
                             <div class="nlm-status-copy">
                                 <b id="nlm-status-headline">Ready to connect your Google Account</b>
                                 <p id="nlm-status-subtext">
-                                    Click <b>Sign in with Google</b> below. If <code>notebooklm_server.py</code> is running locally, it launches the automated Playwright login browser; otherwise it opens a direct NotebookLM sign-in popup window right here.
+                                    Click <b>Sign in with Google</b> below. A Google login window opens on this computer and closes by itself once you reach NotebookLM.
                                 </p>
                             </div>
                         </div>
@@ -405,7 +405,7 @@
                         <!-- Optional Google Email Label for Clarity -->
                         <div class="field-group compact">
                             <label for="nlm-account-label" class="field-label">
-                                <span>Your Google Account Email <small>(used to label your connected NotebookLM profile)</small></span>
+                                <span>Your Google Account Email <small>(saved with your Telegram ID)</small></span>
                             </label>
                             <div class="input-wrapper">
                                 <i class="fa-regular fa-envelope input-prefix-icon"></i>
@@ -425,40 +425,10 @@
                                 <span>I've Signed In — Confirm</span>
                             </button>
 
-                            <label class="btn btn-ghost btn-sm file-upload-btn" for="nlm-storage-file-input" title="Optional: import an existing ~/.notebooklm/storage_state.json file">
-                                <i class="fa-solid fa-file-import"></i>
-                                <span>Import Session JSON</span>
-                            </label>
-                            <input type="file" id="nlm-storage-file-input" accept=".json,application/json" hidden>
                         </div>
                     </div>
 
-                    <!-- Expandable Local Backend Endpoint Settings -->
-                    <details class="advanced-endpoint-details">
-                        <summary>
-                            <i class="fa-solid fa-sliders"></i>
-                            <span>Local <code>notebooklm-py</code> Bridge Settings (Optional)</span>
-                        </summary>
-                        <div class="advanced-endpoint-body">
-                            <div class="field-group compact">
-                                <label for="nlm-backend-url" class="field-label">
-                                    <span>Local Helper URL</span>
-                                    <small>Run <code>python notebooklm_server.py</code> to automate <code>storage_state.json</code></small>
-                                </label>
-                                <div class="input-action-row">
-                                    <div class="input-wrapper">
-                                        <i class="fa-solid fa-server input-prefix-icon"></i>
-                                        <input type="url" id="nlm-backend-url" class="setup-input mono"
-                                            value="http://localhost:8000" placeholder="http://localhost:8000">
-                                    </div>
-                                    <button type="button" class="btn btn-ghost btn-sm" id="check-notebooklm-status-btn">
-                                        <i class="fa-solid fa-rotate"></i>
-                                        <span>Ping Bridge</span>
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </details>
+
                 </div>
 
                 <!-- Right: What to Expect Guide -->

@@ -17,3 +17,8 @@ TELEGRAM_BOT_TOKEN=...
 GEMINI_API_KEY=...
 CLASS_LEVEL=10        # optional
 ```
+
+### Setup page
+
+Pressing **Save Configuration** stores the Telegram id, Gemini keys and the `notebooklm-py` session
+(`~/.notebooklm/storage_state.json`, from `notebooklm login`) in the `users` table.
