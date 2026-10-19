@@ -4,8 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Study Agent</title>
-
+    <title>Setup Guide & Configuration — Study Agent</title>
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -13,32 +12,33 @@
         href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
         rel="stylesheet">
 
-
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/7.3.1/css/all.min.css">
-
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
 
     <link rel="stylesheet" href="./theme.css">
     <link rel="stylesheet" href="./style.css">
+    <link rel="stylesheet" href="./setup.css">
 </head>
 
-
 <body>
+    <!-- Ambient background (Lightweight: No three.min.js on setup.html) -->
+    <div class="bg-fx" aria-hidden="true">
+        <div class="orb orb-1"></div>
+        <div class="orb orb-2"></div>
+        <div class="bg-strips"></div>
+    </div>
 
-
+    <!-- Header & Navigation -->
     <header class="header">
         <nav class="nav" aria-label="Main Navigation">
-
             <a href="index.html" class="brand-logo">Study Agent</a>
 
-
             <ul class="nav-links" id="nav-menu">
-                <li><a href="index.html" >Home</a></li>
+                <li><a href="index.html">Home</a></li>
                 <li><a href="setup.html" class="active">Setup</a></li>
                 <li><a href="quizzes.html">Quizzes</a></li>
                 <li><a href="resources.html">Resources</a></li>
                 <li class="nav-cta-mobile"><a href="https://web.telegram.org/a/#8996972210" target="_blank" rel="noopener noreferrer">Start</a></li>
             </ul>
-
 
             <button class="nav-toggle" type="button" aria-label="Open menu" aria-expanded="false"
                 aria-controls="nav-menu"><i class="fa-solid fa-bars" aria-hidden="true"></i></button>
@@ -50,10 +50,550 @@
         </nav>
     </header>
 
+    <main class="setup-main">
+        <!-- Hero Intro -->
+        <section class="setup-hero">
+            <div class="setup-badge">
+                <i class="fa-solid fa-wand-magic-sparkles"></i>
+                <span>No coding required · Takes under 2 minutes</span>
+            </div>
+            <h1>Connect your personal AI study workspace</h1>
+            <p class="hero-sub">
+                Link your Gemini API keys, pair your Telegram account with our Study Agent bot in one tap, and sign in to Google NotebookLM. Everything is saved straight to your browser.
+            </p>
 
+            <!-- Live Readiness Tracker -->
+            <div class="setup-progress-card bento-card">
+                <div class="progress-top">
+                    <div class="progress-title-group">
+                        <span class="progress-eyebrow">Onboarding Readiness</span>
+                        <strong id="progress-summary-text">0 of 3 integrations configured</strong>
+                    </div>
+                    <div class="progress-actions">
+                        <span class="chip wait" id="overall-status-chip">Setup Incomplete</span>
+                    </div>
+                </div>
+
+                <div class="progress-bar-track" aria-hidden="true">
+                    <div class="progress-bar-fill" id="progress-bar-fill" style="width: 0%"></div>
+                </div>
+
+                <div class="progress-steps-row">
+                    <a href="#step-gemini" class="progress-pill" id="pill-step-1">
+                        <span class="pill-num">1</span>
+                        <div class="pill-meta">
+                            <b>Gemini API</b>
+                            <small id="pill-status-1">No keys added</small>
+                        </div>
+                        <i class="fa-solid fa-circle-dot pill-icon"></i>
+                    </a>
+
+                    <a href="#step-telegram" class="progress-pill" id="pill-step-2">
+                        <span class="pill-num">2</span>
+                        <div class="pill-meta">
+                            <b>Telegram Chat</b>
+                            <small id="pill-status-2">Not paired</small>
+                        </div>
+                        <i class="fa-solid fa-circle-dot pill-icon"></i>
+                    </a>
+
+                    <a href="#step-notebooklm" class="progress-pill" id="pill-step-3">
+                        <span class="pill-num">3</span>
+                        <div class="pill-meta">
+                            <b>NotebookLM</b>
+                            <small id="pill-status-3">Not signed in</small>
+                        </div>
+                        <i class="fa-solid fa-circle-dot pill-icon"></i>
+                    </a>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================================================================
+             STEP 1: GEMINI API KEYS (WITH FALLBACK ROTATION)
+             ================================================================== -->
+        <section class="setup-step reveal" id="step-gemini">
+            <div class="step-header">
+                <div class="step-badge-row">
+                    <span class="step-number-tag">STEP 01</span>
+                    <span class="chip wait" id="gemini-step-chip">Required</span>
+                </div>
+                <h2>Gemini API Keys &amp; Automatic Fallback</h2>
+                <p class="lead">
+                    Gemini powers your summaries, flashcards, and quiz generation. Add your primary key below—and optionally add backup keys so Study Agent automatically rotates if one hits a rate limit.
+                </p>
+            </div>
+
+            <div class="setup-grid">
+                <!-- Left: Interactive Configuration Card -->
+                <div class="bento-card setup-config-card">
+                    <div class="card-head-row">
+                        <div>
+                            <h3><i class="fa-solid fa-key icon-accent"></i> Your Gemini API Keys</h3>
+                            <p>Keys are tried in order from top (#1 Primary) to bottom.</p>
+                        </div>
+                        <span class="key-counter-badge" id="gemini-key-count">1 Primary Key</span>
+                    </div>
+
+                    <!-- Dynamic Key List Container -->
+                    <div class="keys-list" id="gemini-keys-list" aria-live="polite"></div>
+
+                    <!-- Add Fallback Key Button -->
+                    <div class="keys-actions-bar">
+                        <button type="button" class="btn btn-ghost btn-sm" id="add-gemini-key-btn">
+                            <i class="fa-solid fa-plus"></i>
+                            <span>Add another key for fallback</span>
+                        </button>
+                        <button type="button" class="btn btn-ghost btn-sm" id="test-all-keys-btn">
+                            <i class="fa-solid fa-flask"></i>
+                            <span>Verify all keys</span>
+                        </button>
+                    </div>
+
+                    <!-- Rate-Limit Rotation Explainer Banner -->
+                    <div class="rotation-banner">
+                        <div class="rotation-icon">
+                            <i class="fa-solid fa-arrows-rotate"></i>
+                        </div>
+                        <div>
+                            <b>Smart Rate-Limit Protection Active</b>
+                            <p>If Key #1 reaches Google's free requests-per-minute quota, Study Agent seamlessly switches to Key #2 without interrupting your study session.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right: Non-Technical Visual Walkthrough -->
+                <aside class="bento-card setup-guide-card">
+                    <div class="guide-header">
+                        <span class="guide-tag"><i class="fa-regular fa-compass"></i> Quick Guide · Free</span>
+                        <h3>How to get a Gemini API key</h3>
+                        <p>Google provides free Gemini API keys to anyone with a Google account—no credit card needed.</p>
+                    </div>
+
+                    <ol class="guide-steps">
+                        <li>
+                            <span class="guide-num">1</span>
+                            <div>
+                                <b>Open Google AI Studio</b>
+                                <p>Visit <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" class="inline-link">aistudio.google.com/app/apikey <i class="fa-solid fa-arrow-up-right-from-square"></i></a> and sign in with your Google account.</p>
+                            </div>
+                        </li>
+                        <li>
+                            <span class="guide-num">2</span>
+                            <div>
+                                <b>Click "Create API key"</b>
+                                <p>Press the blue <code>Create API key</code> button in the top-right corner and select any project (or click <em>Create API key in new project</em>).</p>
+                            </div>
+                        </li>
+                        <li>
+                            <span class="guide-num">3</span>
+                            <div>
+                                <b>Copy &amp; paste it here</b>
+                                <p>Click <code>Copy</code> on the generated key (it starts with <code>AIzaSy...</code>) and paste it into the Primary Key box on the left.</p>
+                            </div>
+                        </li>
+                    </ol>
+
+                    <div class="guide-tip">
+                        <i class="fa-regular fa-lightbulb"></i>
+                        <span><b>Pro tip for exam week:</b> Create 2 or 3 keys in different Google projects and add them as fallbacks so you never wait on rate limits.</span>
+                    </div>
+                </aside>
+            </div>
+        </section>
+
+        <!-- ==================================================================
+             STEP 2: TELEGRAM INTEGRATION (OUR BOT IS ALREADY BUILT-IN!)
+             ================================================================== -->
+        <section class="setup-step reveal" id="step-telegram">
+            <div class="step-header">
+                <div class="step-badge-row">
+                    <span class="step-number-tag">STEP 02</span>
+                    <span class="chip wait" id="telegram-step-chip">Required</span>
+                </div>
+                <h2>Link Your Telegram Account</h2>
+                <p class="lead">
+                    Our official Study Agent bot is already live on Telegram—no bot setup needed. Just open the bot, send <code>/start</code>, and we'll automatically detect your Chat ID.
+                </p>
+            </div>
+
+            <div class="setup-grid">
+                <!-- Left: One-Tap Bot Pairing & Auto-Detect Chat ID -->
+                <div class="bento-card setup-config-card">
+                    <div class="card-head-row">
+                        <div>
+                            <h3><i class="fa-brands fa-telegram icon-accent"></i> Pair with Study Agent Bot</h3>
+                            <p id="bot-live-subtitle">Official Bot ready · Tap below to pair your Telegram chat in seconds.</p>
+                        </div>
+                        <span class="chip ok" id="bot-online-badge"><i class="fa-solid fa-circle-check"></i> Bot Online</span>
+                    </div>
+
+                    <!-- 2-Button Instant Pairing Box -->
+                    <div class="pairing-hero-box">
+                        <div class="pairing-code-row">
+                            <div>
+                                <span class="pairing-eyebrow">Your Session Pairing Code</span>
+                                <div class="pairing-code-pill">
+                                    <code id="telegram-pairing-code">/start SA-0000</code>
+                                    <button type="button" class="copy-pill" id="copy-pairing-code-btn" title="Copy pairing message">
+                                        <i class="fa-regular fa-copy"></i> Copy
+                                    </button>
+                                </div>
+                            </div>
+                            <span class="pairing-hint">Send this or just press <b>Start</b> in our Telegram bot</span>
+                        </div>
+
+                        <div class="pairing-cta-grid">
+                            <a href="https://web.telegram.org/a/#8996972210" target="_blank" rel="noopener noreferrer"
+                                class="btn btn-solid" id="open-study-bot-btn">
+                                <i class="fa-brands fa-telegram"></i>
+                                <span id="open-study-bot-text">1. Open Study Agent Bot</span>
+                            </a>
+
+                            <button type="button" class="btn btn-ghost" id="autodetect-chat-btn">
+                                <i class="fa-solid fa-satellite-dish"></i>
+                                <span>2. Auto-Detect My Chat ID</span>
+                            </button>
+                        </div>
+
+                        <!-- Live Listener State (shown while polling getUpdates) -->
+                        <div class="autodetect-listening" id="autodetect-listening-panel" hidden>
+                            <div class="pulse-ring-wrap">
+                                <span class="pulse-dot"></span>
+                                <strong id="listening-status-title">Listening for your message on Telegram...</strong>
+                            </div>
+                            <p id="listening-instruction-text">
+                                Open the Study Agent bot window and tap <b>Start</b> (or send <code>hello</code>). The moment your message arrives, your Chat ID will lock in below!
+                            </p>
+                            <div class="listening-actions">
+                                <button type="button" class="btn btn-ghost btn-sm" id="cancel-autodetect-btn">
+                                    <i class="fa-solid fa-xmark"></i>
+                                    <span>Stop Listening</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Connected User Banner (Appears automatically once detected) -->
+                    <div class="connected-account-pill" id="telegram-connected-pill" hidden>
+                        <div class="account-avatar"><i class="fa-brands fa-telegram"></i></div>
+                        <div class="account-details">
+                            <b id="telegram-connected-name">Connected Telegram Chat</b>
+                            <small id="telegram-connected-meta">Chat ID verified</small>
+                        </div>
+                        <span class="chip ok">Linked</span>
+                    </div>
+
+                    <!-- Detected / Manual Fallback Input Row -->
+                    <div class="field-group compact">
+                        <label for="telegram-chat-id" class="field-label">
+                            <span>Your Telegram Chat ID <small>(auto-filled when you message the bot, or enter manually)</small></span>
+                        </label>
+                        <div class="input-action-row">
+                            <div class="input-wrapper">
+                                <i class="fa-solid fa-hashtag input-prefix-icon"></i>
+                                <input type="text" id="telegram-chat-id" class="setup-input mono"
+                                    placeholder="Auto-detected when you message our bot..." inputmode="numeric">
+                            </div>
+                            <button type="button" class="btn btn-ghost btn-sm" id="send-telegram-test-btn">
+                                <i class="fa-regular fa-paper-plane"></i>
+                                <span>Send Test Message</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right: Ultra-Simple 2-Step Guide -->
+                <aside class="bento-card setup-guide-card">
+                    <div class="guide-header">
+                        <span class="guide-tag"><i class="fa-brands fa-telegram"></i> 15-Second Pairing</span>
+                        <h3>How Telegram pairing works</h3>
+                        <p>You don't need to create a bot or look up any tokens—our Study Agent bot is already set up for you.</p>
+                    </div>
+
+                    <ol class="guide-steps">
+                        <li>
+                            <span class="guide-num">1</span>
+                            <div>
+                                <b>Click "1. Open Study Agent Bot"</b>
+                                <p>This opens our official Study Agent bot directly in the Telegram app or Telegram Web—and automatically starts listening for your message.</p>
+                            </div>
+                        </li>
+                        <li>
+                            <span class="guide-num">2</span>
+                            <div>
+                                <b>Tap "Start" or send any message</b>
+                                <p>Press <b>Start</b> inside Telegram (or send your pairing code). Our page spots your message in real time, fills in your Chat ID, and sends you a confirmation ping on Telegram!</p>
+                            </div>
+                        </li>
+                    </ol>
+
+                    <!-- Mini Mock Telegram Preview -->
+                    <div class="win guide-mini-win" aria-hidden="true">
+                        <div class="win-bar">
+                            <i class="fa-brands fa-telegram"></i> Study Agent Bot
+                            <span class="live">● Online</span>
+                        </div>
+                        <div class="msg me">/start</div>
+                        <div class="msg">🎉 <b>Study Agent Linked!</b><br>Your Chat ID is connected. Send me any PDF, topic, or lecture note to start studying!</div>
+                    </div>
+                </aside>
+            </div>
+        </section>
+
+        <!-- ==================================================================
+             STEP 3: NOTEBOOKLM (notebooklm-py) GOOGLE ACCOUNT AUTH
+             ================================================================== -->
+        <section class="setup-step reveal" id="step-notebooklm">
+            <div class="step-header">
+                <div class="step-badge-row">
+                    <span class="step-number-tag">STEP 03</span>
+                    <span class="chip wait" id="notebooklm-step-chip">Required</span>
+                </div>
+                <h2>NotebookLM Google Account Sign-In</h2>
+                <p class="lead">
+                    Sign in to your Google account so <code>notebooklm-py</code> can generate deep-dive study guides, audio overviews, and source-grounded notebooks for you automatically.
+                </p>
+            </div>
+
+            <div class="setup-grid">
+                <!-- Left: Seamless Browser Popup & Local Helper Login -->
+                <div class="bento-card setup-config-card">
+                    <div class="card-head-row">
+                        <div>
+                            <h3><i class="fa-brands fa-google icon-accent"></i> Connect Google NotebookLM</h3>
+                            <p>Sign in through the popup window below—no terminal commands required.</p>
+                        </div>
+                        <span class="chip wait" id="nlm-mode-badge">Popup Auth</span>
+                    </div>
+
+                    <!-- Visual 3-Stage Process Flow -->
+                    <div class="auth-flow-visual">
+                        <div class="auth-stage is-current" id="nlm-stage-1">
+                            <div class="stage-circle"><i class="fa-solid fa-arrow-pointer"></i></div>
+                            <b>1. Click Sign In</b>
+                            <small>Opens Google login popup</small>
+                        </div>
+                        <div class="auth-connector" aria-hidden="true"></div>
+                        <div class="auth-stage" id="nlm-stage-2">
+                            <div class="stage-circle"><i class="fa-brands fa-google"></i></div>
+                            <b>2. Log In to Google</b>
+                            <small>Wait for NotebookLM to load</small>
+                        </div>
+                        <div class="auth-connector" aria-hidden="true"></div>
+                        <div class="auth-stage" id="nlm-stage-3">
+                            <div class="stage-circle"><i class="fa-solid fa-circle-check"></i></div>
+                            <b>3. Connected!</b>
+                            <small>Close popup to finish</small>
+                        </div>
+                    </div>
+
+                    <!-- Main Interactive Sign-In Box -->
+                    <div class="nlm-action-panel" id="nlm-action-panel">
+                        <div class="nlm-status-display">
+                            <div class="nlm-status-icon" id="nlm-status-icon">
+                                <i class="fa-brands fa-google"></i>
+                            </div>
+                            <div class="nlm-status-copy">
+                                <b id="nlm-status-headline">Ready to connect your Google Account</b>
+                                <p id="nlm-status-subtext">
+                                    Click <b>Sign in with Google</b> below. If <code>notebooklm_server.py</code> is running locally, it launches the automated Playwright login browser; otherwise it opens a direct NotebookLM sign-in popup window right here.
+                                </p>
+                            </div>
+                        </div>
+
+                        <!-- Optional Google Email Label for Clarity -->
+                        <div class="field-group compact">
+                            <label for="nlm-account-label" class="field-label">
+                                <span>Your Google Account Email <small>(used to label your connected NotebookLM profile)</small></span>
+                            </label>
+                            <div class="input-wrapper">
+                                <i class="fa-regular fa-envelope input-prefix-icon"></i>
+                                <input type="email" id="nlm-account-label" class="setup-input"
+                                    placeholder="e.g. yourname@gmail.com">
+                            </div>
+                        </div>
+
+                        <div class="nlm-buttons-row">
+                            <button type="button" class="btn btn-solid" id="launch-notebooklm-auth-btn">
+                                <i class="fa-brands fa-google"></i>
+                                <span>Sign in with Google</span>
+                            </button>
+
+                            <button type="button" class="btn btn-ghost btn-sm" id="confirm-popup-login-btn" hidden>
+                                <i class="fa-solid fa-check-double"></i>
+                                <span>I've Signed In — Confirm</span>
+                            </button>
+
+                            <label class="btn btn-ghost btn-sm file-upload-btn" for="nlm-storage-file-input" title="Optional: import an existing ~/.notebooklm/storage_state.json file">
+                                <i class="fa-solid fa-file-import"></i>
+                                <span>Import Session JSON</span>
+                            </label>
+                            <input type="file" id="nlm-storage-file-input" accept=".json,application/json" hidden>
+                        </div>
+                    </div>
+
+                    <!-- Expandable Local Backend Endpoint Settings -->
+                    <details class="advanced-endpoint-details">
+                        <summary>
+                            <i class="fa-solid fa-sliders"></i>
+                            <span>Local <code>notebooklm-py</code> Bridge Settings (Optional)</span>
+                        </summary>
+                        <div class="advanced-endpoint-body">
+                            <div class="field-group compact">
+                                <label for="nlm-backend-url" class="field-label">
+                                    <span>Local Helper URL</span>
+                                    <small>Run <code>python notebooklm_server.py</code> to automate <code>storage_state.json</code></small>
+                                </label>
+                                <div class="input-action-row">
+                                    <div class="input-wrapper">
+                                        <i class="fa-solid fa-server input-prefix-icon"></i>
+                                        <input type="url" id="nlm-backend-url" class="setup-input mono"
+                                            value="http://localhost:8000" placeholder="http://localhost:8000">
+                                    </div>
+                                    <button type="button" class="btn btn-ghost btn-sm" id="check-notebooklm-status-btn">
+                                        <i class="fa-solid fa-rotate"></i>
+                                        <span>Ping Bridge</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </details>
+                </div>
+
+                <!-- Right: What to Expect Guide -->
+                <aside class="bento-card setup-guide-card">
+                    <div class="guide-header">
+                        <span class="guide-tag"><i class="fa-solid fa-shield-halved"></i> Seamless Google Auth</span>
+                        <h3>How NotebookLM sign-in works</h3>
+                        <p>We handle the <code>notebooklm-py</code> session setup through a normal Google sign-in window so you never have to run terminal commands.</p>
+                    </div>
+
+                    <ol class="guide-steps">
+                        <li>
+                            <span class="guide-num">1</span>
+                            <div>
+                                <b>Click "Sign in with Google"</b>
+                                <p>A dedicated Google NotebookLM sign-in window will pop up on your screen.</p>
+                            </div>
+                        </li>
+                        <li>
+                            <span class="guide-num">2</span>
+                            <div>
+                                <b>Log into your Google Account</b>
+                                <p>Sign in normally and approve 2-Step Verification on your phone if prompted until you see your NotebookLM notebooks page.</p>
+                            </div>
+                        </li>
+                        <li>
+                            <span class="guide-num">3</span>
+                            <div>
+                                <b>Close the popup window</b>
+                                <p>As soon as you close the popup window (or click <b>I've Signed In — Confirm</b>), Study Agent locks in your NotebookLM connection!</p>
+                            </div>
+                        </li>
+                    </ol>
+
+                    <div class="guide-tip">
+                        <i class="fa-solid fa-lock"></i>
+                        <span><b>100% Private:</b> You sign in directly on Google's official page. Your password is never shared with Study Agent.</span>
+                    </div>
+                </aside>
+            </div>
+        </section>
+
+        <!-- ==================================================================
+             FINAL SAVE & CONFIGURATION SUMMARY CARD
+             ================================================================== -->
+        <section class="setup-footer-section reveal" id="step-finish">
+            <div class="cta-card setup-finish-card">
+                <span class="chip wait" id="finish-card-chip">Waiting for all 3 steps</span>
+                <h2 id="finish-card-title">Save your Study Agent configuration</h2>
+                <p class="lead" id="finish-card-desc">
+                    All settings are saved automatically in your browser's <code>localStorage</code> and structured cleanly for your backend.
+                </p>
+
+                <div class="cta-row finish-actions-row">
+                    <button type="button" class="btn btn-solid" id="save-all-config-btn">
+                        <i class="fa-solid fa-floppy-disk"></i>
+                        <span>Save Configuration</span>
+                    </button>
+                    <button type="button" class="btn btn-ghost" id="toggle-json-preview-btn">
+                        <i class="fa-solid fa-code"></i>
+                        <span>Inspect Saved Payload</span>
+                    </button>
+                    <button type="button" class="btn btn-ghost" id="download-config-btn">
+                        <i class="fa-solid fa-download"></i>
+                        <span>Download config.json</span>
+                    </button>
+                    <button type="button" class="btn btn-ghost btn-danger-outline" id="reset-config-btn">
+                        <i class="fa-solid fa-trash-can"></i>
+                        <span>Reset</span>
+                    </button>
+                </div>
+
+                <!-- Collapsible JSON / .env Payload Inspector -->
+                <div class="payload-inspector win" id="payload-inspector" hidden>
+                    <div class="win-bar">
+                        <i class="fa-solid fa-database"></i>
+                        <span>localStorage['study_agent_config']</span>
+                        <div class="inspector-tabs">
+                            <button type="button" class="tab-pill is-active" data-format="json">JSON Schema</button>
+                            <button type="button" class="tab-pill" data-format="env">.env Format</button>
+                            <button type="button" class="tab-pill" id="copy-payload-btn"><i class="fa-regular fa-copy"></i> Copy</button>
+                        </div>
+                    </div>
+                    <pre class="payload-code" id="payload-code-output"></pre>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Toast Notification Container -->
+    <div class="setup-toast-container" id="setup-toast-container" aria-live="polite"></div>
+
+    <!-- Footer -->
+    <footer class="foot">
+        <div class="foot-grid">
+            <div class="foot-brand">
+                <a href="index.html" class="brand-logo">Study Agent</a>
+                <p>Your autonomous study partner powered by Gemini, Telegram, and NotebookLM.</p>
+                <div class="socials">
+                    <a href="https://web.telegram.org/a/#8996972210" target="_blank" rel="noopener noreferrer" aria-label="Telegram"><i class="fa-brands fa-telegram"></i></a>
+                    <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" aria-label="Google AI Studio"><i class="fa-solid fa-wand-magic-sparkles"></i></a>
+                </div>
+            </div>
+            <nav aria-label="Platform">
+                <h4>Platform</h4>
+                <a href="index.html">Home</a>
+                <a href="setup.html">Setup Guide</a>
+                <a href="quizzes.html">Quizzes</a>
+                <a href="resources.html">Resources</a>
+            </nav>
+            <nav aria-label="Integrations">
+                <h4>Integrations</h4>
+                <a href="#step-gemini">Gemini API Fallback</a>
+                <a href="#step-telegram">Telegram Pairing</a>
+                <a href="#step-notebooklm">NotebookLM Auth</a>
+            </nav>
+            <nav aria-label="Quick Links">
+                <h4>Quick Links</h4>
+                <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer">Get Gemini Key</a>
+                <a href="https://web.telegram.org/a/#8996972210" target="_blank" rel="noopener noreferrer">Open Study Agent Bot</a>
+                <a href="https://notebooklm.google.com" target="_blank" rel="noopener noreferrer">Google NotebookLM</a>
+            </nav>
+        </div>
+        <div class="foot-bottom">
+            <span>&copy; 2026 Study Agent. All credentials stay in your local workspace.</span>
+            <button type="button" class="to-top"><i class="fa-solid fa-arrow-up"></i> Back to top</button>
+        </div>
+    </footer>
+
+    <!-- Core UI animations (No three.min.js) -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/lenis@1.1.20/dist/lenis.min.js"></script>
     <script src="./script.js"></script>
-
+    <script src="./setup.js"></script>
 </body>
+
+</html>
