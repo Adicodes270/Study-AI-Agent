@@ -69,15 +69,19 @@
 
   function saveState(silent = false) {
     state.updatedAt = new Date().toISOString();
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch (e) {}
-    updateReadinessUI();
-    updatePayloadInspector();
-    if (!silent) {
-      
-    }
+    // Coalesce rapid calls (every keystroke) into one write + one UI refresh per frame
+    if (saveQueued) return;
+    saveQueued = true;
+    requestAnimationFrame(() => {
+      saveQueued = false;
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      } catch (e) {}
+      updateReadinessUI();
+      updatePayloadInspector();
+    });
   }
+  let saveQueued = false;
 
   // NotebookLM session waiting to be saved (kept in memory only, never in localStorage)
   let pendingLoginId = null;

@@ -12,14 +12,15 @@
         href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
         rel="stylesheet">
 
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+    <link rel="preload" as="style" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" onload="this.rel='stylesheet'">
+    <noscript><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"></noscript>
 
     <link rel="stylesheet" href="./theme.css">
     <link rel="stylesheet" href="./style.css">
     <link rel="stylesheet" href="./setup.css">
 </head>
 
-<body>
+<body class="perf-lite">
     <!-- Ambient background (Lightweight: No three.min.js on setup.html) -->
     <div class="bg-fx" aria-hidden="true">
         <div class="orb orb-1"></div>
@@ -539,11 +540,10 @@
     </footer>
 
     <!-- Core UI animations (No three.min.js) -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/lenis@1.1.20/dist/lenis.min.js"></script>
-    <script src="./script.js"></script>
-    <script src="./setup.js"></script>
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
+        <script defer src="./script.js"></script>
+    <script defer src="./setup.js"></script>
 </body>
 
 </html>

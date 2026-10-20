@@ -6,14 +6,29 @@ const RESPECT_REDUCED_MOTION = false;
 if (RESPECT_REDUCED_MOTION) document.documentElement.dataset.respectMotion = '';
 const reduce = RESPECT_REDUCED_MOTION && matchMedia('(prefers-reduced-motion: reduce)').matches;
 const fine = matchMedia('(hover: hover) and (pointer: fine)').matches;
+// Pages can opt into a lightweight mode (<body class="perf-lite">): native scrolling and no
+// cursor-driven effects, strips, or 3D tilt. Used by setup.html, which is mostly form inputs.
+const lite = document.body.classList.contains('perf-lite');
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 
 // Smooth scroll, synced with ScrollTrigger
-const lenis = new Lenis({ lerp: 0.1, smoothWheel: !reduce });
-lenis.on('scroll', ScrollTrigger.update);
-gsap.ticker.add((t) => lenis.raf(t * 1000));
-gsap.ticker.lagSmoothing(0);
+const lenis = lite
+  ? {
+      on: (ev, fn) => { if (ev === 'scroll') addEventListener('scroll', () => fn({ scroll: scrollY }), { passive: true }); },
+      scrollTo: (t, o = {}) => {
+        const y = typeof t === 'number' ? t : t.getBoundingClientRect().top + scrollY + (o.offset || 0);
+        scrollTo({ top: y, behavior: 'smooth' });
+      },
+      stop: () => { document.documentElement.style.overflow = 'hidden'; },
+      start: () => { document.documentElement.style.overflow = ''; },
+    }
+  : new Lenis({ lerp: 0.1, smoothWheel: !reduce });
+if (!lite) {
+  lenis.on('scroll', ScrollTrigger.update);
+  gsap.ticker.add((t) => lenis.raf(t * 1000));
+  gsap.ticker.lagSmoothing(0);
+}
 
 // In-page anchors only (nav links go to their own pages)
 $$('a[href^="#"]').forEach((a) => {
@@ -78,7 +93,7 @@ if (!reduce && $('.reveal')) {
 }
 
 // Microinteractions: orbs, depth cards, card spotlight
-if (!reduce && fine) {
+if (!reduce && fine && !lite) {
   const orbs = [['.orb-1', -60], ['.orb-2', 80]].map(([sel, d]) => ({
     x: gsap.quickTo(sel, 'x', { duration: 1.2, ease: 'power3' }),
     y: gsap.quickTo(sel, 'y', { duration: 1.2, ease: 'power3' }), d,
@@ -117,7 +132,7 @@ $$(btnSel).forEach((btn) => {
   });
 });
 
-if (!reduce) {
+if (!reduce && !lite) {
   $$(`${btnSel}, .socials a`).forEach((btn) => {
     const base = btn.classList.contains('to-top') ? 3 : 5;
     const lift = fine ? 20 : 0;
@@ -312,7 +327,7 @@ if (navEl && navList) {
 // Background: flush grey strips (hero only), brightest in the middle, near-black at the sides
 // ==========================================================================
 const stripWrap = $('.bg-strips');
-if (stripWrap) {
+if (stripWrap && !lite) {
   // [width %, brightness]. Each set adds up to 100, so there are no gaps.
   const SETS = {
     wide: [[10,.10],[12,.35],[9,.18],[14,.75],[12,1],[10,.45],[13,.2],[9,.55],[11,.08]],
