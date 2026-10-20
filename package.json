@@ -16,6 +16,7 @@
   },
   "author": "Aditya <adityaalt9090@gmail.com>",
   "dependencies": {
+    "@browserbasehq/stagehand": "^4.3.0",
     "@google/genai": "^1.52.0",
     "dotenv": "^16.6.1",
     "grammy": "^1.46.0",

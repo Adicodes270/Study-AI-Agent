@@ -389,7 +389,7 @@
         state.telegram.botUsername = data.result.username || '';
         state.telegram.botName = data.result.first_name || 'Study Agent Bot';
         if (state.telegram.botUsername && openBotBtn) {
-          openBotBtn.href = `https://t.me/${state.telegram.botUsername}?start=${encodeURIComponent(state.telegram.pairingCode)}`;
+          openBotBtn.href = `https://web.telegram.org/k/#@SylllabusBot`;
           if (openBotText) openBotText.textContent = `1. Open @${state.telegram.botUsername}`;
           if (botLiveSubtitle) {
             botLiveSubtitle.innerHTML = `Connected to official bot <b>@${escapeHtml(state.telegram.botUsername)}</b> · Tap below to pair your chat.`;
