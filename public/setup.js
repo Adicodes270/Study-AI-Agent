@@ -700,7 +700,6 @@
     state.notebooklm.connectedAt = new Date().toISOString();
     saveState(true);
     syncNotebookLMUI();
-    showToast('Google NotebookLM account linked!', 'fa-solid fa-circle-check');
   }
 
   // Sign in: the server opens a Google login window on this computer, captures the session
@@ -730,11 +729,17 @@
     }
 
     let attempts = 0;
+    let pollBusy = false;   // a status request is still in flight
+    let finished = false;   // done/error already handled, never handle it twice
     nlmPollTimer = setInterval(async () => {
+      if (pollBusy || finished) return; // don't stack requests when the server is slow
+      pollBusy = true;
       attempts++;
       try {
         const r = await fetch(`/api/notebooklm/login/${loginId}`).then((x) => x.json());
+        if (finished) return;
         if (r.status === 'done') {
+          finished = true;
           showLiveView(null);
           pendingLoginId = loginId;
           // Use the email of the Google account that just signed in; ask for it only if it couldn't be read
@@ -745,6 +750,7 @@
           return;
         }
         if (r.status === 'error' || r.status === 'none') {
+          finished = true;
           showLiveView(null);
           if (nlmMode === 'remote') $id('nlm-upload-panel')?.removeAttribute('hidden'); // offer the file upload as a way out
           stopNlmTimers();
@@ -753,8 +759,12 @@
           showToast(r.error || 'Login did not finish', 'fa-solid fa-circle-exclamation');
           return;
         }
-      } catch (e) {}
-      if (attempts > 620) {
+      } catch (e) {
+      } finally {
+        pollBusy = false;
+      }
+      if (!finished && attempts > 620) {
+        finished = true;
         showLiveView(null);
         stopNlmTimers();
         state.notebooklm.status = 'disconnected';

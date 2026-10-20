@@ -379,19 +379,13 @@ if (stripWrap && !lite) {
 
 // ==========================================================================
 // Lightweight 3D background (Three.js): floating low-poly wireframe shapes + particles that follow the cursor.
-// ~230 points + 10 wireframes, no lights, 30fps, paused when the tab is hidden. Skipped for reduced motion / data-saver.
+// ~160 points + 8 wireframes, no lights, ~30fps, self-throttling, paused when the tab is hidden.
 // ==========================================================================
 (() => {
   // Only the home page gets the 3D background ('/', '/index.html', or a folder URL like '/repo/')
-  const isHome = /(^|\/)(index\.html)?$/.test(location.pathname);
-  if (!isHome) return;
+  if (!$('.hero')) return;
   if (reduce) { console.info('[3D background] skipped: your system has "reduce motion" turned on'); return; }
   if (navigator.connection && navigator.connection.saveData) { console.info('[3D background] skipped: data saver is on'); return; }
-  try {
-    const c = document.createElement('canvas');
-    if (!(c.getContext('webgl') || c.getContext('experimental-webgl'))) { console.info('[3D background] skipped: WebGL is not available'); return; }
-  } catch (e) { return; }
-
   // Loads ./three.min.js (next to index.html) first, then falls back to the CDN
   const addScript = (src) => new Promise((ok, fail) => {
     const s = document.createElement('script');
@@ -399,7 +393,8 @@ if (stripWrap && !lite) {
     document.head.appendChild(s);
   });
   const loadThree = () => window.THREE ? Promise.resolve()
-    : addScript('./three.min.js').catch(() => addScript('https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js'));
+    : addScript('./three.min.js').catch(() => addScript('https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js'))
+      .catch(() => addScript('https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js'));
 
   const init = () => {
     const canvas = document.createElement('canvas');
@@ -407,10 +402,11 @@ if (stripWrap && !lite) {
     canvas.setAttribute('aria-hidden', 'true');
     let renderer;
     try {
-      renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: false, powerPreference: 'low-power' });
+      renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: false });
     } catch (e) { return; }
     document.body.insertBefore(canvas, $('.header'));   // above the orbs and strips, below the page content
-    renderer.setPixelRatio(Math.min(devicePixelRatio, 1.25));
+    let dpr = 1;
+    renderer.setPixelRatio(dpr);
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 100);
@@ -422,23 +418,23 @@ if (stripWrap && !lite) {
     const rnd = (a, b) => a + Math.random() * (b - a);
 
     // Particles: one Points object = one draw call
-    const N = small ? 90 : 220;
+    const N = small ? 70 : 160;
     const pos = new Float32Array(N * 3);
     for (let i = 0; i < N; i++) { pos[i * 3] = rnd(-18, 18); pos[i * 3 + 1] = rnd(-11, 11); pos[i * 3 + 2] = rnd(-8, 6); }
     const pGeo = new THREE.BufferGeometry();
     pGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     group.add(new THREE.Points(pGeo, new THREE.PointsMaterial({
-      color: 0xffffff, size: 2.5, sizeAttenuation: false, transparent: true, opacity: 0.6, depthWrite: false,
+      color: 0xffffff, size: 2.5, sizeAttenuation: false, transparent: true, opacity: 0.75, depthWrite: false,
     })));
 
     // Floating wireframe shapes in the site's purple and green
     const geos = [new THREE.IcosahedronGeometry(1, 0), new THREE.OctahedronGeometry(1, 0),
       new THREE.TetrahedronGeometry(1, 0), new THREE.BoxGeometry(1.4, 1.4, 1.4)];
     const shapes = [];
-    for (let i = 0; i < (small ? 6 : 10); i++) {
-      const mesh = new THREE.Mesh(geos[i % 4], new THREE.MeshBasicMaterial({
-        color: i % 2 ? 0x2de6b4 : 0x7a5cff, wireframe: true, transparent: true, opacity: 0.42,
-      }));
+    const mats = [0x7a5cff, 0x2de6b4].map((color) =>
+      new THREE.MeshBasicMaterial({ color, wireframe: true, transparent: true, opacity: 0.6 }));   // 2 shared materials
+    for (let i = 0; i < (small ? 5 : 8); i++) {
+      const mesh = new THREE.Mesh(geos[i % 4], mats[i % 2]);
       mesh.userData = { x: rnd(-13, 13), y: rnd(-7, 7), z: rnd(-6, 2), s: rnd(0.5, 1.25),
         spin: rnd(0.1, 0.5), depth: rnd(0.4, 1.3), phase: rnd(0, 6.28) };
       mesh.position.set(mesh.userData.x, mesh.userData.y, mesh.userData.z);
@@ -463,25 +459,37 @@ if (stripWrap && !lite) {
       ptr.tx = e.clientX / innerWidth; ptr.ty = e.clientY / innerHeight; boost = 1;
     }, { passive: true });
 
-    let last = 0;
+    // ~30fps, paused when the tab is hidden, and self-tuning: if frames keep costing too much
+    // it lowers the resolution first, then the frame rate, so it never drags the page down.
+    let last = 0, gap = 0.033, slow = 0;
     gsap.ticker.add((t) => {
-      if (document.hidden || t - last < 0.033) return;     // ~30fps
+      if (document.hidden || t - last < gap) return;
+      const dt = Math.min(t - last, 0.1) * 30;           // keeps speed steady if the frame rate changes
       last = t;
+      const t0 = performance.now();
       ptr.x += (ptr.tx - ptr.x) * 0.06;
       ptr.y += (ptr.ty - ptr.y) * 0.06;
       boost *= 0.94;
 
       group.rotation.y = (ptr.x - 0.5) * 0.6 + t * 0.03;
       group.rotation.x = (ptr.y - 0.5) * 0.35 + scrollY * 0.0003;
+      const spinUp = 1 + boost * 8;
       shapes.forEach((m) => {
         const d = m.userData;
-        m.rotation.x += d.spin * 0.012 * (1 + boost * 8);
-        m.rotation.y += d.spin * 0.016 * (1 + boost * 8);
+        m.rotation.x += d.spin * 0.012 * spinUp * dt;
+        m.rotation.y += d.spin * 0.016 * spinUp * dt;
         m.position.x = d.x - (ptr.x - 0.5) * d.depth * 4;
         m.position.y = d.y + (ptr.y - 0.5) * d.depth * 3 + Math.sin(t * 0.6 + d.phase) * 0.35;
         m.scale.setScalar(d.s * (1 + boost * 0.4));
       });
       renderer.render(scene, camera);
+
+      slow = performance.now() - t0 > 10 ? slow + 1 : Math.max(0, slow - 1);
+      if (slow > 15) {
+        slow = 0;
+        if (dpr > 0.6) { dpr = Math.max(0.6, dpr - 0.2); renderer.setPixelRatio(dpr); resize(); }
+        else gap = Math.min(0.07, gap * 1.3);
+      }
     });
   };
 
