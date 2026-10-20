@@ -630,6 +630,7 @@ html.lenis body {
 .story {
   position: relative;
   height: 400vh;
+  height: 400svh;
 }
 
 .story-pin {
@@ -807,8 +808,18 @@ html.lenis body {
     display: none;
   }
 
+  /* Phones: keep the whole pinned panel inside the visible screen so it never gets cut off,
+     and size by the *small* viewport so the address bar can't change the layout mid-scroll */
+  .story-pin {
+    min-height: 100vh;
+    min-height: 100svh;
+    padding-top: 4.75rem;
+    padding-bottom: 1rem;
+  }
+
   .stage {
     height: 380px;
+    height: min(380px, 46svh);
   }
 }
 
@@ -1523,6 +1534,7 @@ html.lenis body {
 
   .stage {
     height: 400px;
+    height: min(400px, 46svh);
   }
 
   .row {

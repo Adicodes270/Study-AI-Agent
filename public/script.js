@@ -67,6 +67,7 @@ if (h1) {
 // Pinned story: CSS sticky + scroll position (no GSAP pin, so layout shifts can't break the steps)
 if ($('.story')) {
   const story = $('.story');
+  const pin = $('.story-pin');
   const steps = $$('.step'), panels = $$('.panel'), bar = $('.story-bar span');
   let current = -1, ticking = false;
   const setActive = (i) => {
@@ -78,15 +79,32 @@ if ($('.story')) {
   const updateStory = () => {
     ticking = false;
     const r = story.getBoundingClientRect();
-    const travel = Math.max(1, story.offsetHeight - innerHeight);
+    // Real distance the panel stays pinned = section height minus the pinned panel's own height.
+    // (innerHeight / 100vh change as the phone's address bar shows and hides, so don't rely on them.)
+    const pinH = pin ? pin.getBoundingClientRect().height : innerHeight;
+    const travel = Math.max(1, story.offsetHeight - pinH);
     const p = Math.min(1, Math.max(0, -r.top / travel));
     setActive(Math.min(steps.length - 1, Math.floor(p * steps.length)));
     if (bar) bar.style.transform = `scaleX(${p})`;
   };
   const queue = () => { if (!ticking) { ticking = true; requestAnimationFrame(updateStory); } };
   addEventListener('scroll', queue, { passive: true });
+  document.addEventListener('scroll', queue, { passive: true });
+  addEventListener('touchmove', queue, { passive: true });   // phones: keep updating during finger drag
+  addEventListener('touchend', queue, { passive: true });
   addEventListener('resize', queue);
+  addEventListener('orientationchange', queue);
   addEventListener('load', queue);
+  if (window.visualViewport) {
+    visualViewport.addEventListener('scroll', queue);
+    visualViewport.addEventListener('resize', queue);
+  }
+  // Safety net: while the story is on screen, re-check a few times a second
+  // (covers phones that throttle scroll events during momentum scrolling)
+  setInterval(() => {
+    const r = story.getBoundingClientRect();
+    if (r.bottom > 0 && r.top < innerHeight) queue();
+  }, 150);
   updateStory();
 }
 
@@ -139,8 +157,23 @@ $$(btnSel).forEach((btn) => {
   });
 });
 
-if (!reduce && !lite) {
-  $$(`${btnSel}, .socials a`).forEach((btn) => {
+const btn3dDone = new WeakSet();
+const wrapBtnLabel = (btn) => {
+  [...btn.childNodes].forEach((n) => {
+    if (n.nodeType === 3 && n.textContent.trim()) {
+      const s = document.createElement('span');
+      s.className = 'btn-txt';
+      s.textContent = n.textContent.replace(/\s+/g, ' ').trim();
+      n.replaceWith(s);
+    }
+  });
+};
+// The 3D button effect also runs on perf-lite pages (setup.html): it only needs GSAP and is cheap.
+if (!reduce) {
+  const init3dButton = (btn) => {
+    if (btn3dDone.has(btn)) return;
+    btn3dDone.add(btn);
+    wrapBtnLabel(btn);
     const base = btn.classList.contains('to-top') ? 3 : 5;
     const lift = fine ? 20 : 0;
     const icon = btn.querySelector('i');
@@ -191,13 +224,29 @@ if (!reduce && !lite) {
       rx(0); ry(0); mx(0); my(0);
       gsap.to(btn, { z: 0, scale: 1, '--depth': `${base}px`, duration: 0.6, ease: 'elastic.out(1, 0.6)' });
     });
-  });
+  };
 
-  // Hero buttons flip in from the side in 3D
-  gsap.from('.hero .cta-row .btn', {
-    rotationY: -90, rotationX: 25, y: 30, opacity: 0, duration: 1, delay: 1,
-    ease: 'back.out(1.7)', stagger: 0.15,
-  });
+  const sel3d = `${btnSel}, .socials a`;
+  $$(sel3d).forEach(init3dButton);
+
+  // Buttons that JavaScript adds later (e.g. the key rows on setup.html) get the effect too
+  new MutationObserver((muts) => {
+    for (const m of muts) {
+      m.addedNodes.forEach((n) => {
+        if (n.nodeType !== 1) return;
+        if (n.matches?.(sel3d)) init3dButton(n);
+        n.querySelectorAll?.(sel3d).forEach(init3dButton);
+      });
+    }
+  }).observe(document.body, { childList: true, subtree: true });
+
+  // Hero buttons flip in from the side in 3D (home page only)
+  if (!lite && $('.hero .cta-row .btn')) {
+    gsap.from('.hero .cta-row .btn', {
+      rotationY: -90, rotationX: 25, y: 30, opacity: 0, duration: 1, delay: 1,
+      ease: 'back.out(1.7)', stagger: 0.15,
+    });
+  }
 }
 
 // ==========================================================================
