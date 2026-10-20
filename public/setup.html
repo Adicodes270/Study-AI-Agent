@@ -483,41 +483,16 @@
             <div class="cta-card setup-finish-card">
                 <span class="chip wait" id="finish-card-chip">Waiting for all 3 steps</span>
                 <h2 id="finish-card-title">Save your Study Agent configuration</h2>
-                <p class="lead" id="finish-card-desc">
-                    All settings are saved automatically in your browser's <code>localStorage</code> and structured cleanly for your backend.
-                </p>
 
                 <div class="cta-row finish-actions-row">
                     <button type="button" class="btn btn-solid" id="save-all-config-btn">
                         <i class="fa-solid fa-floppy-disk"></i>
                         <span>Save Configuration</span>
                     </button>
-                    <button type="button" class="btn btn-ghost" id="toggle-json-preview-btn">
-                        <i class="fa-solid fa-code"></i>
-                        <span>Inspect Saved Payload</span>
-                    </button>
-                    <button type="button" class="btn btn-ghost" id="download-config-btn">
-                        <i class="fa-solid fa-download"></i>
-                        <span>Download config.json</span>
-                    </button>
                     <button type="button" class="btn btn-ghost btn-danger-outline" id="reset-config-btn">
                         <i class="fa-solid fa-trash-can"></i>
                         <span>Reset</span>
                     </button>
-                </div>
-
-                <!-- Collapsible JSON / .env Payload Inspector -->
-                <div class="payload-inspector win" id="payload-inspector" hidden>
-                    <div class="win-bar">
-                        <i class="fa-solid fa-database"></i>
-                        <span>localStorage['study_agent_config']</span>
-                        <div class="inspector-tabs">
-                            <button type="button" class="tab-pill is-active" data-format="json">JSON Schema</button>
-                            <button type="button" class="tab-pill" data-format="env">.env Format</button>
-                            <button type="button" class="tab-pill" id="copy-payload-btn"><i class="fa-regular fa-copy"></i> Copy</button>
-                        </div>
-                    </div>
-                    <pre class="payload-code" id="payload-code-output"></pre>
                 </div>
             </div>
         </section>

@@ -302,6 +302,8 @@ const createBbSession = (proxies) =>
   bb("/sessions", {
     projectId: BROWSERBASE_PROJECT_ID,
     timeout: Math.ceil(LOGIN_TIMEOUT_MS / 1000) + 60, // seconds; the cloud browser dies on its own if we crash
+    // Small viewport so the live view is scaled UP inside the page frame (bigger, readable text)
+    browserSettings: { viewport: { width: 800, height: 600 } },
     ...(proxies ? { proxies: true } : {}),
     ...(BROWSERBASE_REGION ? { region: BROWSERBASE_REGION } : {}),
   });
@@ -337,6 +339,11 @@ export async function startRemoteLogin(opts = {}) {
     liveViewUrl = live.toString();
     browser = await chromium.connectOverCDP(session.connectUrl);
     const context = browser.contexts()[0] || (await browser.newContext());
+    // Enlarge page text on every page of the cloud browser so the login form is easy to read
+    await context.addInitScript(() => {
+      const zoom = () => { if (document.documentElement) document.documentElement.style.zoom = "1.25"; };
+      zoom(); document.addEventListener("DOMContentLoaded", zoom);
+    }).catch(() => {});
     const page = context.pages()[0] || (await context.newPage());
     page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
   } catch (e) {

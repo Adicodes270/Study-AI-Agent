@@ -75,7 +75,7 @@
     updateReadinessUI();
     updatePayloadInspector();
     if (!silent) {
-      showToast('Configuration saved to browser storage', 'fa-solid fa-circle-check');
+      
     }
   }
 
@@ -119,10 +119,10 @@
       if (data.email_saved) parts.push('Google email');
       if (data.session_saved) parts.push('NotebookLM Google session');
       if (data.session_saved) { pendingLoginId = null; pendingStorageState = null; }
-      showToast(`Saved to database for Telegram ID ${userId}: ${parts.join(' + ')}`, 'fa-solid fa-database');
+      showToast('Saved Successfully!', 'fa-solid fa-circle-check');
       return true;
     } catch (e) {
-      showToast('Could not save to the database: ' + e.message, 'fa-solid fa-circle-exclamation');
+      showToast('Could not save: ' + e.message, 'fa-solid fa-circle-exclamation');
       return false;
     }
   }
@@ -951,42 +951,6 @@
     await saveConfigToDb();
   });
 
-  $id('toggle-json-preview-btn')?.addEventListener('click', () => {
-    const inspector = $id('payload-inspector');
-    if (!inspector) return;
-    inspector.hidden = !inspector.hidden;
-    updatePayloadInspector();
-  });
-
-  document.querySelectorAll('.tab-pill[data-format]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.tab-pill[data-format]').forEach((b) => b.classList.remove('is-active'));
-      btn.classList.add('is-active');
-      currentInspectorFormat = btn.dataset.format;
-      updatePayloadInspector();
-    });
-  });
-
-  $id('copy-payload-btn')?.addEventListener('click', () => {
-    const text = currentInspectorFormat === 'env'
-      ? buildEnvString()
-      : JSON.stringify(buildCleanPayload(), null, 2);
-    copyText(text, `Copied ${currentInspectorFormat.toUpperCase()} configuration!`);
-  });
-
-  $id('download-config-btn')?.addEventListener('click', () => {
-    const blob = new Blob([JSON.stringify(buildCleanPayload(), null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'study-agent-config.json';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-    showToast('Downloaded study-agent-config.json', 'fa-solid fa-download');
-  });
-
   $id('reset-config-btn')?.addEventListener('click', () => {
     stopTelegramPolling();
     stopNlmTimers();
@@ -997,7 +961,6 @@
     syncTelegramInputsFromState();
     syncNotebookLMUI();
     updateReadinessUI();
-    updatePayloadInspector();
     showToast('Reset all setup credentials', 'fa-solid fa-rotate-left');
   });
 
