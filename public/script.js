@@ -64,23 +64,30 @@ if (h1) {
   }
 }
 
-// Pinned story
+// Pinned story: CSS sticky + scroll position (no GSAP pin, so layout shifts can't break the steps)
 if ($('.story')) {
+  const story = $('.story');
   const steps = $$('.step'), panels = $$('.panel'), bar = $('.story-bar span');
-  let current = -1;
+  let current = -1, ticking = false;
   const setActive = (i) => {
     if (i === current) return;
     current = i;
     steps.forEach((s, k) => s.classList.toggle('is-active', k === i));
     panels.forEach((p, k) => p.classList.toggle('is-active', k === i));
   };
-  ScrollTrigger.create({
-    trigger: '.story', start: 'top top', end: '+=300%', pin: '.story-pin', scrub: true,
-    onUpdate: (self) => {
-      setActive(Math.min(steps.length - 1, Math.floor(self.progress * steps.length)));
-      gsap.set(bar, { scaleX: self.progress });
-    },
-  });
+  const updateStory = () => {
+    ticking = false;
+    const r = story.getBoundingClientRect();
+    const travel = Math.max(1, story.offsetHeight - innerHeight);
+    const p = Math.min(1, Math.max(0, -r.top / travel));
+    setActive(Math.min(steps.length - 1, Math.floor(p * steps.length)));
+    if (bar) bar.style.transform = `scaleX(${p})`;
+  };
+  const queue = () => { if (!ticking) { ticking = true; requestAnimationFrame(updateStory); } };
+  addEventListener('scroll', queue, { passive: true });
+  addEventListener('resize', queue);
+  addEventListener('load', queue);
+  updateStory();
 }
 
 // Reveal on scroll

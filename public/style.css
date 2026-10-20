@@ -612,8 +612,29 @@ input:focus-visible {
   color: var(--accent-warning);
 }
 
-/* Pinned scroll story */
+/* Lenis requirements (CSS smooth-scroll on <html> fights Lenis) */
+html.lenis,
+html.lenis body {
+  height: auto;
+}
+
+.lenis.lenis-smooth {
+  scroll-behavior: auto !important;
+}
+
+.lenis.lenis-stopped {
+  overflow: hidden;
+}
+
+/* Pinned scroll story: tall section, sticky inner panel. 4 steps x 75vh of travel */
+.story {
+  position: relative;
+  height: 400vh;
+}
+
 .story-pin {
+  position: sticky;
+  top: 0;
   min-height: 100vh;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr);
