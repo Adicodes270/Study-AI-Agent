@@ -1,35 +1,44 @@
 # Study-AI-Agent
+Making An AI agent to automate studying stuff for me
 
-Telegram bot + website that turns a syllabus into a study plan.
+## Run (JavaScript port)
 
-- **Frontend** (`public/`) -> Vercel (static site)
-- **Backend** (`src/`, Telegram bot + API) -> Railway (`npm start`)
-- **Database** -> Neon Postgres
-
-## Environment variables (Railway, or a local `.env`)
-
-```
-DATABASE_URL=postgresql://...      # Neon connection string
-TELEGRAM_BOT_TOKEN=...
-GEMINI_API_KEY=...
-CLASS_LEVEL=10                     # optional
-```
-
-Tables are created automatically on first start.
-
-## Run locally
+Requires Node 20+.
 
 ```
 npm install
-npm start      # website + API on http://localhost:3001, bot polling
+npm start
 ```
 
-## Deploy
+Create a `.env` file in the project root:
 
-1. Railway: new project from this GitHub repo, add the variables above. Start command: `npm start`.
-   Then Settings -> Networking -> Generate Domain.
-2. Put that domain in `vercel.json` (replace `YOUR-APP.up.railway.app`).
-3. Vercel: import the same repo. No build command needed.
+```
+TELEGRAM_BOT_TOKEN=...
+GEMINI_API_KEY=...
+CLASS_LEVEL=10        # optional
+DATABASE_URL=postgresql://USER:PASSWORD@ep-xxxx-pooler.REGION.aws.neon.tech/neondb?sslmode=require
+```
 
-Only run the bot in ONE place at a time (Railway or your PC), or Telegram will report a polling conflict.
-The NotebookLM browser login only works when run on your own computer.
+The database is [Neon](https://neon.tech) Postgres. Tables are created automatically on first start.
+To copy old data from `data/study_agent.db`, run `npm install --no-save better-sqlite3 && node scripts/migrate-sqlite-to-neon.js` once.
+
+### Setup page
+
+Pressing **Save Configuration** stores the Telegram id, Gemini keys and the `notebooklm-py` session
+(`~/.notebooklm/storage_state.json`, from `notebooklm login`) in the `users` table.
+
+### Public sign-in for NotebookLM (Browserbase)
+
+Visitors sign in to Google inside a cloud Chrome shown on the setup page, so nothing runs on their computer.
+Create a [Browserbase](https://www.browserbase.com) account and add to `.env`:
+
+```
+BROWSERBASE_API_KEY=...
+BROWSERBASE_PROJECT_ID=...
+BROWSERBASE_PROXIES=true        # residential proxies help Google accept the sign-in (paid plan); false to skip
+BROWSERBASE_MAX_SESSIONS=3      # cloud browsers open at the same time (each one costs money)
+```
+
+Without these keys, sign-in opens Chrome on the computer running the server (localhost only) and public
+visitors are asked to upload `storage_state.json` instead. The server must be a normal always-on Node
+process (`npm start`), not Vercel serverless functions, because sign-ins are tracked in memory.

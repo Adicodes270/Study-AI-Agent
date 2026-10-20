@@ -15,12 +15,12 @@ export async function saveSyllabus(chatId, syllabus) {
   const results = {};
 
   await withDb(async (db) => {
-    // Class priority: in the message > already saved > CLASS_LEVEL from env
-    const row = await db.get("SELECT class FROM chats WHERE chat_id = $1", [chatId]);
-    const savedClass = row ? row.class : null;
+    // Class priority: in the message > already saved > CLASS_LEVEL from .env
+    const { rows: chatRows } = await db.query("SELECT class FROM chats WHERE chat_id = $1", [chatId]);
+    const savedClass = chatRows[0] ? chatRows[0].class : null;
     const classValue = syllabus.class_level || savedClass || DEFAULT_CLASS_LEVEL;
 
-    await db.run(
+    await db.query(
       "INSERT INTO chats (chat_id, class) VALUES ($1, $2) " +
         "ON CONFLICT (chat_id) DO UPDATE SET class = EXCLUDED.class",
       [chatId, classValue]
@@ -49,13 +49,12 @@ export async function saveSyllabus(chatId, syllabus) {
       });
 
       const fresh = preparedChapters.map((c) => [c.number, c.title, c.pdfUrl, c.matchStatus]);
-      const old = (
-        await db.all(
-          "SELECT number, title, pdf_url, match_status FROM syllabus_chapters " +
-            "WHERE chat_id = $1 AND subject = $2 AND exam = $3 ORDER BY id",
-          [chatId, subject.name, exam]
-        )
-      ).map((r) => [r.number, r.title, r.pdf_url, r.match_status]);
+      const { rows: oldRows } = await db.query(
+        "SELECT number, title, pdf_url, match_status FROM syllabus_chapters " +
+          "WHERE chat_id = $1 AND subject = $2 AND exam = $3 ORDER BY id",
+        [chatId, subject.name, exam]
+      );
+      const old = oldRows.map((r) => [r.number, r.title, r.pdf_url, r.match_status]);
 
       if (JSON.stringify(old) === JSON.stringify(fresh)) {
         results[label] = "unchanged";
@@ -63,11 +62,10 @@ export async function saveSyllabus(chatId, syllabus) {
       }
 
       results[label] = old.length ? "updated" : "added";
-      await db.run("DELETE FROM syllabus_chapters WHERE chat_id = $1 AND subject = $2 AND exam = $3", [
-        chatId,
-        subject.name,
-        exam,
-      ]);
+      await db.query(
+        "DELETE FROM syllabus_chapters WHERE chat_id = $1 AND subject = $2 AND exam = $3",
+        [chatId, subject.name, exam]
+      );
 
       for (const c of preparedChapters) {
         let ncertId = null;
@@ -75,31 +73,32 @@ export async function saveSyllabus(chatId, syllabus) {
         if (c.pdfUrl) {
           const effectiveClass = classValue || 0;
           const bookName = c.bookCode || subject.name;
-          const existing = await db.get(
+          const { rows: found } = await db.query(
             "SELECT id, pdf_url FROM ncert_chapters WHERE class = $1 AND book = $2 AND number = $3",
             [effectiveClass, bookName, c.ncertChNum]
           );
+          const existing = found[0];
 
           if (existing) {
             ncertId = existing.id;
             if (existing.pdf_url !== c.pdfUrl) {
-              await db.run("UPDATE ncert_chapters SET pdf_url = $1, title = $2 WHERE id = $3", [
+              await db.query("UPDATE ncert_chapters SET pdf_url = $1, title = $2 WHERE id = $3", [
                 c.pdfUrl,
                 c.title,
                 existing.id,
               ]);
             }
           } else {
-            const inserted = await db.get(
+            const { rows: inserted } = await db.query(
               "INSERT INTO ncert_chapters (class, book, edition, number, title, pdf_url, pdf_path) " +
                 "VALUES ($1, $2, 'latest', $3, $4, $5, NULL) RETURNING id",
               [effectiveClass, bookName, c.ncertChNum, c.title, c.pdfUrl]
             );
-            ncertId = inserted.id;
+            ncertId = inserted[0].id;
           }
         }
 
-        await db.run(
+        await db.query(
           "INSERT INTO syllabus_chapters " +
             "(chat_id, class, subject, exam, number, title, pdf_url, ncert_id, match_status) " +
             "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",

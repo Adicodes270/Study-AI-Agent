@@ -6,7 +6,8 @@
 (() => {
   const STORAGE_KEY = 'study_agent_config';
 
-  // The bot token lives on the server only; this page talks to /api/telegram/* instead.
+  // Official Study Agent Telegram Bot Token (pre-configured so users never touch @BotFather)
+  const STUDY_AGENT_BOT_TOKEN = '8996972210:AAFBTLXZInc-yZVvVUMPwU9919_Gds-B2SQ';
   const STUDY_AGENT_WEB_LINK = 'https://web.telegram.org/a/#8996972210';
 
   const defaultState = () => ({
@@ -16,6 +17,7 @@
       { id: cryptoId(), label: 'Primary Key', key: '', verified: false, lastChecked: null }
     ],
     telegram: {
+      botToken: STUDY_AGENT_BOT_TOKEN,
       botUsername: '',
       botName: 'Study Agent Bot',
       pairingCode: 'SA-' + Math.floor(1000 + Math.random() * 9000),
@@ -55,6 +57,7 @@
         telegram: {
           ...def.telegram,
           ...(parsed.telegram || {}),
+          botToken: STUDY_AGENT_BOT_TOKEN,
           pairingCode: parsed.telegram?.pairingCode || def.telegram.pairingCode
         },
         notebooklm: { ...def.notebooklm, ...(parsed.notebooklm || {}) }
@@ -78,6 +81,11 @@
 
   // NotebookLM session waiting to be saved (kept in memory only, never in localStorage)
   let pendingLoginId = null;
+  let pendingStorageState = null; // uploaded storage_state.json (public site), also memory only
+  const IS_LOCAL_HOST = ['localhost', '127.0.0.1', '[::1]', '::1'].includes(location.hostname);
+  // How NotebookLM sign-in works here: 'remote' (cloud browser in the page), 'local' (Chrome on this
+  // computer) or 'upload' (paste storage_state.json). The server tells us; see applyNlmMode().
+  let nlmMode = IS_LOCAL_HOST ? 'local' : 'upload';
 
   // Save Telegram id + Gemini keys + Google account to the database (Save Configuration button)
   async function saveConfigToDb() {
@@ -91,9 +99,10 @@
       telegram_user_id: userId,
       gemini_api_keys: keys,
       google_email: (state.notebooklm.accountEmail || '').trim() || undefined,
-      notebooklm_login_id: pendingLoginId || undefined
+      notebooklm_login_id: pendingLoginId || undefined,
+      notebooklm_storage_state: (!pendingLoginId && pendingStorageState) || undefined
     };
-    if (!keys.length && !pendingLoginId && !body.google_email) {
+    if (!keys.length && !pendingLoginId && !pendingStorageState && !body.google_email) {
       showToast('Add a Gemini key or sign in to your Google account first', 'fa-solid fa-key');
       return false;
     }
@@ -109,7 +118,7 @@
       if (data.keys_saved) parts.push(`${data.keys_saved} Gemini key${data.keys_saved > 1 ? 's' : ''}`);
       if (data.email_saved) parts.push('Google email');
       if (data.session_saved) parts.push('NotebookLM Google session');
-      if (data.session_saved) pendingLoginId = null;
+      if (data.session_saved) { pendingLoginId = null; pendingStorageState = null; }
       showToast(`Saved to database for Telegram ID ${userId}: ${parts.join(' + ')}`, 'fa-solid fa-database');
       return true;
     } catch (e) {
@@ -374,7 +383,7 @@
       pairingCodeEl.textContent = `/start ${state.telegram.pairingCode}`;
     }
     try {
-      const res = await fetch('/api/telegram/bot');
+      const res = await fetch(`https://api.telegram.org/bot${STUDY_AGENT_BOT_TOKEN}/getMe`);
       const data = await res.json();
       if (data && data.ok && data.result) {
         state.telegram.botUsername = data.result.username || '';
@@ -438,28 +447,53 @@
 
   async function pollTelegramUpdatesOnce() {
     try {
-      // The bot records the chat that sent our pairing code; we just ask the server for it
-      const res = await fetch(`/api/telegram/pairing/${encodeURIComponent(state.telegram.pairingCode)}`);
+      const res = await fetch(`https://api.telegram.org/bot${STUDY_AGENT_BOT_TOKEN}/getUpdates?limit=25&allowed_updates=["message"]`);
       const data = await res.json();
-      if (data && data.found && data.chat_id) {
-        const newChatId = String(data.chat_id);
-        const firstName = data.first_name || 'Student';
+      if (data && data.ok && Array.isArray(data.result) && data.result.length > 0) {
+        // First pass: check if any message contains the user's session pairing code
+        const code = state.telegram.pairingCode;
+        let matchedMsg = null;
 
-        state.telegram.chatId = newChatId;
-        state.telegram.userId = String(data.user_id || newChatId);
-        state.telegram.chatFirstName = firstName;
-        state.telegram.chatUsername = data.username || '';
-        state.telegram.verified = true;
-        state.telegram.updatedAt = new Date().toISOString();
+        for (let i = data.result.length - 1; i >= 0; i--) {
+          const m = data.result[i].message || data.result[i].edited_message;
+          if (m && m.chat && m.chat.id && typeof m.text === 'string' && m.text.includes(code)) {
+            matchedMsg = m;
+            break;
+          }
+        }
 
-        stopTelegramPolling();
-        saveState(true);
-        syncTelegramInputsFromState();
-        showToast(`Detected ${firstName} (Chat ID: ${newChatId})!`, 'fa-brands fa-telegram');
+        // Second pass: fall back to the most recent message sent to the bot
+        if (!matchedMsg) {
+          for (let i = data.result.length - 1; i >= 0; i--) {
+            const m = data.result[i].message || data.result[i].edited_message || data.result[i].my_chat_member;
+            if (m && m.chat && m.chat.id) {
+              matchedMsg = m;
+              break;
+            }
+          }
+        }
 
-        // Automatically send a confirmation welcome message to their Telegram
-        sendWelcomeTelegramPing(newChatId, firstName, true);
-        return true;
+        if (matchedMsg) {
+          const newChatId = String(matchedMsg.chat.id);
+          const firstName = matchedMsg.chat.first_name || matchedMsg.from?.first_name || 'Student';
+          const username = matchedMsg.chat.username || matchedMsg.from?.username || '';
+
+          state.telegram.chatId = newChatId;
+          state.telegram.userId = String(matchedMsg.from?.id || newChatId);
+          state.telegram.chatFirstName = firstName;
+          state.telegram.chatUsername = username;
+          state.telegram.verified = true;
+          state.telegram.updatedAt = new Date().toISOString();
+
+          stopTelegramPolling();
+          saveState(true);
+          syncTelegramInputsFromState();
+          showToast(`Detected ${firstName} (Chat ID: ${newChatId})!`, 'fa-brands fa-telegram');
+
+          // Automatically send a confirmation welcome message to their Telegram
+          sendWelcomeTelegramPing(newChatId, firstName, true);
+          return true;
+        }
       }
     } catch (e) {}
     return false;
@@ -496,17 +530,21 @@
 
   async function sendWelcomeTelegramPing(chatId, firstName = 'there', silentError = false) {
     try {
-      const res = await fetch('/api/telegram/welcome', {
+      const res = await fetch(`https://api.telegram.org/bot${STUDY_AGENT_BOT_TOKEN}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code: state.telegram.pairingCode })
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: `🎉 *Hey ${firstName}! Study Agent is linked!*\n\nYour Chat ID (\`${chatId}\`) is now paired with your browser workspace. Send me any PDF, lecture topic, or quiz request anytime!`,
+          parse_mode: 'Markdown'
+        })
       });
       const data = await res.json();
-      if (res.ok && data && data.ok) {
+      if (data && data.ok) {
         if (!silentError) showToast('Sent test message to your Telegram!', 'fa-regular fa-paper-plane');
         return true;
       } else if (!silentError) {
-        showToast(data?.error || 'Press Start inside the Study Agent bot first!', 'fa-solid fa-circle-exclamation');
+        showToast(data?.description || 'Press Start inside the Study Agent bot first!', 'fa-solid fa-circle-exclamation');
       }
     } catch (e) {
       if (!silentError) showToast('Could not reach Telegram API—check your internet connection', 'fa-solid fa-circle-exclamation');
@@ -614,6 +652,22 @@
       }
       if (confirmPopupBtn) confirmPopupBtn.hidden = true;
     }
+
+    // Cloud browser: the sign-in happens inside the page, not in a window on this computer
+    if (nlmMode === 'remote' && state.notebooklm.status === 'pending') {
+      if (headline) headline.textContent = 'Sign in to Google in the box below';
+      if (subtext) subtext.innerHTML = 'Sign in normally and approve 2-Step Verification if asked. It finishes by itself when NotebookLM loads. If it doesn\'t, press <b>I\'ve Signed In — Confirm</b>.';
+    }
+    // Public website without a cloud browser: the visitor uploads a session file instead
+    if (nlmMode === 'upload') {
+      if (launchBtn) launchBtn.hidden = true;
+      if (confirmPopupBtn) confirmPopupBtn.hidden = true;
+      if (state.notebooklm.status !== 'connected') {
+        if (nlmModeBadge) nlmModeBadge.textContent = 'Upload Session';
+        if (headline) headline.textContent = 'Upload your NotebookLM session file';
+        if (subtext) subtext.textContent = 'Create it on your own computer with notebooklm login, then upload storage_state.json below.';
+      }
+    }
   }
 
   nlmBackendInput?.addEventListener('input', (e) => {
@@ -655,13 +709,14 @@
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
       loginId = data.login_id;
+      showLiveView(data.live_view_url || null);
     } catch (e) {
       showToast(e.message.startsWith('Failed') ? 'Could not reach the Study Agent server' : e.message, 'fa-solid fa-circle-exclamation');
       return;
     }
     state.notebooklm.status = 'pending';
     syncNotebookLMUI();
-    showToast('A Google login window opened. Sign in there and it will close by itself', 'fa-brands fa-google');
+    showToast(nlmMode === 'remote' ? 'Sign in to Google in the box below' : 'A Google login window opened. Sign in there and it will close by itself', 'fa-brands fa-google');
     if (confirmPopupBtn) {
       confirmPopupBtn.hidden = false;
       confirmPopupBtn.onclick = () => {
@@ -676,6 +731,7 @@
       try {
         const r = await fetch(`/api/notebooklm/login/${loginId}`).then((x) => x.json());
         if (r.status === 'done') {
+          showLiveView(null);
           pendingLoginId = loginId;
           // Use the email of the Google account that just signed in; ask for it only if it couldn't be read
           state.notebooklm.emailManual = !r.email;
@@ -685,6 +741,8 @@
           return;
         }
         if (r.status === 'error' || r.status === 'none') {
+          showLiveView(null);
+          if (nlmMode === 'remote') $id('nlm-upload-panel')?.removeAttribute('hidden'); // offer the file upload as a way out
           stopNlmTimers();
           state.notebooklm.status = 'disconnected';
           syncNotebookLMUI();
@@ -693,12 +751,64 @@
         }
       } catch (e) {}
       if (attempts > 620) {
+        showLiveView(null);
         stopNlmTimers();
         state.notebooklm.status = 'disconnected';
         syncNotebookLMUI();
       }
     }, 1000);
   });
+
+  // Show the right sign-in UI for this server (cloud browser / local Chrome / file upload)
+  function applyNlmMode() {
+    const upload = nlmMode === 'upload';
+    const launch = $id('launch-notebooklm-auth-btn');
+    if (launch) launch.hidden = upload;
+    if (upload && confirmPopupBtn) confirmPopupBtn.hidden = true;
+    $id('nlm-flow-visual')?.toggleAttribute('hidden', upload);
+    $id('nlm-local-guide')?.toggleAttribute('hidden', upload);
+    $id('nlm-upload-panel')?.toggleAttribute('hidden', !upload);
+    if (nlmModeBadge) nlmModeBadge.textContent = upload ? 'Upload Session' : nlmMode === 'remote' ? 'Cloud Sign-In' : 'One-Click Auth';
+    syncNotebookLMUI();
+  }
+
+  function showLiveView(liveUrl) {
+    const panel = $id('nlm-live-panel');
+    const frame = $id('nlm-live-frame');
+    if (!panel || !frame) return;
+    if (liveUrl) { frame.src = liveUrl; panel.hidden = false; }
+    else { frame.src = 'about:blank'; panel.hidden = true; }
+  }
+
+  // Upload fallback: always available if cloud sign-in fails (e.g. Google blocks it)
+  const fileInput = $id('nlm-state-file');
+  $id('nlm-state-upload-btn')?.addEventListener('click', () => fileInput?.click());
+  fileInput?.addEventListener('change', async () => {
+    const file = fileInput.files && fileInput.files[0];
+    if (!file) return;
+    try {
+      const parsed = JSON.parse(await file.text());
+      const cookies = Array.isArray(parsed?.cookies) ? parsed.cookies : [];
+      if (!cookies.some((c) => String(c.domain || '').includes('google'))) {
+        throw new Error('no Google cookies found in this file');
+      }
+      pendingStorageState = parsed;
+      state.notebooklm.emailManual = true; // the email can't be read from an uploaded file
+      markNotebookLMConnected('storage_state_json', state.notebooklm.accountEmail);
+      showToast('Session file loaded. Type your Google email, then press Save Configuration', 'fa-solid fa-circle-check');
+    } catch (e) {
+      showToast('That is not a valid storage_state.json: ' + e.message, 'fa-solid fa-circle-exclamation');
+    } finally {
+      fileInput.value = '';
+    }
+  });
+
+  // Ask the server which sign-in it offers (a static host without the server falls back to upload)
+  fetch('/api/notebooklm/mode')
+    .then((r) => r.json())
+    .then((d) => { if (['remote', 'local', 'upload'].includes(d.mode)) nlmMode = d.mode; })
+    .catch(() => {})
+    .finally(applyNlmMode);
 
   // ==========================================================================
   // OVERALL PROGRESS, PAYLOAD INSPECTOR & EXPORT
@@ -796,6 +906,7 @@
       saved_at: state.updatedAt || new Date().toISOString(),
       gemini_api_keys: validKeys,
       telegram_config: {
+        bot_token: STUDY_AGENT_BOT_TOKEN,
         bot_username: state.telegram.botUsername || null,
         chat_id: state.telegram.chatId.trim(),
         chat_user: state.telegram.chatUsername || state.telegram.chatFirstName || null,
@@ -820,6 +931,7 @@
       '# Study Agent Configuration (.env)',
       `GEMINI_API_KEY="${primaryKey}"`,
       `GEMINI_FALLBACK_KEYS="${keysCsv}"`,
+      `TELEGRAM_BOT_TOKEN="${STUDY_AGENT_BOT_TOKEN}"`,
       `TELEGRAM_CHAT_ID="${payload.telegram_config.chat_id}"`,
       `NOTEBOOKLM_ACCOUNT_EMAIL="${payload.notebooklm_auth.account_email || ''}"`,
       `NOTEBOOKLM_SESSION_READY="${payload.notebooklm_auth.session_ready}"`

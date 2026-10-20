@@ -368,7 +368,7 @@
                     </div>
 
                     <!-- Visual 3-Stage Process Flow -->
-                    <div class="auth-flow-visual">
+                    <div class="auth-flow-visual" id="nlm-flow-visual">
                         <div class="auth-stage is-current" id="nlm-stage-1">
                             <div class="stage-circle"><i class="fa-solid fa-arrow-pointer"></i></div>
                             <b>1. Click Sign In</b>
@@ -429,6 +429,31 @@
                     </div>
 
 
+                    <!-- Cloud browser (Browserbase): the user signs in to Google inside this frame -->
+                    <div class="nlm-live-panel" id="nlm-live-panel" hidden>
+                        <iframe id="nlm-live-frame" title="Google sign-in" sandbox="allow-same-origin allow-scripts"
+                            allow="clipboard-read; clipboard-write"></iframe>
+                    </div>
+
+                    <!-- Public website: upload the session file made on the user's own computer -->
+                    <div class="nlm-action-panel" id="nlm-upload-panel" hidden>
+                        <div class="nlm-status-copy">
+                            <b>Sign in on your own computer, then upload the session file</b>
+                            <p>
+                                Google sign-in can't open from a public website. On your computer run
+                                <code>pip install "notebooklm-py[browser]"</code>, then <code>notebooklm login</code>, sign in to Google, and upload the file it creates:
+                                <code>~/.notebooklm/storage_state.json</code> (Windows: <code>%USERPROFILE%\.notebooklm\storage_state.json</code>).
+                            </p>
+                        </div>
+                        <div class="nlm-buttons-row">
+                            <input type="file" id="nlm-state-file" accept=".json,application/json" hidden>
+                            <button type="button" class="btn btn-solid" id="nlm-state-upload-btn">
+                                <i class="fa-solid fa-file-arrow-up"></i>
+                                <span>Upload storage_state.json</span>
+                            </button>
+                        </div>
+                    </div>
+
                 </div>
 
                 <!-- Right: What to Expect Guide -->
@@ -439,7 +464,7 @@
                         <p>We handle the <code>notebooklm-py</code> session setup through a normal Google sign-in window so you never have to run terminal commands.</p>
                     </div>
 
-                    <ol class="guide-steps">
+                    <ol class="guide-steps" id="nlm-local-guide">
                         <li>
                             <span class="guide-num">1</span>
                             <div>

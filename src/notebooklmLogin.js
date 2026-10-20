@@ -10,6 +10,9 @@ import path from "node:path";
 import net from "node:net";
 import { spawn } from "node:child_process";
 import { inspectStorageState } from "./intake/userKeys.js";
+import {
+  BROWSERBASE_API_KEY, BROWSERBASE_PROJECT_ID, BROWSERBASE_PROXIES, BROWSERBASE_REGION, BROWSERBASE_MAX_SESSIONS,
+} from "./config.js";
 
 const NOTEBOOKLM_URL = "https://notebooklm.google.com/";
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
@@ -161,53 +164,30 @@ async function launchBrowser(chromium, headless, startUrl = NOTEBOOKLM_URL) {
   }
 }
 
-/**
- * Start a login. Returns the loginId immediately; poll getLoginStatus(loginId).
- * Options are for tests only.
- */
-export async function startLogin({
-  url = NOTEBOOKLM_URL,
-  hostIs = "notebooklm.google.com",
-  cookieDomain = "google",
-  cookieNames = ["SID", "__Secure-1PSID"],
-  headless = false,
-} = {}) {
-  let chromium;
+async function loadPlaywright() {
   try {
-    ({ chromium } = await import("playwright"));
+    return (await import("playwright")).chromium;
   } catch {
     throw new Error("Playwright is not installed. Run: npm install && npx playwright install chromium");
   }
+}
 
-  const loginId = crypto.randomBytes(18).toString("base64url");
-  const entry = { status: "waiting", at: Date.now() };
-  sessions.set(loginId, entry);
-
-  let launched, browser;
-  try {
-    launched = await launchBrowser(chromium, headless, url);
-    browser = launched.browser;
-  } catch (e) {
-    sessions.delete(loginId);
-    throw new Error(
-      `Could not open a browser: ${e.message.split("\n")[0]}. Install Chrome, or run: npx playwright install chromium`
-    );
-  }
-
+/**
+ * Watches a browser (local Chrome or a Browserbase cloud Chrome) until the user is signed in to Google,
+ * then stores the captured session in `entry` and closes the browser through close().
+ */
+function watchLogin({ entry, browser, close, proc = null, hostIs, url, cookieDomain, cookieNames }) {
   (async () => {
     let closedByUs = false;
+    const windowClosed = () => {
+      if (!closedByUs && entry.status === "waiting") {
+        Object.assign(entry, { status: "error", error: "The login window was closed before sign-in finished" });
+      }
+    };
     try {
       const context = browser.contexts()[0] || (await browser.newContext({ viewport: null }));
-      launched.proc.on("exit", () => {
-        if (!closedByUs && entry.status === "waiting") {
-          Object.assign(entry, { status: "error", error: "The login window was closed before sign-in finished" });
-        }
-      });
-      browser.on("disconnected", () => {
-        if (!closedByUs && entry.status === "waiting") {
-          Object.assign(entry, { status: "error", error: "The login window was closed before sign-in finished" });
-        }
-      });
+      if (proc) proc.on("exit", windowClosed);
+      browser.on("disconnected", windowClosed);
 
       const AUTH_COOKIES = [...cookieNames, "__Secure-3PSID", "SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID"];
       const hostsOf = () => {
@@ -248,10 +228,136 @@ export async function startLogin({
       if (entry.status === "waiting") Object.assign(entry, { status: "error", error: e.message });
     } finally {
       closedByUs = true;
-      await launched.close(); // closes the Google login window for good
-      setTimeout(() => sessions.delete(loginId), 60 * 60 * 1000).unref();
+      await close(); // closes the Google login window / cloud session for good
     }
   })();
+}
 
+const LOGIN_DEFAULTS = {
+  url: NOTEBOOKLM_URL,
+  hostIs: "notebooklm.google.com",
+  cookieDomain: "google",
+  cookieNames: ["SID", "__Secure-1PSID"],
+};
+
+/**
+ * Start a login in Chrome on THIS computer (localhost use). Returns the loginId immediately;
+ * poll getLoginStatus(loginId). Options are for tests only.
+ */
+export async function startLogin(opts = {}) {
+  const { url, hostIs, cookieDomain, cookieNames } = { ...LOGIN_DEFAULTS, ...opts };
+  const headless = Boolean(opts.headless);
+  const chromium = await loadPlaywright();
+
+  const loginId = crypto.randomBytes(18).toString("base64url");
+  const entry = { status: "waiting", at: Date.now() };
+  sessions.set(loginId, entry);
+
+  let launched;
+  try {
+    launched = await launchBrowser(chromium, headless, url);
+  } catch (e) {
+    sessions.delete(loginId);
+    throw new Error(
+      `Could not open a browser: ${e.message.split("\n")[0]}. Install Chrome, or run: npx playwright install chromium`
+    );
+  }
+
+  watchLogin({
+    entry, browser: launched.browser, proc: launched.proc, hostIs, url, cookieDomain, cookieNames,
+    close: async () => {
+      await launched.close();
+      setTimeout(() => sessions.delete(loginId), 60 * 60 * 1000).unref();
+    },
+  });
   return loginId;
+}
+
+// ---------------------------------------------------------------------------
+// Remote login: a Browserbase cloud Chrome shown inside the setup page (works for any visitor)
+// ---------------------------------------------------------------------------
+const BB_API = "https://api.browserbase.com/v1";
+let activeRemote = 0;
+
+export const remoteLoginEnabled = () => Boolean(BROWSERBASE_API_KEY && BROWSERBASE_PROJECT_ID);
+
+async function bb(pathname, body) {
+  const r = await fetch(BB_API + pathname, {
+    method: body ? "POST" : "GET",
+    headers: { "Content-Type": "application/json", "X-BB-API-Key": BROWSERBASE_API_KEY },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await r.text();
+  let data = null;
+  try { data = JSON.parse(text); } catch {}
+  if (!r.ok) {
+    const err = new Error(String(data?.message || text || `HTTP ${r.status}`).slice(0, 200));
+    err.status = r.status;
+    throw err;
+  }
+  return data;
+}
+
+const createBbSession = (proxies) =>
+  bb("/sessions", {
+    projectId: BROWSERBASE_PROJECT_ID,
+    timeout: Math.ceil(LOGIN_TIMEOUT_MS / 1000) + 60, // seconds; the cloud browser dies on its own if we crash
+    ...(proxies ? { proxies: true } : {}),
+    ...(BROWSERBASE_REGION ? { region: BROWSERBASE_REGION } : {}),
+  });
+
+const releaseBbSession = (id) =>
+  bb(`/sessions/${id}`, { projectId: BROWSERBASE_PROJECT_ID, status: "REQUEST_RELEASE" }).catch(() => {});
+
+/**
+ * Start a login in a Browserbase cloud Chrome. Returns { loginId, liveViewUrl }:
+ * show liveViewUrl in an iframe, then poll getLoginStatus(loginId) like the local flow.
+ */
+export async function startRemoteLogin(opts = {}) {
+  if (!remoteLoginEnabled()) throw new Error("Cloud sign-in is not configured (BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID)");
+  if (activeRemote >= BROWSERBASE_MAX_SESSIONS) throw new Error("Sign-in is busy right now. Please try again in a few minutes");
+  const { url, hostIs, cookieDomain, cookieNames } = { ...LOGIN_DEFAULTS, ...opts };
+  const chromium = await loadPlaywright();
+
+  activeRemote++;
+  let session = null, browser = null, liveViewUrl = null;
+  try {
+    try {
+      session = await createBbSession(BROWSERBASE_PROXIES);
+    } catch (e) {
+      // Proxies need a paid plan: fall back to a plain session instead of failing
+      if (BROWSERBASE_PROXIES && [400, 402, 403].includes(e.status)) {
+        console.log(`[notebooklm login] Browserbase refused proxies (${e.message}); retrying without`);
+        session = await createBbSession(false);
+      } else throw e;
+    }
+    const dbg = await bb(`/sessions/${session.id}/debug`);
+    const live = new URL(dbg.debuggerFullscreenUrl || dbg.debuggerUrl);
+    live.searchParams.set("navbar", "false");
+    liveViewUrl = live.toString();
+    browser = await chromium.connectOverCDP(session.connectUrl);
+    const context = browser.contexts()[0] || (await browser.newContext());
+    const page = context.pages()[0] || (await context.newPage());
+    page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
+  } catch (e) {
+    try { await browser?.close(); } catch {}
+    if (session) await releaseBbSession(session.id);
+    activeRemote--;
+    throw new Error(`Could not start the cloud browser: ${e.message}`);
+  }
+
+  const loginId = crypto.randomBytes(18).toString("base64url");
+  const entry = { status: "waiting", at: Date.now() };
+  sessions.set(loginId, entry);
+
+  watchLogin({
+    entry, browser, hostIs, url, cookieDomain, cookieNames,
+    close: async () => {
+      try { await browser.close(); } catch {}
+      await releaseBbSession(session.id);
+      activeRemote--;
+      setTimeout(() => sessions.delete(loginId), 60 * 60 * 1000).unref();
+    },
+  });
+  return { loginId, liveViewUrl };
 }
