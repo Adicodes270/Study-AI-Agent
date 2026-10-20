@@ -402,15 +402,15 @@
                             </div>
                         </div>
 
-                        <!-- Optional Google Email Label for Clarity -->
+                        <!-- Filled in automatically from the Google account that signs in -->
                         <div class="field-group compact">
                             <label for="nlm-account-label" class="field-label">
-                                <span>Your Google Account Email <small>(saved with your Telegram ID)</small></span>
+                                <span>Your Google Account Email <small id="nlm-email-hint">(filled in automatically when you sign in)</small></span>
                             </label>
                             <div class="input-wrapper">
                                 <i class="fa-regular fa-envelope input-prefix-icon"></i>
-                                <input type="email" id="nlm-account-label" class="setup-input"
-                                    placeholder="e.g. yourname@gmail.com">
+                                <input type="email" id="nlm-account-label" class="setup-input" readonly
+                                    placeholder="Appears after you sign in with Google">
                             </div>
                         </div>
 

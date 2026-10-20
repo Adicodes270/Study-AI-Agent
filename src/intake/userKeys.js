@@ -1,8 +1,8 @@
 // src/intake/userKeys.js
 // Gemini API keys, stored per Telegram user id. keys[0] = primary, rest = fallbacks.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { ROOT } from "../config.js";
 import { withDb } from "../db.js";
 
 // Same leniency as the setup page: any 20+ character token without spaces or quotes
@@ -21,30 +21,34 @@ export function inspectStorageState(state, domainPart = "google") {
  * Save everything the setup page collects for one Telegram user.
  * keys: Gemini keys (primary first); notebooklmState: notebooklm-py storage_state object.
  */
-export function saveUserConfig(telegramUserId, { keys = [], notebooklmState = null, email = null } = {}) {
+export async function saveUserConfig(telegramUserId, { keys = [], notebooklmState = null, email = null } = {}) {
   const clean = [...new Set(keys.map((k) => String(k).trim()).filter(isValidKey))];
   const [primary = "", ...fallbacks] = clean;
-  withDb((db) => {
-    db.prepare(
-      "INSERT INTO users (telegram_user_id, gemini_api_key, gemini_fallback_keys) VALUES (?, ?, ?) " +
-        "ON CONFLICT(telegram_user_id) DO NOTHING"
-    ).run(telegramUserId, primary, JSON.stringify(fallbacks));
+  await withDb(async (db) => {
+    await db.run(
+      "INSERT INTO users (telegram_user_id, gemini_api_key, gemini_fallback_keys) VALUES ($1, $2, $3) " +
+        "ON CONFLICT (telegram_user_id) DO NOTHING",
+      [telegramUserId, primary, JSON.stringify(fallbacks)]
+    );
     if (clean.length) {
-      db.prepare(
-        "UPDATE users SET gemini_api_key = ?, gemini_fallback_keys = ?, updated_at = datetime('now') " +
-          "WHERE telegram_user_id = ?"
-      ).run(primary, JSON.stringify(fallbacks), telegramUserId);
+      await db.run(
+        "UPDATE users SET gemini_api_key = $1, gemini_fallback_keys = $2, updated_at = now() " +
+          "WHERE telegram_user_id = $3",
+        [primary, JSON.stringify(fallbacks), telegramUserId]
+      );
     }
     if (email) {
-      db.prepare(
-        "UPDATE users SET google_email = ?, updated_at = datetime('now') WHERE telegram_user_id = ?"
-      ).run(email, telegramUserId);
+      await db.run("UPDATE users SET google_email = $1, updated_at = now() WHERE telegram_user_id = $2", [
+        email,
+        telegramUserId,
+      ]);
     }
     if (notebooklmState) {
-      db.prepare(
-        "UPDATE users SET notebooklm_state = ?, notebooklm_saved_at = datetime('now'), " +
-          "updated_at = datetime('now') WHERE telegram_user_id = ?"
-      ).run(JSON.stringify(notebooklmState), telegramUserId);
+      await db.run(
+        "UPDATE users SET notebooklm_state = $1, notebooklm_saved_at = now(), " +
+          "updated_at = now() WHERE telegram_user_id = $2",
+        [JSON.stringify(notebooklmState), telegramUserId]
+      );
     }
   });
   return { keys: clean.length, session: Boolean(notebooklmState), email: Boolean(email) };
@@ -52,23 +56,24 @@ export function saveUserConfig(telegramUserId, { keys = [], notebooklmState = nu
 
 export const saveUserKeys = (id, keys) => saveUserConfig(id, { keys });
 
-export function getUserProfile(telegramUserId) {
-  return withDb(
-    (db) =>
-      db
-        .prepare("SELECT google_email, (notebooklm_state IS NOT NULL) AS has_session, notebooklm_saved_at FROM users WHERE telegram_user_id = ?")
-        .get(telegramUserId) || null
+export async function getUserProfile(telegramUserId) {
+  return withDb((db) =>
+    db.get(
+      "SELECT google_email, (notebooklm_state IS NOT NULL) AS has_session, notebooklm_saved_at FROM users WHERE telegram_user_id = $1",
+      [telegramUserId]
+    )
   );
 }
 
 export const saveUserKey = (telegramUserId, apiKey) => saveUserKeys(telegramUserId, [apiKey]);
 
 /** All keys for this user, primary first. [] if none. */
-export function getUserKeys(telegramUserId) {
-  return withDb((db) => {
-    const row = db
-      .prepare("SELECT gemini_api_key, gemini_fallback_keys FROM users WHERE telegram_user_id = ?")
-      .get(telegramUserId);
+export async function getUserKeys(telegramUserId) {
+  return withDb(async (db) => {
+    const row = await db.get(
+      "SELECT gemini_api_key, gemini_fallback_keys FROM users WHERE telegram_user_id = $1",
+      [telegramUserId]
+    );
     if (!row) return [];
     let fb = [];
     try { fb = JSON.parse(row.gemini_fallback_keys); } catch {}
@@ -76,19 +81,18 @@ export function getUserKeys(telegramUserId) {
   });
 }
 
-export function deleteUserKey(telegramUserId) {
-  return withDb(
-    (db) => db.prepare("DELETE FROM users WHERE telegram_user_id = ?").run(telegramUserId).changes > 0
-  );
+export async function deleteUserKey(telegramUserId) {
+  return withDb(async (db) => (await db.run("DELETE FROM users WHERE telegram_user_id = $1", [telegramUserId])) > 0);
 }
 
 /**
  * Write this user's saved NotebookLM session to a file notebooklm-py can load
  * (e.g. NotebookLMClient.from_storage(path)). Returns the path, or null if none saved.
+ * Uses the OS temp folder (the only writable place on Vercel).
  */
-export function exportStorageStateFile(telegramUserId, dir = path.join(ROOT, "data", "sessions")) {
-  const row = withDb((db) =>
-    db.prepare("SELECT notebooklm_state FROM users WHERE telegram_user_id = ?").get(telegramUserId)
+export async function exportStorageStateFile(telegramUserId, dir = path.join(os.tmpdir(), "study-agent-sessions")) {
+  const row = await withDb((db) =>
+    db.get("SELECT notebooklm_state FROM users WHERE telegram_user_id = $1", [telegramUserId])
   );
   if (!row?.notebooklm_state) return null;
   fs.mkdirSync(dir, { recursive: true });

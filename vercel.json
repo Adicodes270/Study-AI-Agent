@@ -1,8 +1,6 @@
 {
+  "cleanUrls": true,
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/$1" },
-    { "source": "/(.*)", "destination": "http://localhost:3000/$1" }
-  ],
-  "cleanUrls": true
-  
+    { "source": "/api/:path*", "destination": "https://YOUR-APP.up.railway.app/api/:path*" }
+  ]
 }

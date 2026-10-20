@@ -1,9 +1,9 @@
-// src/main.js
+// src/main.js  (this is what `npm start` runs, locally and on Railway)
 import { runBot } from "./intake/telegramBot.js";
 import { startWebServer } from "./webServer.js";
 
-// 1. Start the website on http://localhost:3000
-startWebServer(3000);
+// Railway provides PORT; locally we use 3001
+const port = Number(process.env.PORT) || 3001;
 
-// 2. Start the Telegram bot polling
-runBot();
+await startWebServer(port);
+await runBot(); // Telegram bot (polling)

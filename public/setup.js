@@ -6,8 +6,7 @@
 (() => {
   const STORAGE_KEY = 'study_agent_config';
 
-  // Official Study Agent Telegram Bot Token (pre-configured so users never touch @BotFather)
-  const STUDY_AGENT_BOT_TOKEN = '8996972210:AAFBTLXZInc-yZVvVUMPwU9919_Gds-B2SQ';
+  // The bot token lives on the server only; this page talks to /api/telegram/* instead.
   const STUDY_AGENT_WEB_LINK = 'https://web.telegram.org/a/#8996972210';
 
   const defaultState = () => ({
@@ -17,7 +16,6 @@
       { id: cryptoId(), label: 'Primary Key', key: '', verified: false, lastChecked: null }
     ],
     telegram: {
-      botToken: STUDY_AGENT_BOT_TOKEN,
       botUsername: '',
       botName: 'Study Agent Bot',
       pairingCode: 'SA-' + Math.floor(1000 + Math.random() * 9000),
@@ -57,7 +55,6 @@
         telegram: {
           ...def.telegram,
           ...(parsed.telegram || {}),
-          botToken: STUDY_AGENT_BOT_TOKEN,
           pairingCode: parsed.telegram?.pairingCode || def.telegram.pairingCode
         },
         notebooklm: { ...def.notebooklm, ...(parsed.notebooklm || {}) }
@@ -377,7 +374,7 @@
       pairingCodeEl.textContent = `/start ${state.telegram.pairingCode}`;
     }
     try {
-      const res = await fetch(`https://api.telegram.org/bot${STUDY_AGENT_BOT_TOKEN}/getMe`);
+      const res = await fetch('/api/telegram/bot');
       const data = await res.json();
       if (data && data.ok && data.result) {
         state.telegram.botUsername = data.result.username || '';
@@ -441,53 +438,28 @@
 
   async function pollTelegramUpdatesOnce() {
     try {
-      const res = await fetch(`https://api.telegram.org/bot${STUDY_AGENT_BOT_TOKEN}/getUpdates?limit=25&allowed_updates=["message"]`);
+      // The bot records the chat that sent our pairing code; we just ask the server for it
+      const res = await fetch(`/api/telegram/pairing/${encodeURIComponent(state.telegram.pairingCode)}`);
       const data = await res.json();
-      if (data && data.ok && Array.isArray(data.result) && data.result.length > 0) {
-        // First pass: check if any message contains the user's session pairing code
-        const code = state.telegram.pairingCode;
-        let matchedMsg = null;
+      if (data && data.found && data.chat_id) {
+        const newChatId = String(data.chat_id);
+        const firstName = data.first_name || 'Student';
 
-        for (let i = data.result.length - 1; i >= 0; i--) {
-          const m = data.result[i].message || data.result[i].edited_message;
-          if (m && m.chat && m.chat.id && typeof m.text === 'string' && m.text.includes(code)) {
-            matchedMsg = m;
-            break;
-          }
-        }
+        state.telegram.chatId = newChatId;
+        state.telegram.userId = String(data.user_id || newChatId);
+        state.telegram.chatFirstName = firstName;
+        state.telegram.chatUsername = data.username || '';
+        state.telegram.verified = true;
+        state.telegram.updatedAt = new Date().toISOString();
 
-        // Second pass: fall back to the most recent message sent to the bot
-        if (!matchedMsg) {
-          for (let i = data.result.length - 1; i >= 0; i--) {
-            const m = data.result[i].message || data.result[i].edited_message || data.result[i].my_chat_member;
-            if (m && m.chat && m.chat.id) {
-              matchedMsg = m;
-              break;
-            }
-          }
-        }
+        stopTelegramPolling();
+        saveState(true);
+        syncTelegramInputsFromState();
+        showToast(`Detected ${firstName} (Chat ID: ${newChatId})!`, 'fa-brands fa-telegram');
 
-        if (matchedMsg) {
-          const newChatId = String(matchedMsg.chat.id);
-          const firstName = matchedMsg.chat.first_name || matchedMsg.from?.first_name || 'Student';
-          const username = matchedMsg.chat.username || matchedMsg.from?.username || '';
-
-          state.telegram.chatId = newChatId;
-          state.telegram.userId = String(matchedMsg.from?.id || newChatId);
-          state.telegram.chatFirstName = firstName;
-          state.telegram.chatUsername = username;
-          state.telegram.verified = true;
-          state.telegram.updatedAt = new Date().toISOString();
-
-          stopTelegramPolling();
-          saveState(true);
-          syncTelegramInputsFromState();
-          showToast(`Detected ${firstName} (Chat ID: ${newChatId})!`, 'fa-brands fa-telegram');
-
-          // Automatically send a confirmation welcome message to their Telegram
-          sendWelcomeTelegramPing(newChatId, firstName, true);
-          return true;
-        }
+        // Automatically send a confirmation welcome message to their Telegram
+        sendWelcomeTelegramPing(newChatId, firstName, true);
+        return true;
       }
     } catch (e) {}
     return false;
@@ -524,21 +496,17 @@
 
   async function sendWelcomeTelegramPing(chatId, firstName = 'there', silentError = false) {
     try {
-      const res = await fetch(`https://api.telegram.org/bot${STUDY_AGENT_BOT_TOKEN}/sendMessage`, {
+      const res = await fetch('/api/telegram/welcome', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text: `🎉 *Hey ${firstName}! Study Agent is linked!*\n\nYour Chat ID (\`${chatId}\`) is now paired with your browser workspace. Send me any PDF, lecture topic, or quiz request anytime!`,
-          parse_mode: 'Markdown'
-        })
+        body: JSON.stringify({ code: state.telegram.pairingCode })
       });
       const data = await res.json();
-      if (data && data.ok) {
+      if (res.ok && data && data.ok) {
         if (!silentError) showToast('Sent test message to your Telegram!', 'fa-regular fa-paper-plane');
         return true;
       } else if (!silentError) {
-        showToast(data?.description || 'Press Start inside the Study Agent bot first!', 'fa-solid fa-circle-exclamation');
+        showToast(data?.error || 'Press Start inside the Study Agent bot first!', 'fa-solid fa-circle-exclamation');
       }
     } catch (e) {
       if (!silentError) showToast('Could not reach Telegram API—check your internet connection', 'fa-solid fa-circle-exclamation');
@@ -572,6 +540,14 @@
   function syncNotebookLMUI() {
     if (nlmBackendInput) nlmBackendInput.value = state.notebooklm.backendUrl || 'http://localhost:8000';
     if (nlmEmailInput) nlmEmailInput.value = state.notebooklm.accountEmail || '';
+    if (nlmEmailInput) {
+      // Locked while it comes from Google; opens for typing only if Google's email could not be read
+      nlmEmailInput.readOnly = !state.notebooklm.emailManual;
+      const hint = $id('nlm-email-hint');
+      if (hint) hint.textContent = state.notebooklm.emailManual
+        ? "(couldn't be read automatically, please type it)"
+        : '(filled in automatically when you sign in)';
+    }
 
     const s1 = $id('nlm-stage-1');
     const s2 = $id('nlm-stage-2');
@@ -615,9 +591,9 @@
       }
       if (headline) headline.textContent = 'Waiting for you to sign in...';
       if (subtext) {
-        subtext.innerHTML = 'Sign in to your Google account in the window that just opened on this computer. It closes by itself as soon as you reach NotebookLM.';
+        subtext.innerHTML = 'Sign in to your Google account in the window that just opened on this computer. It closes by itself once you are signed in. If it stays open after you reach NotebookLM, press <b>I\'ve Signed In — Confirm</b>.';
       }
-      if (confirmPopupBtn) confirmPopupBtn.hidden = true;
+      if (confirmPopupBtn) confirmPopupBtn.hidden = false;
     } else {
       s1?.classList.add('is-current');
       s1?.classList.remove('is-done');
@@ -686,6 +662,13 @@
     state.notebooklm.status = 'pending';
     syncNotebookLMUI();
     showToast('A Google login window opened. Sign in there and it will close by itself', 'fa-brands fa-google');
+    if (confirmPopupBtn) {
+      confirmPopupBtn.hidden = false;
+      confirmPopupBtn.onclick = () => {
+        fetch(`/api/notebooklm/login/${loginId}/confirm`, { method: 'POST' }).catch(() => {});
+        showToast('Checking your Google sign-in...', 'fa-brands fa-google');
+      };
+    }
 
     let attempts = 0;
     nlmPollTimer = setInterval(async () => {
@@ -694,7 +677,10 @@
         const r = await fetch(`/api/notebooklm/login/${loginId}`).then((x) => x.json());
         if (r.status === 'done') {
           pendingLoginId = loginId;
-          markNotebookLMConnected('notebooklm_login', state.notebooklm.accountEmail);
+          // Use the email of the Google account that just signed in; ask for it only if it couldn't be read
+          state.notebooklm.emailManual = !r.email;
+          if (r.email) state.notebooklm.accountEmail = r.email;
+          markNotebookLMConnected('notebooklm_login', r.email || state.notebooklm.accountEmail);
           showToast('Google account linked. Press Save Configuration to store it', 'fa-solid fa-circle-check');
           return;
         }
@@ -810,7 +796,6 @@
       saved_at: state.updatedAt || new Date().toISOString(),
       gemini_api_keys: validKeys,
       telegram_config: {
-        bot_token: STUDY_AGENT_BOT_TOKEN,
         bot_username: state.telegram.botUsername || null,
         chat_id: state.telegram.chatId.trim(),
         chat_user: state.telegram.chatUsername || state.telegram.chatFirstName || null,
@@ -835,7 +820,6 @@
       '# Study Agent Configuration (.env)',
       `GEMINI_API_KEY="${primaryKey}"`,
       `GEMINI_FALLBACK_KEYS="${keysCsv}"`,
-      `TELEGRAM_BOT_TOKEN="${STUDY_AGENT_BOT_TOKEN}"`,
       `TELEGRAM_CHAT_ID="${payload.telegram_config.chat_id}"`,
       `NOTEBOOKLM_ACCOUNT_EMAIL="${payload.notebooklm_auth.account_email || ''}"`,
       `NOTEBOOKLM_SESSION_READY="${payload.notebooklm_auth.session_ready}"`

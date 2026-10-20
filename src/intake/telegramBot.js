@@ -2,7 +2,7 @@
 import { Bot, HttpError } from "grammy";
 
 import { GEMINI_API_KEY, GEMINI_MODEL, TELEGRAM_BOT_TOKEN } from "../config.js";
-import { initDb } from "../db.js";
+import { initDb, withDb } from "../db.js";
 import { saveSyllabus } from "./storage.js";
 import { deleteUserKey, getUserKeys, isValidKey, saveUserKey } from "./userKeys.js";
 import { parseSyllabus, parseSyllabusPdf } from "./syllabusParser.js";
@@ -40,12 +40,12 @@ async function setKey(ctx) {
     await ctx.reply("That doesn't look like a Gemini key . Usage: /setkey YOUR_KEY");
     return;
   }
-  saveUserKey(ctx.from.id, key);
+  await saveUserKey(ctx.from.id, key);
   await ctx.reply("Saved your Gemini key. I deleted your message so the key isn't left in the chat. Now send your syllabus!");
 }
 
 async function removeKey(ctx) {
-  const removed = deleteUserKey(ctx.from.id);
+  const removed = await deleteUserKey(ctx.from.id);
   await ctx.reply(removed ? "Your Gemini key has been deleted." : "You don't have a saved key.");
 }
 
@@ -59,7 +59,7 @@ async function processSyllabus(ctx, parseFn, payload, hintText) {
   }
 
   // The key belongs to the Telegram user (ctx.from.id), falling back to the .env key
-  const apiKey = getUserKeys(ctx.from.id);
+  const apiKey = await getUserKeys(ctx.from.id);
   if (!apiKey.length && !GEMINI_API_KEY) {
     console.log(`No Gemini key for user ${ctx.from.id}`);
     await ctx.reply("I need your Gemini API key first. Add it on the setup page, or in a private chat with me send:\n/setkey YOUR_KEY");
@@ -90,7 +90,7 @@ async function processSyllabus(ctx, parseFn, payload, hintText) {
     return;
   }
 
-  const results = saveSyllabus(ctx.chat.id, syllabus);
+  const results = await saveSyllabus(ctx.chat.id, syllabus);
 
   const labels = {
     added: "added",
@@ -156,10 +156,34 @@ function onError(err) {
   console.log(`Unexpected error: ${error}`);
 }
 
-export async function runBot() {
-  initDb();
-  const bot = new Bot(TELEGRAM_BOT_TOKEN);
+// Setup page pairing: if a message contains a code like SA-1234, remember which chat sent it,
+// so the website can look it up (the browser never needs the bot token)
+const PAIR_RE = /\bSA-\d{4}\b/;
+async function recordPairing(ctx, next) {
+  const text = ctx.message?.text || ctx.message?.caption || "";
+  const m = text.match(PAIR_RE);
+  if (m && ctx.chat && ctx.chat.type === "private") {
+    try {
+      await withDb((db) =>
+        db.run(
+          "INSERT INTO pairings (code, chat_id, user_id, first_name, username, created_at) " +
+            "VALUES ($1, $2, $3, $4, $5, now()) " +
+            "ON CONFLICT (code) DO UPDATE SET chat_id = EXCLUDED.chat_id, user_id = EXCLUDED.user_id, " +
+            "first_name = EXCLUDED.first_name, username = EXCLUDED.username, created_at = now()",
+          [m[0], ctx.chat.id, ctx.from?.id ?? ctx.chat.id, ctx.chat.first_name || ctx.from?.first_name || null, ctx.chat.username || ctx.from?.username || null]
+        )
+      );
+    } catch (e) {
+      console.log(`Pairing save failed: ${e.message}`);
+    }
+  }
+  await next();
+}
 
+/** Builds the bot with all handlers. Used by both the Vercel webhook and local polling. */
+export function buildBot() {
+  const bot = new Bot(TELEGRAM_BOT_TOKEN);
+  bot.use(recordPairing);
   bot.command("start", start);
   bot.command("setkey", setKey);
   bot.command("removekey", removeKey);
@@ -168,12 +192,22 @@ export async function runBot() {
   );
   bot.on("message:text", handleText);
   bot.catch(onError);
+  return bot;
+}
+
+/** Local development only: long polling. On Vercel the webhook (api/bot.js) is used instead. */
+export async function runBot() {
+  await initDb();
+  const bot = buildBot();
+
+  // Polling and a webhook can't run together, so clear any webhook first
+  await bot.api.deleteWebhook().catch(() => {});
 
   const stop = () => bot.stop();
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
 
-  console.log(`Bot is running with Gemini model: ${GEMINI_MODEL}. Press Ctrl+C to stop.`);
+  console.log(`Bot is running (polling) with Gemini model: ${GEMINI_MODEL}. Press Ctrl+C to stop.`);
 
   // keep retrying if the connection drops while polling (like bootstrap_retries=-1)
   let stopping = false;
