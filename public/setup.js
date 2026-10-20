@@ -3,11 +3,13 @@
 // Built-in Telegram Bot + Gemini Multi-Key Fallback + NotebookLM Popup/Bridge Auth
 // ==========================================================================
 
+import dotenv from "dotenv";
+
 (() => {
   const STORAGE_KEY = 'study_agent_config';
 
   // Official Study Agent Telegram Bot Token (pre-configured so users never touch @BotFather)
-  const STUDY_AGENT_BOT_TOKEN = '8996972210:AAFBTLXZInc-yZVvVUMPwU9919_Gds-B2SQ';
+  const STUDY_AGENT_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ;
   const STUDY_AGENT_WEB_LINK = 'https://web.telegram.org/a/#8996972210';
 
   const defaultState = () => ({
