@@ -658,7 +658,6 @@ html.lenis body {
   display: grid;
   gap: 0.35rem;
   margin-top: 1.75rem;
-  counter-reset: s;
 }
 
 .step {
@@ -679,8 +678,7 @@ html.lenis body {
 }
 
 .step b::before {
-  counter-increment: s;
-  content: counter(s);
+  content: attr(data-n);
   display: inline-grid;
   place-items: center;
   width: 1.5rem;

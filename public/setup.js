@@ -998,3 +998,162 @@
   updateReadinessUI();
   updatePayloadInspector();
 })();
+
+// ==========================================================================
+// GSAP MOTION (hero intro, scroll reveals, small action responses)
+// ==========================================================================
+(() => {
+  if (!window.gsap) return;
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+  const hasST = !!window.ScrollTrigger;
+  if (hasST) gsap.registerPlugin(ScrollTrigger);
+
+  const EASE = 'power3.out';
+  const CLEAR = 'transform,opacity'; // hand control back to the CSS hover states afterwards
+  const $ = (sel, root = document) => root.querySelector(sel);
+  const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+
+  // Split a plain-text heading into masked words so they can slide up one by one
+  function splitWords(el) {
+    const text = el.textContent.trim();
+    el.setAttribute('aria-label', text);
+    el.textContent = '';
+    const inners = [];
+    const words = text.split(/\s+/);
+    words.forEach((w, i) => {
+      const mask = document.createElement('span');
+      mask.setAttribute('aria-hidden', 'true');
+      mask.style.cssText = 'display:inline-block;overflow:hidden;vertical-align:top;padding-bottom:.14em;margin-bottom:-.14em';
+      const inner = document.createElement('span');
+      inner.style.display = 'inline-block';
+      inner.textContent = w;
+      mask.appendChild(inner);
+      el.appendChild(mask);
+      if (i < words.length - 1) el.appendChild(document.createTextNode(' '));
+      inners.push(inner);
+    });
+    return inners;
+  }
+
+  // ------------------------------------------------------------------------
+  // 1. Hero intro (the one orchestrated moment)
+  // ------------------------------------------------------------------------
+  const title = $('.setup-hero h1');
+  const words = title ? splitWords(title) : [];
+
+  const intro = gsap.timeline({ defaults: { ease: EASE } });
+  intro
+    .from('.setup-badge', { y: 14, opacity: 0, duration: 0.6, clearProps: CLEAR })
+    .from(words, { yPercent: 110, duration: 0.85, stagger: 0.06, ease: 'power4.out' }, '-=0.3')
+    .from('.setup-hero .hero-sub', { y: 18, opacity: 0, duration: 0.7, clearProps: CLEAR }, '-=0.5')
+    .from('.setup-progress-card', { y: 28, opacity: 0, duration: 0.8, clearProps: CLEAR }, '-=0.45')
+    .from('.progress-pill', { y: 14, opacity: 0, duration: 0.5, stagger: 0.09, clearProps: CLEAR }, '-=0.45');
+
+  // ------------------------------------------------------------------------
+  // 2. Steps: heading first, then each card as it comes into view
+  // ------------------------------------------------------------------------
+  if (hasST) {
+    $$('.setup-step').forEach((step) => {
+      const head = $$('.step-badge-row, .step-header h2, .step-header .lead', step);
+      gsap.from(head, {
+        y: 22, opacity: 0, duration: 0.7, ease: EASE, stagger: 0.09, clearProps: CLEAR,
+        scrollTrigger: { trigger: step, start: 'top 82%', once: true }
+      });
+
+      // per card, so a card further down the page animates when you reach it
+      $$('.setup-grid > .bento-card', step).forEach((card) => {
+        const inner = $$(
+          '.guide-steps li, .keys-actions-bar .btn, .pairing-cta-grid .btn, ' +
+          '.nlm-buttons-row .btn, .guide-tip, .guide-mini-win',
+          card
+        ).filter((el) => !el.hidden);
+
+        const tl = gsap.timeline({
+          defaults: { ease: EASE },
+          scrollTrigger: { trigger: card, start: 'top 88%', once: true }
+        });
+        tl.from(card, { y: 36, opacity: 0, duration: 0.8, clearProps: CLEAR });
+        if (inner.length) {
+          tl.from(inner, { y: 12, opacity: 0, duration: 0.5, stagger: 0.07, clearProps: CLEAR }, '-=0.45');
+        }
+      });
+    });
+
+    // Final save card
+    const finish = $('.setup-finish-card');
+    if (finish) {
+      gsap.from($$('.chip, h2, .btn', finish), {
+        y: 18, opacity: 0, duration: 0.65, ease: EASE, stagger: 0.09, clearProps: CLEAR,
+        scrollTrigger: { trigger: finish, start: 'top 85%', once: true }
+      });
+    }
+
+    // Layout shifts (fonts, content-visibility) can move trigger points
+    window.addEventListener('load', () => ScrollTrigger.refresh());
+  }
+
+  // ------------------------------------------------------------------------
+  // 3. Responses to what the person does
+  // ------------------------------------------------------------------------
+
+  // Button press: a quick squeeze, then back to whatever the CSS says
+  const PRESSABLE = '.btn, .copy-pill, .icon-btn, .tab-pill';
+  let pressed = null;
+  const release = () => {
+    if (!pressed) return;
+    const el = pressed;
+    pressed = null;
+    gsap.to(el, { scale: 1, duration: 0.25, ease: 'back.out(2.2)', clearProps: 'transform' });
+  };
+  document.addEventListener('pointerdown', (e) => {
+    const el = e.target.closest(PRESSABLE);
+    if (!el || el.disabled) return;
+    pressed = el;
+    gsap.to(el, { scale: 0.96, duration: 0.12, ease: 'power2.out' });
+  });
+  document.addEventListener('pointerup', release);
+  document.addEventListener('pointercancel', release);
+  document.addEventListener('pointerleave', release);
+
+  // A new fallback key slot slides in (only when one is added, not on reorder/remove)
+  const keysList = $('#gemini-keys-list');
+  if (keysList) {
+    let count = keysList.children.length;
+    new MutationObserver(() => {
+      const next = keysList.children.length;
+      if (next > count) {
+        gsap.from(keysList.lastElementChild, {
+          y: 16, opacity: 0, scale: 0.98, duration: 0.45, ease: EASE, clearProps: 'transform,opacity'
+        });
+      }
+      count = next;
+    }).observe(keysList, { childList: true });
+  }
+
+  // Panels that appear when something starts (listening for Telegram, connected, cloud sign-in)
+  ['autodetect-listening-panel', 'telegram-connected-pill', 'nlm-live-panel'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    let wasHidden = el.hidden;
+    new MutationObserver(() => {
+      if (wasHidden && !el.hidden) {
+        gsap.from(el, { y: -10, opacity: 0, duration: 0.45, ease: EASE, clearProps: 'transform,opacity' });
+      }
+      wasHidden = el.hidden;
+    }).observe(el, { attributes: true, attributeFilter: ['hidden'] });
+  });
+
+  // A readiness pill pops its icon when its step becomes complete
+  $$('.progress-pill').forEach((pill) => {
+    let done = pill.classList.contains('is-complete');
+    new MutationObserver(() => {
+      const nowDone = pill.classList.contains('is-complete');
+      if (nowDone && !done) {
+        const icon = $('.pill-icon', pill);
+        if (icon) gsap.fromTo(icon, { scale: 0.3 }, { scale: 1, duration: 0.5, ease: 'back.out(3)', clearProps: 'transform' });
+      }
+      done = nowDone;
+    }).observe(pill, { attributes: true, attributeFilter: ['class'] });
+  });
+})();

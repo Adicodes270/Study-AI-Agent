@@ -563,9 +563,11 @@
   0% {
     box-shadow: 0 0 0 0 hsla(190, 95%, 52%, 0.7);
   }
+
   70% {
     box-shadow: 0 0 0 10px hsla(190, 95%, 52%, 0);
   }
+
   100% {
     box-shadow: 0 0 0 0 hsla(190, 95%, 52%, 0);
   }
@@ -967,6 +969,7 @@ code {
     opacity: 0;
     transform: translateY(10px);
   }
+
   to {
     opacity: 1;
     transform: none;
@@ -1004,29 +1007,77 @@ code {
     display: none;
   }
 }
+
 /* Cloud browser live view for the NotebookLM sign-in */
-.nlm-live-panel { margin-top: 16px; border: 1px solid rgba(255,255,255,.12); border-radius: 14px; overflow: hidden; background: #0b0d12; }
-.nlm-live-panel iframe { display: block; width: 100%; height: 640px; border: 0; }
-@media (max-width: 640px) { .nlm-live-panel iframe { height: 520px; } }
+.nlm-live-panel {
+  margin-top: 16px;
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 14px;
+  overflow: hidden;
+  background: #0b0d12;
+}
+
+.nlm-live-panel iframe {
+  display: block;
+  width: 100%;
+  height: 640px;
+  border: 0;
+}
+
+@media (max-width: 640px) {
+  .nlm-live-panel iframe {
+    height: 520px;
+  }
+}
 
 /* ==========================================================================
    Performance mode (body.perf-lite): this page is mostly form inputs, so the
    costly full-screen effects are replaced with cheap static equivalents.
    ========================================================================== */
-.perf-lite::after { display: none; }                       /* film grain (feTurbulence over the whole page) */
-.perf-lite .bg-fx { contain: strict; }
-.perf-lite .bg-strips { display: none; }                   /* masked, animated, blurred sweep */
-.perf-lite .orb {                                          /* 110px blur filter -> plain radial gradient */
+.perf-lite::after {
+  display: none;
+}
+
+/* film grain (feTurbulence over the whole page) */
+.perf-lite .bg-fx {
+  contain: strict;
+}
+
+.perf-lite .bg-strips {
+  display: none;
+}
+
+/* masked, animated, blurred sweep */
+.perf-lite .orb {
+  /* 110px blur filter -> plain radial gradient */
   filter: none;
   background: radial-gradient(circle closest-side, var(--orb-primary), transparent) !important;
   opacity: 0.55;
 }
+
 .perf-lite .header,
-.perf-lite .nav { backdrop-filter: none; -webkit-backdrop-filter: none; }
-.perf-lite .header { background: color-mix(in srgb, var(--bg-primary) 88%, transparent); }
-.perf-lite .btn-solid::before { animation: none; }         /* endless halo animation */
-.perf-lite .bento-card::before { display: none; }          /* cursor spotlight layer */
-.perf-lite .bento-card { box-shadow: none; }
+.perf-lite .nav {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.perf-lite .header {
+  background: color-mix(in srgb, var(--bg-primary) 88%, transparent);
+}
+
+.perf-lite .btn-solid::before {
+  animation: none;
+}
+
+/* endless halo animation */
+.perf-lite .bento-card::before {
+  display: none;
+}
+
+/* cursor spotlight layer */
+.perf-lite .bento-card {
+  box-shadow: none;
+}
 
 /* Skip layout/paint for sections that are off-screen */
 .perf-lite .setup-step,
@@ -1034,6 +1085,12 @@ code {
   content-visibility: auto;
   contain-intrinsic-size: auto 700px;
 }
+
 /* .reveal fade-ins use a transform already; keep them on the compositor */
-.perf-lite .reveal { will-change: opacity, transform; }
-html { scroll-behavior: auto; }
+.perf-lite .reveal {
+  will-change: opacity, transform;
+}
+
+html {
+  scroll-behavior: auto;
+}
