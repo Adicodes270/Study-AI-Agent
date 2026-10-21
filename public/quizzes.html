@@ -55,7 +55,7 @@
             <a class="btn btn-solid" href="setup.html"><i class="fa-solid fa-gear" aria-hidden="true"></i> Go to Setup</a>
         </section>
 
-        <!-- Step B: upload syllabus / NCERT chapter PDF via Telegram or computer -->
+        <!-- Step B: upload syllabus / NCERT chapter PDF via Telegram or computer ("New Quiz" flow) -->
         <section class="qz-card qz-gate" id="view-gate" hidden>
             <div class="qz-gate-top" id="gate-back-row" hidden>
                 <button class="qz-link" type="button" id="gate-back-btn">
@@ -77,6 +77,35 @@
                 <button class="btn btn-ghost" type="button" id="refresh-btn">
                     <i class="fa-solid fa-rotate" aria-hidden="true"></i> Refresh Syllabus</button>
             </div>
+
+            <!-- Question Count Selector inside New Quiz (AI analyzes chapter & sets default >= 10, max 50) -->
+            <div class="qz-qcount-config" id="gate-qcount-box">
+                <div class="qz-qcount-config-head">
+                    <div>
+                        <label class="qz-qcount-config-title" for="gate-qcount-input">
+                            <i class="fa-solid fa-list-ol" aria-hidden="true"></i> Questions for this Quiz
+                        </label>
+                        <p class="qz-qcount-config-sub" id="gate-qcount-note">
+                            AI analyzes your chapter and sets a recommended default (min 10, max 50). You can edit it anytime.
+                        </p>
+                    </div>
+                    <span class="chip ok" id="gate-ai-qcount-badge">AI Default (Min 10 · Max 50)</span>
+                </div>
+                <div class="qz-qcount-controls">
+                    <input type="range" id="gate-qcount-range" min="1" max="50" value="12" aria-label="Question count slider">
+                    <input type="number" id="gate-qcount-input" class="qz-qcount-num" min="1" max="50" value="12">
+                    <span class="qz-qcount-unit">questions</span>
+                </div>
+                <div class="qz-qcount-presets">
+                    <button type="button" class="qz-preset-pill" data-qpreset="ai" id="gate-qcount-ai-btn">AI Recommended</button>
+                    <button type="button" class="qz-preset-pill" data-qpreset="10">10</button>
+                    <button type="button" class="qz-preset-pill" data-qpreset="15">15</button>
+                    <button type="button" class="qz-preset-pill" data-qpreset="20">20</button>
+                    <button type="button" class="qz-preset-pill" data-qpreset="30">30</button>
+                    <button type="button" class="qz-preset-pill" data-qpreset="50">50 (Max)</button>
+                </div>
+            </div>
+
             <div class="qz-or" aria-hidden="true"><span>or upload from your computer</span></div>
             <div class="qz-upload" id="syl-upload">
                 <input type="file" id="syl-file" accept="application/pdf,.pdf" hidden>
@@ -93,6 +122,19 @@
                     <button class="btn btn-solid" type="button" id="syl-text-send">Read pasted text</button>
                 </div>
                 <p class="qz-upload-status" id="syl-status" role="status" aria-live="polite" hidden></p>
+
+                <!-- Shown after New Quiz chapter upload so user can confirm/edit the AI-analyzed question count & launch immediately -->
+                <div class="qz-gate-ready" id="gate-ready-box" hidden>
+                    <p class="qz-gate-ready-title" id="gate-ready-title"></p>
+                    <div class="qz-cta-row">
+                        <button class="btn btn-solid" type="button" id="gate-start-quiz-btn">
+                            <i class="fa-solid fa-bolt" aria-hidden="true"></i> <span id="gate-start-quiz-label">Start Quiz Now</span>
+                        </button>
+                        <button class="btn btn-ghost" type="button" id="gate-view-chapters-btn">
+                            <i class="fa-solid fa-table-Cells-large" aria-hidden="true"></i> Go to Chapters
+                        </button>
+                    </div>
+                </div>
             </div>
             <p class="qz-poll"><span class="qz-pulse" aria-hidden="true"></span> Checking for your chapters every 5 seconds…</p>
         </section>
@@ -107,15 +149,48 @@
             <div class="qz-head">
                 <div>
                     <h1>Your Chapters</h1>
-                    <p class="qz-sub">Pick a chapter to take a quiz. Hover a chapter you've attempted to see what to revise.</p>
+                    <p class="qz-sub">Pick a chapter to take a quiz, requiz with new questions, or review your answers.</p>
                 </div>
                 <div class="qz-head-actions">
+                    <button class="btn btn-ghost qz-small" type="button" id="top-qcount-btn" aria-expanded="false" aria-controls="top-qcount-panel" title="Set default number of questions for every chapter (max 50)">
+                        <i class="fa-solid fa-sliders" aria-hidden="true"></i>
+                        <span id="top-qcount-btn-label">Questions: AI Auto (10–50)</span>
+                    </button>
                     <button class="btn btn-solid qz-small" type="button" id="new-quiz-btn">
                         <i class="fa-solid fa-plus" aria-hidden="true"></i> New Quiz</button>
                     <button class="btn btn-ghost qz-small" type="button" id="refresh-chapters-btn">
                         <i class="fa-solid fa-rotate" aria-hidden="true"></i> Refresh</button>
                 </div>
             </div>
+
+            <!-- Collapsible Top Question-Count Settings Panel (Default for Every Chapter, Max 50) -->
+            <div class="qz-top-qcount-panel" id="top-qcount-panel" hidden>
+                <div class="qz-qcount-config-head">
+                    <div>
+                        <strong>Default Questions per Chapter (Max 50)</strong>
+                        <p class="qz-qcount-config-sub">
+                            Set how many questions the AI generates by default for every chapter, or use <b>AI Auto</b> (analyzes each chapter, min 10 – max 50).
+                        </p>
+                    </div>
+                    <button type="button" class="qz-link" id="top-qcount-close">Close ✕</button>
+                </div>
+                <div class="qz-qcount-controls">
+                    <input type="range" id="top-qcount-range" min="1" max="50" value="15" aria-label="Default question count slider">
+                    <input type="number" id="top-qcount-input" class="qz-qcount-num" min="1" max="50" value="15">
+                    <span class="qz-qcount-unit">questions</span>
+                    <button type="button" class="btn btn-solid qz-small" id="top-qcount-apply-btn">Apply Default</button>
+                    <button type="button" class="btn btn-ghost qz-small" id="top-qcount-auto-btn">Use AI Auto (10–50)</button>
+                </div>
+                <div class="qz-qcount-presets">
+                    <button type="button" class="qz-preset-pill" data-toppreset="auto">AI Auto (10–50)</button>
+                    <button type="button" class="qz-preset-pill" data-toppreset="10">10</button>
+                    <button type="button" class="qz-preset-pill" data-toppreset="15">15</button>
+                    <button type="button" class="qz-preset-pill" data-toppreset="20">20</button>
+                    <button type="button" class="qz-preset-pill" data-toppreset="30">30</button>
+                    <button type="button" class="qz-preset-pill" data-toppreset="50">50 (Max)</button>
+                </div>
+            </div>
+
             <div class="qz-tabs" id="subject-tabs" role="tablist" aria-label="Filter by subject"></div>
             <div id="subject-sections"></div>
         </section>
@@ -165,17 +240,24 @@
             </div>
         </section>
 
-        <!-- Completion -->
+        <!-- Completion & Answer Review Screen -->
         <section class="qz-card qz-done" id="view-done" hidden aria-live="polite">
             <div class="qz-ring-wrap"><div class="qz-ring" id="done-ring"></div><span class="qz-ring-label" id="done-pct"></span></div>
             <h2 id="done-title">Quiz complete</h2>
             <p class="qz-done-score" id="done-score"></p>
             <p class="qz-tier" id="done-tier"></p>
             <p class="qz-weak" id="done-weak" hidden></p>
-            <p class="qz-poll" id="done-redirect"></p>
+            <p class="qz-poll" id="done-redirect" hidden></p>
             <div class="qz-cta-row">
-                <button class="btn btn-solid" type="button" id="done-back-btn"><i class="fa-solid fa-list" aria-hidden="true"></i> Back to chapters</button>
-                <button class="btn btn-ghost" type="button" id="done-review-btn"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i> Review answers</button>
+                <button class="btn btn-solid" type="button" id="done-review-btn">
+                    <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i> <span id="done-review-btn-label">Review answers</span>
+                </button>
+                <button class="btn btn-ghost" type="button" id="done-requiz-btn">
+                    <i class="fa-solid fa-rotate-right" aria-hidden="true"></i> Requiz (New Questions)
+                </button>
+                <button class="btn btn-ghost" type="button" id="done-back-btn">
+                    <i class="fa-solid fa-list" aria-hidden="true"></i> Back to chapters
+                </button>
             </div>
             <div class="qz-review" id="done-review" hidden></div>
         </section>

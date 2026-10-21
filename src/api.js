@@ -12,6 +12,7 @@ import {
   getChapterResource,
   getChaptersWithResources,
   getChaptersWithResults,
+  getLastQuizResult,
   hasChapterResource,
   hasQuizResult,
   initDb,
@@ -20,7 +21,7 @@ import {
   upsertQuizResult,
   withDb,
 } from "./db.js";
-import { generateQuiz, grade } from "./quizEngine.js";
+import { generateQuiz, grade, questionCountFor } from "./quizEngine.js";
 import {
   deleteUserKey,
   exportStorageStateFile,
@@ -102,7 +103,7 @@ export const getSyllabus = safe(async (chatIdRaw) => {
   if (Number.isNaN(chatId)) return fail(400, "Invalid chat ID");
   const chapters = await withDb(async (db) =>
     (await db.query(
-      `SELECT subject, exam, number, title, match_status, pdf_url
+      `SELECT subject, exam, number, title, match_status, pdf_url, recommended_questions
        FROM syllabus_chapters
        WHERE chat_id = $1
        ORDER BY subject, number`,
@@ -161,7 +162,7 @@ export const sendWelcome = safe(async (body = {}) => {
 
 
 // ---------------------------------------------------------------------------
-// Quizzes (Typed / Spoken Answer Format + AI Textbook Verification)
+// Quizzes (Typed / Spoken Answer Format + AI Textbook Verification + Requiz + Review)
 // ---------------------------------------------------------------------------
 const quizUserId = (given, ctx) => parseId(given ?? ctx?.cookies?.sa_telegram_id);
 const isMatched = (c) => c.match_status === "matched" || Boolean(c.pdf_url);
@@ -177,13 +178,20 @@ export const quizChapters = safe(async (query = {}, ctx = {}) => {
     has_syllabus: rows.length > 0,
     has_gemini_key: keys.length > 0 || Boolean(ctx?.cookies?.sa_gemini_key),
     chapters: rows.map((c) => ({
-      id: c.id, subject: c.subject, exam: c.exam, number: c.number, title: c.title,
-      matched: isMatched(c), result: c.result,
+      id: c.id,
+      subject: c.subject,
+      exam: c.exam,
+      number: c.number,
+      title: c.title,
+      matched: isMatched(c),
+      recommended_questions: questionCountFor(c),
+      result: c.result,
     })),
   });
 });
 
-// POST /api/quizzes/generate { telegramUserId, chapterId, geminiKey? }
+// POST /api/quizzes/generate { telegramUserId, chapterId, questionCount?, geminiKey? }
+// Supports both initial quiz AND Requiz (retaking any chapter with a fresh set of questions).
 export const quizGenerate = safe(async (body = {}, ctx = {}) => {
   const id = quizUserId(body.telegramUserId, ctx);
   const chapterId = parseId(body.chapterId);
@@ -192,15 +200,22 @@ export const quizGenerate = safe(async (body = {}, ctx = {}) => {
   const chapter = await getChapterForUser(id, chapterId);
   if (!chapter) return fail(404, "Chapter not found in your syllabus");
 
-  if (await hasQuizResult(id, chapter.subject, chapter.exam, chapter.title)) {
-    return fail(409, "You've already taken this chapter's quiz. Each chapter can only be attempted once.");
-  }
+  // Fetch previous attempt (if any) so Requiz generates a different set of questions
+  const lastResult = await getLastQuizResult(id, chapter.subject, chapter.exam, chapter.title);
+  const previousQuestions = Array.isArray(lastResult?.review)
+    ? lastResult.review.map((r) => r.question).filter(Boolean)
+    : [];
+  const attemptNumber = (lastResult?.attempts || 0) + 1;
 
   const saved = await getUserKeys(id);
   const extra = [body.geminiKey, ctx?.cookies?.sa_gemini_key].filter((k) => typeof k === "string" && k.length >= 20);
   let quiz;
   try {
-    quiz = await generateQuiz(chapter, [...saved, ...extra]);
+    quiz = await generateQuiz(chapter, [...saved, ...extra], {
+      questionCount: body.questionCount,
+      previousQuestions,
+      attemptNumber,
+    });
   } catch (e) {
     return fail(e.status || 502, e.message);
   }
@@ -208,13 +223,21 @@ export const quizGenerate = safe(async (body = {}, ctx = {}) => {
   await createQuizSession(quizId, id, chapter, quiz.questions);
   return ok({
     quizId,
-    chapter: { id: chapter.id, subject: chapter.subject, exam: chapter.exam, number: chapter.number, title: chapter.title },
+    attempt: attemptNumber,
+    chapter: {
+      id: chapter.id,
+      subject: chapter.subject,
+      exam: chapter.exam,
+      number: chapter.number,
+      title: chapter.title,
+      recommended_questions: questionCountFor(chapter),
+    },
     // Expected answers are withheld; only the open-ended questions are sent to the browser
     questions: quiz.questions.map(({ subtopic, question }) => ({ subtopic, question })),
   });
 });
 
-// POST /api/quizzes/submit { telegramUserId, quizId, answers: ["typed answer 1", ...] }
+// POST /api/quizzes/submit { telegramUserId, quizId, answers: ["typed/spoken answer 1", ...] }
 export const quizSubmit = safe(async (body = {}, ctx = {}) => {
   const id = quizUserId(body.telegramUserId, ctx);
   if (Number.isNaN(id)) return fail(400, "Missing or invalid Telegram user id");
@@ -227,25 +250,76 @@ export const quizSubmit = safe(async (body = {}, ctx = {}) => {
   const out = await withDb(async (db) => {
     const session = await takeQuizSession(db, String(body.quizId || ""), id);
     if (!session) return null;
-    if (await hasQuizResult(id, session.chapter.subject, session.chapter.exam, session.chapter.title, db)) return "taken";
     const ch = session.chapter;
     const g = await grade(session.questions, body.answers, apiKeys, ch);
-    const saved = await upsertQuizResult({
-      telegramUserId: id, chapterId: ch.id, subject: ch.subject, exam: ch.exam, title: ch.title,
-      score: g.score, total: g.total, percentage: g.percentage, tier: g.tier, message: g.message,
-      weakSubtopics: g.weakSubtopics,
-    }, db);
+    const saved = await upsertQuizResult(
+      {
+        telegramUserId: id,
+        chapterId: ch.id,
+        subject: ch.subject,
+        exam: ch.exam,
+        title: ch.title,
+        score: g.score,
+        total: g.total,
+        percentage: g.percentage,
+        tier: g.tier,
+        message: g.message,
+        weakSubtopics: g.weakSubtopics,
+        review: g.review,
+      },
+      db
+    );
     return { g, ch, saved };
   });
-  if (out === "taken") return fail(409, "You've already taken this chapter's quiz. Each chapter can only be attempted once.");
   if (!out) return fail(410, "This quiz expired or was already submitted. Start it again from your chapters.");
   const { g, ch, saved } = out;
   return ok({
-    score: g.score, total: g.total, percentage: g.percentage,
-    revision_tier: g.tier, revision_message: g.message, weak_subtopics: g.weakSubtopics,
-    attempts: saved.attempts, review: g.review,
-    chapter: { id: ch.id, subject: ch.subject, exam: ch.exam, title: ch.title },
+    score: g.score,
+    total: g.total,
+    percentage: g.percentage,
+    revision_tier: g.tier,
+    revision_message: g.message,
+    weak_subtopics: g.weakSubtopics,
+    attempts: saved.attempts,
+    review: g.review,
+    chapter: { id: ch.id, subject: ch.subject, exam: ch.exam, number: ch.number, title: ch.title },
   });
+});
+
+// POST /api/quizzes/transcribe { telegramUserId, audioBase64, mimeType?, geminiKey? }
+// High-accuracy Gemini audio-to-text transcription fallback for the Speak Answer button
+export const quizTranscribe = safe(async (body = {}, ctx = {}) => {
+  const id = quizUserId(body.telegramUserId, ctx);
+  const audioBase64 = String(body.audioBase64 || "").trim();
+  const mimeType = String(body.mimeType || "audio/webm").split(";")[0].trim() || "audio/webm";
+  if (!audioBase64) return fail(400, "No audio data received");
+
+  const saved = Number.isNaN(id) ? [] : await getUserKeys(id);
+  const extra = [body.geminiKey, ctx?.cookies?.sa_gemini_key].filter((k) => typeof k === "string" && k.length >= 20);
+  const keys = [...new Set([...saved, ...extra, GEMINI_API_KEY].filter(Boolean))];
+  if (!keys.length) return fail(400, "No Gemini API key found.");
+
+  let lastErr;
+  for (const key of keys) {
+    try {
+      const res = await getGenClient(key).models.generateContent({
+        model: GEMINI_MODEL,
+        contents: [
+          { inlineData: { data: audioBase64, mimeType } },
+          {
+            text:
+              "Transcribe the student's spoken quiz answer into clean, accurate plain text. Output ONLY the exact transcribed words spoken by the student, with no commentary or quotes. If no speech is audible, output an empty string.",
+          },
+        ],
+        config: { temperature: 0.1 },
+      });
+      const text = String(res.text || "").trim();
+      return ok({ ok: true, transcript: text });
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  return fail(502, `Could not transcribe audio: ${lastErr?.message || "unknown error"}`);
 });
 
 // Self-contained single-chapter NCERT PDF extractor (used if parseSyllabusPdf returns empty subjects)
@@ -259,8 +333,9 @@ const SINGLE_DOC_SCHEMA = {
     is_ncert: { type: Type.BOOLEAN },
     ncert_book_code: { type: Type.STRING, nullable: true },
     ncert_chapter_number: { type: Type.INTEGER, nullable: true },
+    recommended_questions: { type: Type.INTEGER, nullable: true },
   },
-  required: ["subject", "chapter_number", "chapter_title", "is_ncert"],
+  required: ["subject", "chapter_number", "chapter_title", "is_ncert", "recommended_questions"],
 };
 
 async function extractSingleChapterFallback(body, apiKeys) {
@@ -278,7 +353,8 @@ Identify:
 4. "chapter_title": exact chapter title from the heading
 5. "is_ncert": true if this is an NCERT chapter
 6. "ncert_book_code": 5-character lowercase NCERT book code if known (e.g. "iesc1", "iemh1", "iess1", "iess2", "iess3", "iess4", "jesc1", "jemh1", "jess1", "jess2", "jess3", "jess4")
-7. "ncert_chapter_number": 1-based NCERT chapter number`;
+7. "ncert_chapter_number": 1-based NCERT chapter number
+8. "recommended_questions": analyze the chapter's length, subtopics, and complexity and recommend a default number of quiz questions between 10 and 50 (minimum 10, maximum 50).`;
 
   const contents =
     body.kind === "pdf" && body.dataBase64
@@ -304,6 +380,7 @@ Identify:
           bookCode && chNum
             ? `https://ncert.nic.in/textbook/pdf/${bookCode}${String(chNum).padStart(2, "0")}.pdf`
             : null;
+        const recQ = Math.max(10, Math.min(50, Number(d.recommended_questions) || 15));
         return {
           class_level: d.class_level || DEFAULT_CLASS_LEVEL,
           exam: null,
@@ -318,6 +395,7 @@ Identify:
                   ncert_book_code: bookCode,
                   ncert_chapter_number: chNum,
                   pdf_url: pdfUrl,
+                  recommended_questions: recQ,
                 },
               ],
             },
@@ -331,7 +409,7 @@ Identify:
   return null;
 }
 
-// POST /api/syllabus/upload { telegramUserId, kind: "pdf" | "text", fileName?, dataBase64?, text?, geminiKey? }
+// POST /api/syllabus/upload { telegramUserId, kind: "pdf" | "text", fileName?, dataBase64?, text?, questionCount?, geminiKey? }
 // Used both on initial onboarding AND when the student clicks "New Quiz" to upload an NCERT PDF or syllabus.
 export const MAX_SYLLABUS_PDF_BYTES = 20 * 1024 * 1024;
 export const syllabusUpload = safe(async (body = {}, ctx = {}) => {
@@ -368,8 +446,6 @@ export const syllabusUpload = safe(async (body = {}, ctx = {}) => {
     console.log(`Initial syllabus parse failed (${e.message}), trying single-chapter extractor`);
   }
 
-  // If the uploaded PDF or pasted text was a single NCERT chapter PDF (or syllabusParser returned empty subjects),
-  // extract the chapter directly via Gemini or wrap it as a chapter so it NEVER fails with "couldn't find any subjects"!
   if (!syllabus?.subjects?.length) {
     syllabus = await extractSingleChapterFallback(body, keys);
   }
@@ -393,6 +469,7 @@ export const syllabusUpload = safe(async (body = {}, ctx = {}) => {
               ncert_book_code: null,
               ncert_chapter_number: null,
               pdf_url: null,
+              recommended_questions: 12,
             },
           ],
         },
@@ -400,8 +477,49 @@ export const syllabusUpload = safe(async (body = {}, ctx = {}) => {
     };
   }
 
-  const results = await saveSyllabus(id, syllabus);
-  return ok({ ok: true, subjects: results });
+  // Compute the AI-analyzed default question count (minimum 10, max 50) for the uploaded chapter(s)
+  const firstSub = syllabus.subjects[0];
+  const firstCh = firstSub?.chapters?.[0];
+  const aiRecommended = firstCh
+    ? Math.max(
+        10,
+        Math.min(
+          50,
+          Number(firstCh.recommended_questions) ||
+            questionCountFor({ subject: firstSub.name, title: firstCh.title })
+        )
+      )
+    : 12;
+
+  const results = await saveSyllabus(id, syllabus, { questionCount: body.questionCount });
+
+  // Find the newly saved chapter in the DB so the New Quiz UI can offer an instant "Start Quiz" action
+  const allChapters = await getChaptersWithResults(id);
+  const matchingCh =
+    (firstCh &&
+      allChapters.find(
+        (c) =>
+          c.subject.toLowerCase() === firstSub.name.toLowerCase() &&
+          c.title.toLowerCase() === firstCh.title.toLowerCase()
+      )) ||
+    allChapters[allChapters.length - 1] ||
+    null;
+
+  return ok({
+    ok: true,
+    subjects: results,
+    ai_recommended_questions: aiRecommended,
+    latest_chapter: matchingCh
+      ? {
+          id: matchingCh.id,
+          subject: matchingCh.subject,
+          exam: matchingCh.exam,
+          number: matchingCh.number,
+          title: matchingCh.title,
+          recommended_questions: questionCountFor(matchingCh),
+        }
+      : null,
+  });
 });
 
 // Keep quizGenerateCustom alias pointing to syllabusUpload for backwards compatibility

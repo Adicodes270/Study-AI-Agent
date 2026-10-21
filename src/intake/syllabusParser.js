@@ -257,6 +257,7 @@ export function inferNcertFromFilename(fileName) {
               ncert_book_code: bookCode,
               ncert_chapter_number: chNum,
               pdf_url: pdfUrl,
+              recommended_questions: 15,
             },
           ],
         },
@@ -325,6 +326,7 @@ Rules:
   1. Include EVERY subject that appears (English, Hindi, Sanskrit, Mathematics, Physics, Chemistry, Biology, Science, Social Science, Artificial Intelligence, etc.). Never skip a subject.
   2. For each subject, list the actual study units in order: textbook chapters, lessons, poems, units or topics.
   3. Headings like "Section A: Reading" or "Section B: Writing" are NOT chapters. List the lessons and topics under them.
+- For EVERY chapter, analyze its breadth, length, and concept density and set "recommended_questions" to an integer between 10 and 50 (MINIMUM 10, MAXIMUM 50; e.g. 10–12 for short chapters, 15–20 for medium chapters, 22–30 for long/dense chapters).
 - Use standard English subject names.
 - Set exam to one of: Term Test 1, Term Test 2, Half Yearly, Annual, Pre-Board (or leave exam as null/empty if not mentioned).
 - Semantic & Fuzzy NCERT Chapter Matching (CRITICAL):
@@ -360,6 +362,7 @@ const RESPONSE_SCHEMA = {
                 ncert_book_code: { type: Type.STRING, nullable: true },
                 ncert_chapter_number: { type: Type.INTEGER, nullable: true },
                 pdf_url: { type: Type.STRING, nullable: true },
+                recommended_questions: { type: Type.INTEGER, nullable: true },
               },
               required: [
                 "number",
@@ -368,6 +371,7 @@ const RESPONSE_SCHEMA = {
                 "ncert_book_code",
                 "ncert_chapter_number",
                 "pdf_url",
+                "recommended_questions",
               ],
             },
           },
@@ -410,6 +414,7 @@ async function resolveUnmatchedChapters(syllabus, apiKey) {
 
   for (const subject of syllabus.subjects) {
     for (const ch of subject.chapters) {
+      ch.recommended_questions = Math.max(10, Math.min(50, Number(ch.recommended_questions) || 12));
       if (!ch.is_ncert || !ch.ncert_book_code || !ch.ncert_chapter_number) {
         unmatchedRefs.push({
           idx: unmatchedRefs.length,
@@ -481,7 +486,7 @@ ${JSON.stringify(payloadForAi, null, 2)}`;
  */
 async function fallbackExtractSingleDocument(contents, apiKey, fileName = "") {
   const singleDocPrompt = `This document is a single textbook chapter, NCERT PDF, or study handout${fileName ? ` (File name: "${fileName}")` : ""}.
-Identify its Subject name (e.g. Science, Mathematics, History, Geography, Civics, Economics, English, Hindi, Physics, Chemistry, Biology) and its Chapter number and Chapter title.
+Identify its Subject name (e.g. Science, Mathematics, History, Geography, Civics, Economics, English, Hindi, Physics, Chemistry, Biology), its Chapter number, its Chapter title, and analyze the chapter to set "recommended_questions" (an integer between 10 and 50; minimum 10).
 If it is an NCERT textbook chapter, also fill in "is_ncert": true, "ncert_book_code", "ncert_chapter_number", and "pdf_url".
 You MUST return at least 1 subject and 1 chapter in "subjects" (NEVER return an empty subjects array).
 

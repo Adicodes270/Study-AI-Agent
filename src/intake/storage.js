@@ -1,6 +1,7 @@
 // src/intake/storage.js
 import { DEFAULT_CLASS_LEVEL } from "../config.js";
 import { withDb } from "../db.js";
+import { questionCountFor } from "../quizEngine.js";
 
 function buildNcertPdfUrl(bookCode, chapterNumber) {
   if (!bookCode || !chapterNumber) return null;
@@ -10,9 +11,13 @@ function buildNcertPdfUrl(bookCode, chapterNumber) {
 }
 
 /** Save each subject. Returns {label: "added" | "updated" | "unchanged"}. */
-export async function saveSyllabus(chatId, syllabus) {
+export async function saveSyllabus(chatId, syllabus, options = {}) {
   const exam = syllabus.exam || "";
   const results = {};
+  const userQuestionCount =
+    options.questionCount != null && options.questionCount !== ""
+      ? Math.max(1, Math.min(50, parseInt(options.questionCount, 10) || 10))
+      : null;
 
   await withDb(async (db) => {
     // Class priority: in the message > already saved > CLASS_LEVEL from .env
@@ -37,6 +42,12 @@ export async function saveSyllabus(chatId, syllabus) {
             ? buildNcertPdfUrl(bookCode, ncertChNum) || c.pdf_url || null
             : c.pdf_url || null;
         const matchStatus = pdfUrl ? "matched" : "unmatched";
+        const aiDefaultCount = questionCountFor({
+          subject: subject.name,
+          title: c.title,
+          recommended_questions: c.recommended_questions,
+        });
+        const recommendedQuestions = userQuestionCount || Math.max(10, Math.min(50, aiDefaultCount));
 
         return {
           number: c.number,
@@ -45,11 +56,12 @@ export async function saveSyllabus(chatId, syllabus) {
           ncertChNum,
           pdfUrl,
           matchStatus,
+          recommendedQuestions,
         };
       });
 
       const { rows: oldRows } = await db.query(
-        "SELECT number, title, pdf_url, match_status FROM syllabus_chapters " +
+        "SELECT number, title, pdf_url, match_status, recommended_questions FROM syllabus_chapters " +
           "WHERE chat_id = $1 AND subject = $2 AND exam = $3 ORDER BY id",
         [chatId, subject.name, exam]
       );
@@ -65,6 +77,9 @@ export async function saveSyllabus(chatId, syllabus) {
           ncertChNum: r.number,
           pdfUrl: r.pdf_url,
           matchStatus: r.match_status,
+          recommendedQuestions:
+            r.recommended_questions ||
+            questionCountFor({ subject: subject.name, title: r.title }),
         }));
         for (const inc of preparedChapters) {
           const idx = merged.findIndex(
@@ -78,8 +93,20 @@ export async function saveSyllabus(chatId, syllabus) {
         finalChapters = merged;
       }
 
-      const fresh = finalChapters.map((c) => [c.number, c.title, c.pdfUrl, c.matchStatus]);
-      const old = oldRows.map((r) => [r.number, r.title, r.pdf_url, r.match_status]);
+      const fresh = finalChapters.map((c) => [
+        c.number,
+        c.title,
+        c.pdfUrl,
+        c.matchStatus,
+        c.recommendedQuestions,
+      ]);
+      const old = oldRows.map((r) => [
+        r.number,
+        r.title,
+        r.pdf_url,
+        r.match_status,
+        r.recommended_questions,
+      ]);
 
       if (JSON.stringify(old) === JSON.stringify(fresh)) {
         results[label] = "unchanged";
@@ -126,9 +153,20 @@ export async function saveSyllabus(chatId, syllabus) {
 
         await db.query(
           "INSERT INTO syllabus_chapters " +
-            "(chat_id, class, subject, exam, number, title, pdf_url, ncert_id, match_status) " +
-            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-          [chatId, classValue, subject.name, exam, c.number, c.title, c.pdfUrl, ncertId, c.matchStatus]
+            "(chat_id, class, subject, exam, number, title, pdf_url, ncert_id, match_status, recommended_questions) " +
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+          [
+            chatId,
+            classValue,
+            subject.name,
+            exam,
+            c.number,
+            c.title,
+            c.pdfUrl,
+            ncertId,
+            c.matchStatus,
+            c.recommendedQuestions,
+          ]
         );
       }
     }

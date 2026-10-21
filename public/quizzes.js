@@ -1,16 +1,24 @@
 // ==========================================================================
-// quizzes.js — syllabus-linked quizzes (Typed or Voice-Spoken Answers + Book-Grounded AI Grading)
-// Flow: cookies -> (setup gate) -> chapters from the API -> (syllabus gate with polling)
-//       -> subject sections (with New Quiz button before Refresh) -> typed/spoken quiz runner
-//       -> AI thinks & checks book/research -> submit -> back to the chapter
+// quizzes.js — syllabus-linked quizzes
+// Features:
+// 1. Open-ended Typed + Dual-Engine Voice-Spoken Answers (Continuous Web Speech API + Gemini Audio Fallback)
+// 2. Book-Grounded AI Grading & Verification
+// 3. Requiz (fresh question sets) + Review Answers from both Completion screen & Chapters home screen
+//    (No forced auto-redirect timer kicking user back to homepage!)
+// 4. Top-bar Default Question Count (Max 50) + New Quiz Question Count Selector where AI analyzes
+//    the chapter and sets a default question count (minimum default 10, max 50) editable by the user
 // ==========================================================================
 (() => {
   'use strict';
 
-  const BOT_URL = 'https://web.telegram.org/k/#@SylllabusBot';
   const POLL_MS = 5000;
-  const REDIRECT_SECONDS = 5;
   const RETURN_KEY = 'sa_quiz_return';
+  const GLOBAL_QCOUNT_KEY = 'sa_default_quiz_questions'; // 'auto' or '1'..'50'
+  const CHAPTER_QCOUNT_KEY = 'sa_chapter_qcounts_v1'; // { [chapterKey]: number }
+  const LOCAL_REVIEWS_KEY = 'sa_quiz_reviews_v1'; // backup cache of review arrays per chapter
+  const MIN_AI_DEFAULT_QUESTIONS = 10;
+  const MAX_QUESTIONS = 50;
+
   const $ = (id) => document.getElementById(id);
 
   // ---------- cookies ----------
@@ -24,7 +32,6 @@
     document.cookie = `${name}=${encodeURIComponent(value)}; max-age=31536000; path=/; SameSite=Lax${secure}`;
   };
 
-  // Students who saved their setup before the cookies existed: rebuild them from the saved setup state.
   function backfillCookiesFromSetup() {
     try {
       const st = JSON.parse(localStorage.getItem('study_agent_config') || 'null');
@@ -36,33 +43,166 @@
       if (!getCookie('sa_notebooklm_auth')) {
         setCookie('sa_notebooklm_auth', st.notebooklm?.status === 'connected' ? 'connected' : 'none');
       }
-    } catch { /* no saved setup, or storage blocked */ }
+    } catch { /* ignore */ }
   }
 
-  // ---------- small helpers ----------
+  // ---------- state ----------
+  let userId = '';
+  let chapters = [];
+  let activeTab = 'all';
+  let currentView = 'view-loading';
+  let pollTimer = null;
+  let manualGateOpen = false;
+  let quiz = null; // { quizId, chapter, questions, answers: string[], index }
+  let activeDoneChapter = null; // chapter object currently shown in #view-done
+  let gateAiRecommendedCount = 12; // AI-analyzed default (min 10, max 50) in New Quiz
+  let gateCountManuallyEdited = false;
+  let gateLatestUploadedChapter = null;
+
+  // ---------- Question Count Persistence & AI Chapter Heuristic (Min 10, Max 50) ----------
+  function getGlobalQuestionSetting() {
+    const raw = localStorage.getItem(GLOBAL_QCOUNT_KEY) || 'auto';
+    if (raw === 'auto') return 'auto';
+    const n = parseInt(raw, 10);
+    if (Number.isNaN(n) || n < 1) return 'auto';
+    return Math.min(MAX_QUESTIONS, n);
+  }
+
+  function setGlobalQuestionSetting(val) {
+    if (val === 'auto' || val == null || val === '') {
+      localStorage.setItem(GLOBAL_QCOUNT_KEY, 'auto');
+    } else {
+      const clamped = Math.max(1, Math.min(MAX_QUESTIONS, parseInt(val, 10) || 15));
+      localStorage.setItem(GLOBAL_QCOUNT_KEY, String(clamped));
+    }
+    syncTopQuestionCountUI();
+    if (chapters.length) renderChapters();
+  }
+
+  function chapterStorageKey(c) {
+    if (!c) return '';
+    return `${String(c.subject || '').toLowerCase()}||${String(c.title || '').toLowerCase()}`;
+  }
+
+  function getSavedChapterQuestionCount(c) {
+    try {
+      const map = JSON.parse(localStorage.getItem(CHAPTER_QCOUNT_KEY) || '{}');
+      const v = map[chapterStorageKey(c)];
+      if (v != null) {
+        const n = parseInt(v, 10);
+        if (!Number.isNaN(n) && n >= 1) return Math.min(MAX_QUESTIONS, n);
+      }
+    } catch {}
+    return null;
+  }
+
+  function saveChapterQuestionCount(c, count) {
+    if (!c) return;
+    try {
+      const map = JSON.parse(localStorage.getItem(CHAPTER_QCOUNT_KEY) || '{}');
+      map[chapterStorageKey(c)] = Math.max(1, Math.min(MAX_QUESTIONS, parseInt(count, 10) || 12));
+      localStorage.setItem(CHAPTER_QCOUNT_KEY, JSON.stringify(map));
+    } catch {}
+  }
+
+  // AI chapter heuristic on the client: minimum default is ALWAYS 10, max 50
+  function analyzeChapterQuestionsHeuristic(info = {}) {
+    if (info.recommended_questions != null) {
+      const r = parseInt(info.recommended_questions, 10);
+      if (!Number.isNaN(r) && r >= 1) {
+        return Math.max(MIN_AI_DEFAULT_QUESTIONS, Math.min(MAX_QUESTIONS, r));
+      }
+    }
+    const title = String(info.title || info.fileName || '');
+    const subject = String(info.subject || '');
+    const textLen = String(info.text || '').length;
+    const byteSize = Number(info.fileSize || 0);
+
+    let score = 12; // baseline >= 10
+    const topics = title.split(/\s*(?:,|;|\/|&|\band\b|\+|\s[-–—]\s)\s*/i).filter(Boolean).length;
+    score += Math.min(Math.max(0, topics - 1) * 2, 6);
+    const words = title.trim().split(/\s+/).filter(Boolean).length;
+    if (words >= 7) score += 3;
+    else if (words >= 4) score += 2;
+
+    if (/math|physics|chemistry|science|biology|economics|history|geography/i.test(subject || title)) {
+      score += 3;
+    }
+    if (textLen > 12000 || byteSize > 2.5 * 1024 * 1024) score += 6;
+    else if (textLen > 4000 || byteSize > 900 * 1024) score += 3;
+
+    return Math.max(MIN_AI_DEFAULT_QUESTIONS, Math.min(MAX_QUESTIONS, score));
+  }
+
+  // Effective question count for a chapter card:
+  // 1. User's top-level default setting (if set to a number 1..50)
+  // 2. Per-chapter user override saved from New Quiz
+  // 3. AI's chapter-analyzed recommended_questions (min 10, max 50)
+  function getEffectiveQuestionCount(c) {
+    const globalSetting = getGlobalQuestionSetting();
+    if (typeof globalSetting === 'number') return globalSetting;
+    const perChapter = getSavedChapterQuestionCount(c);
+    if (perChapter != null) return perChapter;
+    return analyzeChapterQuestionsHeuristic(c);
+  }
+
+  // Backup storage for reviews in localStorage so Review Answers works even if DB row pre-dated review_json
+  function saveLocalReviewBackup(chapter, resultObj) {
+    if (!chapter || !resultObj) return;
+    try {
+      const map = JSON.parse(localStorage.getItem(LOCAL_REVIEWS_KEY) || '{}');
+      map[chapterStorageKey(chapter)] = resultObj;
+      localStorage.setItem(LOCAL_REVIEWS_KEY, JSON.stringify(map));
+    } catch {}
+  }
+
+  function getLocalReviewBackup(chapter) {
+    if (!chapter) return null;
+    try {
+      const map = JSON.parse(localStorage.getItem(LOCAL_REVIEWS_KEY) || '{}');
+      return map[chapterStorageKey(chapter)] || null;
+    } catch {
+      return null;
+    }
+  }
+
+  // ---------- View Management ----------
   const VIEWS = ['view-setup', 'view-gate', 'view-loading', 'view-chapters', 'view-quiz', 'view-done'];
   function show(id) {
+    currentView = id;
     if (id !== 'view-quiz') stopVoiceInput();
-    VIEWS.forEach((v) => { $(v).hidden = v !== id; });
+    if (id !== 'view-gate') stopPolling();
+    VIEWS.forEach((v) => {
+      const el = $(v);
+      if (el) el.hidden = v !== id;
+    });
     if (id !== 'view-chapters') hidePop();
   }
+
   function banner(msg) {
     const b = $('qz-banner');
+    if (!b) return;
     b.textContent = msg || '';
     b.hidden = !msg;
   }
-  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  const esc = (s) =>
+    String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const tone = (pct) => (pct >= 80 ? 'good' : pct >= 50 ? 'mid' : 'bad');
   const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
-  async function api(path, opts, timeoutMs = 90000) {
+  async function api(path, opts, timeoutMs = 120000) {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), timeoutMs);
     let res;
     try {
       res = await fetch(path, { credentials: 'same-origin', signal: ctl.signal, ...opts });
     } catch (e) {
-      throw new Error(e.name === 'AbortError' ? 'The server took too long to answer. Please try again.' : `Couldn't reach the server (${e.message}). Check your connection and try again.`);
+      throw new Error(
+        e.name === 'AbortError'
+          ? 'The server took too long to answer. Please try again.'
+          : `Couldn't reach the server (${e.message}). Check your connection and try again.`
+      );
     } finally {
       clearTimeout(timer);
     }
@@ -77,22 +217,174 @@
   const postJson = (path, body, timeoutMs) =>
     api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, timeoutMs);
 
-  // ---------- state ----------
-  let userId = '';
-  let chapters = [];
-  let activeTab = 'all';
-  let pollTimer = null;
-  let redirectTimer = null;
-  let manualGateOpen = false; // true when user clicked "New Quiz" to upload another PDF / send via Telegram
-  let quiz = null; // { quizId, chapter, questions, answers: string[], index }
+  // ---------- Top Question-Count Panel UI (`#view-chapters` header) ----------
+  function syncTopQuestionCountUI() {
+    const setting = getGlobalQuestionSetting();
+    const btnLabel = $('top-qcount-btn-label');
+    const numInput = $('top-qcount-input');
+    const rangeInput = $('top-qcount-range');
+    if (btnLabel) {
+      btnLabel.textContent =
+        setting === 'auto' ? 'Questions: AI Auto (10–50)' : `Questions: ${setting} / chapter`;
+    }
+    const numVal = setting === 'auto' ? 15 : setting;
+    if (numInput && document.activeElement !== numInput) numInput.value = String(numVal);
+    if (rangeInput) rangeInput.value = String(numVal);
+
+    document.querySelectorAll('[data-toppreset]').forEach((pill) => {
+      const v = pill.getAttribute('data-toppreset');
+      pill.classList.toggle('active', String(setting) === v);
+    });
+  }
+
+  $('top-qcount-btn')?.addEventListener('click', () => {
+    const panel = $('top-qcount-panel');
+    if (!panel) return;
+    const nowOpen = panel.hidden;
+    panel.hidden = !nowOpen;
+    $('top-qcount-btn')?.setAttribute('aria-expanded', String(nowOpen));
+    syncTopQuestionCountUI();
+  });
+
+  $('top-qcount-close')?.addEventListener('click', () => {
+    if ($('top-qcount-panel')) $('top-qcount-panel').hidden = true;
+    $('top-qcount-btn')?.setAttribute('aria-expanded', 'false');
+  });
+
+  $('top-qcount-range')?.addEventListener('input', (e) => {
+    if ($('top-qcount-input')) $('top-qcount-input').value = e.currentTarget.value;
+  });
+
+  $('top-qcount-input')?.addEventListener('input', (e) => {
+    const n = Math.max(1, Math.min(MAX_QUESTIONS, parseInt(e.currentTarget.value, 10) || 10));
+    if ($('top-qcount-range')) $('top-qcount-range').value = String(n);
+  });
+
+  $('top-qcount-apply-btn')?.addEventListener('click', () => {
+    const n = Math.max(1, Math.min(MAX_QUESTIONS, parseInt($('top-qcount-input')?.value, 10) || 15));
+    setGlobalQuestionSetting(n);
+    if ($('top-qcount-panel')) $('top-qcount-panel').hidden = true;
+    $('top-qcount-btn')?.setAttribute('aria-expanded', 'false');
+  });
+
+  $('top-qcount-auto-btn')?.addEventListener('click', () => {
+    setGlobalQuestionSetting('auto');
+    if ($('top-qcount-panel')) $('top-qcount-panel').hidden = true;
+    $('top-qcount-btn')?.setAttribute('aria-expanded', 'false');
+  });
+
+  document.querySelectorAll('[data-toppreset]').forEach((pill) => {
+    pill.addEventListener('click', () => {
+      const v = pill.getAttribute('data-toppreset');
+      if (v === 'auto') {
+        setGlobalQuestionSetting('auto');
+      } else {
+        const n = Math.max(1, Math.min(MAX_QUESTIONS, parseInt(v, 10) || 15));
+        if ($('top-qcount-input')) $('top-qcount-input').value = String(n);
+        if ($('top-qcount-range')) $('top-qcount-range').value = String(n);
+        setGlobalQuestionSetting(n);
+      }
+    });
+  });
+
+  // ---------- New Quiz Question-Count Selector UI (`#view-gate`) ----------
+  function setGateQuestionCount(val, { fromAi = false, chapterTitle = '' } = {}) {
+    const clamped = fromAi
+      ? Math.max(MIN_AI_DEFAULT_QUESTIONS, Math.min(MAX_QUESTIONS, parseInt(val, 10) || 12))
+      : Math.max(1, Math.min(MAX_QUESTIONS, parseInt(val, 10) || 12));
+
+    if (fromAi) {
+      gateAiRecommendedCount = clamped;
+    }
+
+    if ($('gate-qcount-input')) $('gate-qcount-input').value = String(clamped);
+    if ($('gate-qcount-range')) $('gate-qcount-range').value = String(clamped);
+
+    const badge = $('gate-ai-qcount-badge');
+    const note = $('gate-qcount-note');
+    const startLabel = $('gate-start-quiz-label');
+
+    if (badge) {
+      badge.textContent = fromAi
+        ? `AI Default: ${clamped} Questions`
+        : `Custom: ${clamped} Questions (AI Default: ${gateAiRecommendedCount})`;
+    }
+    if (note) {
+      note.textContent = chapterTitle
+        ? `AI analyzed “${chapterTitle}” and set a default of ${gateAiRecommendedCount} questions (min 10, max 50). You can edit this number above.`
+        : `AI default for this chapter: ${gateAiRecommendedCount} questions (minimum 10, max 50). Edit the number anytime.`;
+    }
+    if (startLabel) {
+      startLabel.textContent = `Start Quiz Now (${clamped} Questions)`;
+    }
+
+    document.querySelectorAll('[data-qpreset]').forEach((pill) => {
+      const p = pill.getAttribute('data-qpreset');
+      const active = (p === 'ai' && fromAi) || (!fromAi && p === String(clamped));
+      pill.classList.toggle('active', active);
+    });
+  }
+
+  $('gate-qcount-range')?.addEventListener('input', (e) => {
+    gateCountManuallyEdited = true;
+    setGateQuestionCount(e.currentTarget.value, { fromAi: false });
+    if (gateLatestUploadedChapter) {
+      saveChapterQuestionCount(gateLatestUploadedChapter, e.currentTarget.value);
+    }
+  });
+
+  $('gate-qcount-input')?.addEventListener('input', (e) => {
+    gateCountManuallyEdited = true;
+    const raw = parseInt(e.currentTarget.value, 10);
+    if (!Number.isNaN(raw)) {
+      const clamped = Math.max(1, Math.min(MAX_QUESTIONS, raw));
+      if ($('gate-qcount-range')) $('gate-qcount-range').value = String(clamped);
+      if ($('gate-start-quiz-label')) $('gate-start-quiz-label').textContent = `Start Quiz Now (${clamped} Questions)`;
+      if ($('gate-ai-qcount-badge')) {
+        $('gate-ai-qcount-badge').textContent = `Custom: ${clamped} Questions (AI Default: ${gateAiRecommendedCount})`;
+      }
+      if (gateLatestUploadedChapter) {
+        saveChapterQuestionCount(gateLatestUploadedChapter, clamped);
+      }
+    }
+  });
+
+  $('gate-qcount-input')?.addEventListener('blur', (e) => {
+    const clamped = Math.max(1, Math.min(MAX_QUESTIONS, parseInt(e.currentTarget.value, 10) || gateAiRecommendedCount));
+    e.currentTarget.value = String(clamped);
+  });
+
+  document.querySelectorAll('[data-qpreset]').forEach((pill) => {
+    pill.addEventListener('click', () => {
+      const p = pill.getAttribute('data-qpreset');
+      if (p === 'ai') {
+        gateCountManuallyEdited = false;
+        setGateQuestionCount(gateAiRecommendedCount, {
+          fromAi: true,
+          chapterTitle: gateLatestUploadedChapter?.title || '',
+        });
+        if (gateLatestUploadedChapter) {
+          saveChapterQuestionCount(gateLatestUploadedChapter, gateAiRecommendedCount);
+        }
+      } else {
+        gateCountManuallyEdited = true;
+        setGateQuestionCount(p, { fromAi: false });
+        if (gateLatestUploadedChapter) {
+          saveChapterQuestionCount(gateLatestUploadedChapter, p);
+        }
+      }
+    });
+  });
 
   // ---------- boot ----------
   async function init() {
     backfillCookiesFromSetup();
+    syncTopQuestionCountUI();
+    setGateQuestionCount(12, { fromAi: true });
+
     userId = getCookie('sa_telegram_id');
     const key = getCookie('sa_gemini_key');
 
-    // Step A: credentials
     if (!/^\d+$/.test(userId) || !key) {
       const missing = [!/^\d+$/.test(userId) && 'your Telegram ID', !key && 'your Gemini API key'].filter(Boolean).join(' and ');
       $('setup-missing-text').textContent = `Quizzes need ${missing}. Add ${missing.includes('and') ? 'them' : 'it'} on the setup page and press Save Configuration.`;
@@ -102,8 +394,12 @@
     await loadChapters();
   }
 
-  // Step B: syllabus in the database?
+  // ---------- Load Chapters ----------
   async function loadChapters({ silent = false, forceChaptersView = false } = {}) {
+    // NEVER clobber an active quiz or the completion/review screen during a silent background refresh
+    if (silent && (currentView === 'view-quiz' || currentView === 'view-done')) {
+      return true;
+    }
     if (!silent) show('view-loading');
     try {
       const data = await api(`/api/quizzes/chapters?telegramUserId=${encodeURIComponent(userId)}`);
@@ -114,12 +410,25 @@
         return false;
       }
       const prevCount = chapters.length;
-      chapters = data.chapters;
-      // If user opened "New Quiz" gate and a new syllabus/PDF arrived (or forceChaptersView is true), go to chapters
-      if (forceChaptersView || (manualGateOpen && chapters.length !== prevCount)) {
+      chapters = data.chapters || [];
+
+      // Merge any local review backup if a chapter result doesn't have review_json populated yet
+      for (const c of chapters) {
+        if (c.result && (!Array.isArray(c.result.review) || c.result.review.length === 0)) {
+          const localBackup = getLocalReviewBackup(c);
+          if (localBackup?.review?.length) {
+            c.result.review = localBackup.review;
+          }
+        }
+      }
+
+      if (forceChaptersView || (manualGateOpen && chapters.length !== prevCount && !gateLatestUploadedChapter)) {
         manualGateOpen = false;
       }
       if (manualGateOpen) {
+        return true;
+      }
+      if (currentView === 'view-quiz' || currentView === 'view-done') {
         return true;
       }
       stopPolling();
@@ -127,34 +436,44 @@
       show('view-chapters');
       return true;
     } catch (e) {
-      if (silent) return false; // a failed background poll shouldn't clobber the page
+      if (silent) return false;
       showGate(chapters.length > 0);
       banner(`Couldn't reach the server: ${e.message}`);
       return false;
     }
   }
 
-  // ---------- onboarding / "New Quiz" upload gate + polling ----------
+  // ---------- Onboarding / "New Quiz" Upload Gate ----------
   function showGate(isNewQuizFlow = false) {
     const backRow = $('gate-back-row');
     const heading = $('gate-heading');
     const subtext = $('gate-subtext');
+    const readyBox = $('gate-ready-box');
+    if (readyBox) readyBox.hidden = true;
+    gateLatestUploadedChapter = null;
+    gateCountManuallyEdited = false;
+
+    const globalDefault = getGlobalQuestionSetting();
+    const initialCount = typeof globalDefault === 'number' ? Math.max(MIN_AI_DEFAULT_QUESTIONS, globalDefault) : 12;
+    setGateQuestionCount(initialCount, { fromAi: true });
+
     if (backRow) backRow.hidden = !isNewQuizFlow && chapters.length === 0;
     if (heading) {
       heading.textContent = isNewQuizFlow ? 'Start a new quiz from another source' : 'Add your syllabus or NCERT chapter PDF';
     }
     if (subtext) {
       subtext.textContent = isNewQuizFlow
-        ? 'Send your new syllabus or NCERT chapter PDF to the Study Agent bot on Telegram, or upload it from your computer below.'
-        : 'Send your syllabus or NCERT chapter PDF to the Study Agent bot on Telegram, or upload it from your computer below. This page picks it up automatically as soon as it has been read.';
+        ? 'Choose how many questions you want (or let AI analyze the chapter for a 10–50 default), then upload your NCERT PDF or paste text below.'
+        : 'Send your syllabus or NCERT chapter PDF to the Study Agent bot on Telegram, or upload it from your computer below.';
     }
     show('view-gate');
     startPolling();
   }
+
   function startPolling() {
     if (pollTimer) return;
     pollTimer = setInterval(() => {
-      if (document.hidden) return;
+      if (document.hidden || currentView !== 'view-gate' || gateLatestUploadedChapter) return;
       loadChapters({ silent: true });
     }, POLL_MS);
   }
@@ -163,7 +482,6 @@
     pollTimer = null;
   }
 
-  // "New Quiz" button just before Refresh: opens the exact same Telegram / PDF / Text upload flow
   $('new-quiz-btn')?.addEventListener('click', () => {
     manualGateOpen = true;
     sylStatus('');
@@ -174,12 +492,34 @@
 
   $('gate-back-btn')?.addEventListener('click', () => {
     manualGateOpen = false;
+    gateLatestUploadedChapter = null;
     stopPolling();
     renderChapters();
     show('view-chapters');
   });
 
-  $('refresh-btn').addEventListener('click', async (e) => {
+  $('gate-view-chapters-btn')?.addEventListener('click', async () => {
+    manualGateOpen = false;
+    gateLatestUploadedChapter = null;
+    stopPolling();
+    await loadChapters({ silent: true, forceChaptersView: true });
+    renderChapters();
+    show('view-chapters');
+  });
+
+  $('gate-start-quiz-btn')?.addEventListener('click', () => {
+    if (!gateLatestUploadedChapter) return;
+    const chosenCount = Math.max(
+      1,
+      Math.min(MAX_QUESTIONS, parseInt($('gate-qcount-input')?.value, 10) || gateAiRecommendedCount)
+    );
+    saveChapterQuestionCount(gateLatestUploadedChapter, chosenCount);
+    manualGateOpen = false;
+    stopPolling();
+    startQuiz(gateLatestUploadedChapter, chosenCount);
+  });
+
+  $('refresh-btn')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget;
     btn.disabled = true;
     const found = await loadChapters({ silent: true, forceChaptersView: true });
@@ -188,7 +528,7 @@
     else banner('');
   });
 
-  // ---------- Client-side NCERT Chapter PDF helper (fallback if backend returns "couldn't find any subjects") ----------
+  // ---------- Client-side NCERT Chapter PDF helper ----------
   const CLIENT_NCERT_MAP = {
     iesc1: { cls: 9, subject: 'Science', chapters: { 1: 'Matter in Our Surroundings', 2: 'Is Matter Around Us Pure?', 3: 'Atoms and Molecules', 4: 'Structure of the Atom', 5: 'The Fundamental Unit of Life', 6: 'Tissues', 7: 'Motion', 8: 'Force and Laws of Motion', 9: 'Gravitation', 10: 'Work and Energy', 11: 'Sound', 12: 'Improvement in Food Resources' } },
     iemh1: { cls: 9, subject: 'Mathematics', chapters: { 1: 'Number Systems', 2: 'Polynomials', 3: 'Coordinate Geometry', 4: 'Linear Equations in Two Variables', 5: "Introduction to Euclid's Geometry", 6: 'Lines and Angles', 7: 'Triangles', 8: 'Quadrilaterals', 9: 'Circles', 10: "Heron's Formula", 11: 'Surface Areas and Volumes', 12: 'Statistics' } },
@@ -252,78 +592,164 @@
     return `Class 9 Syllabus\nSubject: Science\nChapter 1: ${cleanName}`;
   }
 
-  // ---------- upload the syllabus / NCERT PDF from this computer (same result as sending it to the bot) ----------
+  // ---------- Upload PDF / Text in New Quiz ----------
   const MAX_PDF_BYTES = 20 * 1024 * 1024;
   const sylStatus = (msg, isErr = false) => {
     const el = $('syl-status');
+    if (!el) return;
     el.textContent = msg;
     el.classList.toggle('err', isErr);
     el.hidden = !msg;
   };
-  const toBase64 = (file) => new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onload = () => resolve(String(r.result).split(',')[1] || '');
-    r.onerror = () => reject(new Error('Could not read that file'));
-    r.readAsDataURL(file);
-  });
+  const toBase64 = (file) =>
+    new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result).split(',')[1] || '');
+      r.onerror = () => reject(new Error('Could not read that file'));
+      r.readAsDataURL(file);
+    });
+
   async function sendSyllabus(payload, buttons) {
-    buttons.forEach((b) => { b.disabled = true; });
-    sylStatus('Reading your PDF / text… this can take up to a minute.');
+    buttons.forEach((b) => { if (b) b.disabled = true; });
+    if ($('gate-ready-box')) $('gate-ready-box').hidden = true;
+    sylStatus('AI is reading your chapter & calculating the optimal question count…');
     const geminiKey = getCookie('sa_gemini_key') || undefined;
+
+    // Pre-estimate AI default question count (min 10, max 50) from file/text if user hasn't manually edited it
+    if (!gateCountManuallyEdited) {
+      const preEst = analyzeChapterQuestionsHeuristic(payload);
+      setGateQuestionCount(preEst, { fromAi: true });
+    }
+
     try {
+      let uploadRes;
       try {
-        await postJson('/api/syllabus/upload', { telegramUserId: userId, geminiKey, ...payload }, 150000);
+        uploadRes = await postJson('/api/syllabus/upload', { telegramUserId: userId, geminiKey, ...payload }, 150000);
       } catch (firstErr) {
-        // If an older backend rejected a single NCERT chapter PDF with "couldn't find any subjects",
-        // automatically extract the chapter metadata and upload it as structured syllabus text.
         if (/couldn't find any subjects/i.test(firstErr.message || '') && payload.kind === 'pdf') {
           sylStatus('Detected single NCERT chapter PDF — extracting subject & chapter…');
           const fallbackText = await buildFallbackSyllabusTextFromPdf(payload);
-          await postJson('/api/syllabus/upload', { telegramUserId: userId, geminiKey, kind: 'text', text: fallbackText }, 150000);
+          uploadRes = await postJson(
+            '/api/syllabus/upload',
+            { telegramUserId: userId, geminiKey, kind: 'text', text: fallbackText },
+            150000
+          );
         } else {
           throw firstErr;
         }
       }
-      sylStatus('Done! Loading your chapters…');
-      manualGateOpen = false;
-      await loadChapters({ silent: true, forceChaptersView: true });
-      renderChapters();
-      show('view-chapters');
+
+      // AI analyzed the chapter and returned ai_recommended_questions (min 10, max 50)
+      const aiCount = Math.max(
+        MIN_AI_DEFAULT_QUESTIONS,
+        Math.min(
+          MAX_QUESTIONS,
+          Number(uploadRes?.ai_recommended_questions) ||
+            Number(uploadRes?.latest_chapter?.recommended_questions) ||
+            analyzeChapterQuestionsHeuristic(payload)
+        )
+      );
+      gateAiRecommendedCount = aiCount;
+
+      if (!gateCountManuallyEdited) {
+        setGateQuestionCount(aiCount, {
+          fromAi: true,
+          chapterTitle: uploadRes?.latest_chapter?.title || payload.fileName || '',
+        });
+      } else {
+        const userChosen = Math.max(1, Math.min(MAX_QUESTIONS, parseInt($('gate-qcount-input')?.value, 10) || aiCount));
+        setGateQuestionCount(userChosen, {
+          fromAi: false,
+          chapterTitle: uploadRes?.latest_chapter?.title || payload.fileName || '',
+        });
+      }
+
+      await loadChapters({ silent: true });
+
+      const targetChapter =
+        (uploadRes?.latest_chapter &&
+          chapters.find((c) => String(c.id) === String(uploadRes.latest_chapter.id))) ||
+        uploadRes?.latest_chapter ||
+        chapters[chapters.length - 1] ||
+        null;
+
+      if (targetChapter) {
+        gateLatestUploadedChapter = targetChapter;
+        const finalCount = Math.max(
+          1,
+          Math.min(MAX_QUESTIONS, parseInt($('gate-qcount-input')?.value, 10) || aiCount)
+        );
+        saveChapterQuestionCount(targetChapter, finalCount);
+        sylStatus('');
+        const readyBox = $('gate-ready-box');
+        const readyTitle = $('gate-ready-title');
+        if (readyTitle) {
+          readyTitle.textContent = `✓ Loaded “${targetChapter.title}” (${targetChapter.subject}) — AI set ${aiCount} questions by default (editable above, max 50).`;
+        }
+        if (readyBox) readyBox.hidden = false;
+      } else {
+        sylStatus('Done! Loading your chapters…');
+        manualGateOpen = false;
+        await loadChapters({ silent: true, forceChaptersView: true });
+        renderChapters();
+        show('view-chapters');
+      }
     } catch (e) {
       sylStatus(e.message, true);
     } finally {
-      buttons.forEach((b) => { b.disabled = false; });
+      buttons.forEach((b) => { if (b) b.disabled = false; });
     }
   }
-  $('syl-pick-btn').addEventListener('click', () => $('syl-file').click());
-  $('syl-file').addEventListener('change', async (e) => {
+
+  $('syl-pick-btn')?.addEventListener('click', () => $('syl-file')?.click());
+  $('syl-file')?.addEventListener('change', async (e) => {
     const input = e.currentTarget;
     const file = input.files && input.files[0];
     input.value = '';
     if (!file) return;
     const nameEl = $('syl-file-name');
-    nameEl.textContent = file.name;
-    nameEl.hidden = false;
+    if (nameEl) {
+      nameEl.textContent = file.name;
+      nameEl.hidden = false;
+    }
     if (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') return sylStatus('Please choose a PDF file.', true);
     if (file.size > MAX_PDF_BYTES) return sylStatus('That PDF is over 20 MB, which is too big.', true);
     try {
-      await sendSyllabus({ kind: 'pdf', fileName: file.name, dataBase64: await toBase64(file) }, [$('syl-pick-btn'), $('syl-text-send')]);
-    } catch (err) { sylStatus(err.message, true); }
+      await sendSyllabus(
+        { kind: 'pdf', fileName: file.name, fileSize: file.size, dataBase64: await toBase64(file) },
+        [$('syl-pick-btn'), $('syl-text-send')]
+      );
+    } catch (err) {
+      sylStatus(err.message, true);
+    }
   });
-  $('syl-text-toggle').addEventListener('click', () => {
+
+  $('syl-text-toggle')?.addEventListener('click', () => {
     const panel = $('syl-text-panel');
+    if (!panel) return;
     panel.hidden = !panel.hidden;
-    if (!panel.hidden) $('syl-text').focus();
+    if (!panel.hidden) $('syl-text')?.focus();
   });
-  $('syl-text-send').addEventListener('click', () => {
-    const text = $('syl-text').value.trim();
+
+  // Live heuristic update as user pastes text into New Quiz
+  $('syl-text')?.addEventListener('input', (e) => {
+    if (!gateCountManuallyEdited) {
+      const est = analyzeChapterQuestionsHeuristic({ text: e.currentTarget.value });
+      setGateQuestionCount(est, { fromAi: true });
+    }
+  });
+
+  $('syl-text-send')?.addEventListener('click', () => {
+    const text = ($('syl-text')?.value || '').trim();
     if (text.length < 10) return sylStatus('Paste your syllabus or study text first.', true);
     sendSyllabus({ kind: 'text', text }, [$('syl-pick-btn'), $('syl-text-send')]);
   });
 
-  $('refresh-chapters-btn').addEventListener('click', () => loadChapters({ silent: true, forceChaptersView: true }).then(renderChapters));
+  $('refresh-chapters-btn')?.addEventListener('click', () =>
+    loadChapters({ silent: true, forceChaptersView: true }).then(renderChapters)
+  );
 
-  // ---------- subject sections ----------
+  // ---------- Subject Sections & Chapter Cards ----------
   function groupSections() {
     const map = new Map();
     for (const c of chapters) {
@@ -335,11 +761,11 @@
   }
 
   function renderChapters() {
+    syncTopQuestionCountUI();
     const sections = groupSections();
     const subjects = [...new Set(sections.map((s) => s.subject))];
     if (activeTab !== 'all' && !subjects.includes(activeTab)) activeTab = 'all';
 
-    // tabs
     const tabs = $('subject-tabs');
     tabs.innerHTML = '';
     for (const name of ['all', ...subjects]) {
@@ -349,11 +775,13 @@
       b.setAttribute('role', 'tab');
       b.setAttribute('aria-selected', String(name === activeTab));
       b.textContent = name === 'all' ? 'All Subjects' : name;
-      b.addEventListener('click', () => { activeTab = name; renderChapters(); });
+      b.addEventListener('click', () => {
+        activeTab = name;
+        renderChapters();
+      });
       tabs.appendChild(b);
     }
 
-    // sections
     const root = $('subject-sections');
     root.innerHTML = '';
     for (const sec of sections) {
@@ -381,47 +809,119 @@
   }
 
   function chapterCard(c) {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'qz-chapter';
-    btn.dataset.chapterId = c.id;
-    const label = `${c.number != null ? `Chapter ${c.number}: ` : ''}${c.title}`;
+    const card = document.createElement('div');
+    card.className = 'qz-chapter';
+    card.dataset.chapterId = c.id;
+    card.tabIndex = 0;
+    const qCount = getEffectiveQuestionCount(c);
+
     if (c.result) {
-      // Already attempted: one attempt per chapter. aria-disabled (not disabled) so hover/focus still show the result.
-      btn.classList.add('done');
-      btn.setAttribute('aria-disabled', 'true');
-      btn.setAttribute('aria-label', `${label}, completed, score ${c.result.percentage} percent`);
-    } else {
-      btn.setAttribute('aria-label', label);
+      card.classList.add('done');
     }
-    btn.innerHTML = `
+
+    card.innerHTML = `
       <div class="qz-ch-top">
-        <span class="qz-ch-num">${c.number != null ? 'CH ' + String(c.number).padStart(2, '0') : 'CH —'}</span>
+        <span class="qz-ch-num">${c.number != null ? 'CH ' + String(c.number).padStart(2, '0') : 'CH —'} · ${qCount} Qs</span>
         <span class="chip ${c.matched ? 'ok' : 'wait'}">${c.matched ? 'NCERT' : 'By topic'}</span>
       </div>
       <div class="qz-ch-title">${esc(c.title)}</div>
       <div class="qz-ch-foot">
-        ${c.result
-          ? `<span class="qz-badge ${tone(c.result.percentage)}">${c.result.percentage}%</span><span>Completed · ${c.result.score}/${c.result.total}</span>`
-          : `<span>Not attempted yet</span><span></span>`}
+        ${
+          c.result
+            ? `<span class="qz-badge ${tone(c.result.percentage)}">${c.result.percentage}%</span>
+               <span>${c.result.score}/${c.result.total} · Attempt #${c.result.attempts || 1}</span>`
+            : `<span>Not attempted yet</span><span>${qCount} questions</span>`
+        }
+      </div>
+      <div class="qz-ch-actions">
+        ${
+          c.result
+            ? `<button type="button" class="qz-ch-btn primary" data-action="requiz" title="Take a new quiz on this chapter with fresh questions">
+                 <i class="fa-solid fa-rotate-right" aria-hidden="true"></i> Requiz
+               </button>
+               <button type="button" class="qz-ch-btn" data-action="review" title="Review your answers and AI feedback from your last attempt">
+                 <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i> Review Answers
+               </button>`
+            : `<button type="button" class="qz-ch-btn primary" data-action="start">
+                 <i class="fa-solid fa-play" aria-hidden="true"></i> Start Quiz (${qCount} Qs)
+               </button>`
+        }
       </div>`;
-    if (!c.result) btn.addEventListener('click', () => startQuiz(c));
+
+    card.querySelector('[data-action="start"]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      startQuiz(c, getEffectiveQuestionCount(c));
+    });
+
+    card.querySelector('[data-action="requiz"]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      startQuiz(c, getEffectiveQuestionCount(c));
+    });
+
+    card.querySelector('[data-action="review"]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openSavedChapterReview(c);
+    });
+
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('button')) return;
+      if (c.result) {
+        openSavedChapterReview(c);
+      } else {
+        startQuiz(c, getEffectiveQuestionCount(c));
+      }
+    });
+
     if (c.result) {
-      btn.addEventListener('mouseenter', () => showPop(btn, c));
-      btn.addEventListener('mouseleave', hidePop);
-      btn.addEventListener('focus', () => showPop(btn, c));
-      btn.addEventListener('blur', hidePop);
+      card.addEventListener('mouseenter', () => showPop(card, c));
+      card.addEventListener('mouseleave', hidePop);
+      card.addEventListener('focus', () => showPop(card, c));
+      card.addEventListener('blur', hidePop);
     }
-    return btn;
+    return card;
   }
 
-  // ---------- hover popover ----------
+  function openSavedChapterReview(c) {
+    if (!c || !c.result) return;
+    hidePop();
+    const localBackup = getLocalReviewBackup(c);
+    const reviewList =
+      Array.isArray(c.result.review) && c.result.review.length
+        ? c.result.review
+        : Array.isArray(localBackup?.review)
+          ? localBackup.review
+          : [];
+
+    const payload = {
+      score: c.result.score,
+      total: c.result.total,
+      percentage: c.result.percentage,
+      revision_tier: c.result.revision_tier,
+      revision_message: c.result.revision_message,
+      weak_subtopics: c.result.weak_subtopics || [],
+      attempts: c.result.attempts || 1,
+      review: reviewList,
+      chapter: {
+        id: c.id,
+        subject: c.subject,
+        exam: c.exam,
+        number: c.number,
+        title: c.title,
+      },
+    };
+    showDone(payload, { openReviewImmediately: true });
+  }
+
+  // ---------- Hover Popover ----------
   const pop = $('result-pop');
   let popAnchor = null;
   function placePop() {
     if (!popAnchor) return;
     const a = popAnchor.getBoundingClientRect();
-    if (a.bottom < 0 || a.top > innerHeight) { hidePop(); return; } // card scrolled out of view
+    if (a.bottom < 0 || a.top > innerHeight) {
+      hidePop();
+      return;
+    }
     const p = pop.getBoundingClientRect();
     const gap = 10;
     let top = a.bottom + gap;
@@ -432,21 +932,31 @@
   }
   function showPop(anchor, c) {
     const r = c.result;
+    if (!r) return;
     const t = tone(r.percentage);
     pop.innerHTML = `
-      <div><span class="qz-pop-pct ${t}">${r.percentage}%</span><span class="qz-pop-score">${r.score}/${r.total} correct</span></div>
+      <div><span class="qz-pop-pct ${t}">${r.percentage}%</span><span class="qz-pop-score">${r.score}/${r.total} correct · Attempt #${r.attempts || 1}</span></div>
       <p class="qz-pop-msg">${esc(r.revision_message)}</p>
       ${r.weak_subtopics?.length ? `<div class="qz-pop-weak"><b>Weak subtopics</b>${r.weak_subtopics.map((w) => `<span>${esc(w)}</span>`).join('')}</div>` : ''}
-      <div class="qz-pop-cta">Quiz completed. Each chapter can only be attempted once.</div>`;
+      <div class="qz-pop-cta">Click "Review Answers" to inspect your answers or "Requiz" for a new set of questions.</div>`;
     popAnchor = anchor;
     pop.hidden = false;
     placePop();
   }
-  function hidePop() { pop.hidden = true; popAnchor = null; }
+  function hidePop() {
+    if (pop) pop.hidden = true;
+    popAnchor = null;
+  }
   addEventListener('scroll', () => { if (popAnchor) requestAnimationFrame(placePop); }, { passive: true });
   addEventListener('resize', placePop);
 
-  // ---------- Voice Input (Web Speech API SpeechRecognition) ----------
+  // ==========================================================================
+  // Dual-Engine Voice Input (#voice-answer-btn)
+  // 1. Continuous Web Speech API (`SpeechRecognition` / `webkitSpeechRecognition`)
+  //    with auto-restart on silence (`userWantsMic`) so it NEVER stops prematurely!
+  // 2. Parallel `MediaRecorder` + Gemini Audio Transcription fallback (`/api/quizzes/transcribe`)
+  //    so if the browser's SpeechRecognition fails or produces 0 words, Gemini transcribes the recording!
+  // ==========================================================================
   const answerInput = $('quiz-answer-input');
   const charCountEl = $('quiz-char-count');
   const aiThinkingEl = $('quiz-ai-thinking');
@@ -458,9 +968,14 @@
 
   const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
   let recognition = null;
-  let isListening = false;
+  let userWantsMic = false;
+  let restartTimer = null;
   let baseTextBeforeSpeech = '';
   let finalizedSpeech = '';
+  let pendingInterimSpeech = '';
+  let mediaStream = null;
+  let mediaRecorder = null;
+  let recordedChunks = [];
 
   function syncAnswerText(newVal) {
     if (!answerInput) return;
@@ -472,7 +987,6 @@
   }
 
   function updateVoiceUI(listening, customStatus = '') {
-    isListening = listening;
     if (voiceBtn) {
       voiceBtn.classList.toggle('is-listening', listening);
       voiceBtn.setAttribute('aria-pressed', String(listening));
@@ -488,114 +1002,270 @@
       if (customStatus) {
         voiceStatusMsg.textContent = customStatus;
       } else if (listening) {
-        voiceStatusMsg.textContent = 'Listening… speak your answer clearly';
+        voiceStatusMsg.textContent = '🎙️ Listening continuously… speak your answer, then click "Stop Listening"';
       } else {
         voiceStatusMsg.innerHTML = DEFAULT_FOOT_HINT;
       }
     }
   }
 
-  function stopVoiceInput(customStatus = '') {
+  function cleanupMediaStream() {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      try { mediaRecorder.stop(); } catch {}
+    }
+    mediaRecorder = null;
+    if (mediaStream) {
+      try { mediaStream.getTracks().forEach((t) => t.stop()); } catch {}
+      mediaStream = null;
+    }
+  }
+
+  async function transcribeAudioBlobWithGemini(blob) {
+    if (!blob || blob.size < 400) return '';
+    const base64Audio = await new Promise((resolve) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result || '').split(',')[1] || '');
+      r.onerror = () => resolve('');
+      r.readAsDataURL(blob);
+    });
+    if (!base64Audio) return '';
+
+    const mimeType = blob.type || 'audio/webm';
+    const geminiKey = getCookie('sa_gemini_key') || undefined;
+
+    // 1. Try backend /api/quizzes/transcribe
+    try {
+      const res = await postJson(
+        '/api/quizzes/transcribe',
+        { telegramUserId: userId, audioBase64: base64Audio, mimeType, geminiKey },
+        45000
+      );
+      if (res?.transcript) return String(res.transcript).trim();
+    } catch { /* fallback to direct Gemini REST call below */ }
+
+    // 2. Direct Gemini REST API fallback
+    if (geminiKey) {
+      try {
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(geminiKey)}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [
+                {
+                  parts: [
+                    { inlineData: { mimeType: mimeType.split(';')[0] || 'audio/webm', data: base64Audio } },
+                    {
+                      text:
+                        "Transcribe the student's spoken quiz answer into clean plain text. Output ONLY the exact words spoken, with no commentary.",
+                    },
+                  ],
+                },
+              ],
+            }),
+          }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          return String(data?.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+        }
+      } catch {}
+    }
+    return '';
+  }
+
+  function stopVoiceInput(customStatus = '', { transcribeFallback = false } = {}) {
+    userWantsMic = false;
+    clearTimeout(restartTimer);
+    restartTimer = null;
+
+    if (pendingInterimSpeech.trim()) {
+      finalizedSpeech += (finalizedSpeech ? ' ' : '') + pendingInterimSpeech.trim();
+      pendingInterimSpeech = '';
+      const combined = [baseTextBeforeSpeech, finalizedSpeech].filter(Boolean).join(baseTextBeforeSpeech ? ' ' : '');
+      syncAnswerText(combined);
+    }
+
     if (recognition) {
       try {
         recognition.onend = null;
+        recognition.onerror = null;
+        recognition.onresult = null;
         recognition.stop();
-      } catch { /* ignore */ }
+      } catch {}
       recognition = null;
     }
+
+    const hadLiveSpeech = finalizedSpeech.trim().length > 0;
+
+    if (transcribeFallback && !hadLiveSpeech && mediaRecorder && recordedChunks.length > 0) {
+      const mimeType = mediaRecorder.mimeType || 'audio/webm';
+      const recorderRef = mediaRecorder;
+      updateVoiceUI(false, 'Transcribing your voice with AI…');
+      recorderRef.onstop = async () => {
+        const blob = new Blob(recordedChunks, { type: mimeType });
+        recordedChunks = [];
+        cleanupMediaStream();
+        const transcript = await transcribeAudioBlobWithGemini(blob);
+        if (transcript) {
+          const combined = [baseTextBeforeSpeech, transcript].filter(Boolean).join(baseTextBeforeSpeech ? ' ' : '');
+          syncAnswerText(combined);
+          updateVoiceUI(false, '✓ Voice transcribed!');
+          setTimeout(() => { if (!userWantsMic) updateVoiceUI(false); }, 2200);
+        } else {
+          updateVoiceUI(false, customStatus || 'No speech detected. Speak clearly and try again.');
+        }
+      };
+      cleanupMediaStream();
+      return;
+    }
+
+    recordedChunks = [];
+    cleanupMediaStream();
     updateVoiceUI(false, customStatus);
   }
 
-  function toggleVoiceInput() {
-    if (!quiz || !answerInput || answerInput.disabled) return;
-    if (isListening) {
-      stopVoiceInput();
-      return;
-    }
-    if (!SpeechRecognitionAPI) {
-      updateVoiceUI(false, 'Voice input is not supported in this browser. Please use Chrome, Edge, or Safari.');
-      return;
-    }
-
+  function createAndStartSpeechRecognition() {
+    if (!SpeechRecognitionAPI || !userWantsMic) return;
     try {
-      recognition = new SpeechRecognitionAPI();
-      recognition.lang = navigator.language || 'en-IN';
-      recognition.continuous = true;
-      recognition.interimResults = true;
+      const rec = new SpeechRecognitionAPI();
+      recognition = rec;
+      rec.lang = 'en-IN';
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.maxAlternatives = 1;
 
-      baseTextBeforeSpeech = answerInput.value.trim();
-      finalizedSpeech = '';
-
-      recognition.onstart = () => {
-        updateVoiceUI(true, 'Listening… speak your answer clearly');
-      };
-
-      recognition.onresult = (event) => {
-        let interimTranscript = '';
+      rec.onresult = (event) => {
+        let interim = '';
         for (let i = event.resultIndex; i < event.results.length; i++) {
-          const transcript = event.results[i][0].transcript;
+          const t = event.results[i][0].transcript;
           if (event.results[i].isFinal) {
-            finalizedSpeech += (finalizedSpeech ? ' ' : '') + transcript.trim();
+            finalizedSpeech += (finalizedSpeech ? ' ' : '') + t.trim();
           } else {
-            interimTranscript += transcript;
+            interim += t;
           }
         }
-        const spoken = [finalizedSpeech, interimTranscript.trim()].filter(Boolean).join(' ');
+        pendingInterimSpeech = interim;
+        const spoken = [finalizedSpeech, interim.trim()].filter(Boolean).join(' ');
         const combined = [baseTextBeforeSpeech, spoken].filter(Boolean).join(baseTextBeforeSpeech ? ' ' : '');
         syncAnswerText(combined);
       };
 
-      recognition.onerror = (event) => {
+      rec.onerror = (event) => {
+        if (!userWantsMic) return;
         if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
-          stopVoiceInput('Microphone access was denied. Allow microphone permissions in your browser.');
-        } else if (event.error === 'no-speech') {
-          stopVoiceInput('No speech detected. Click "Speak Answer" to try again.');
-        } else {
-          stopVoiceInput(`Voice input stopped (${event.error}).`);
+          stopVoiceInput('Microphone permission denied. Please allow microphone access in your browser.');
+          return;
+        }
+        // For 'no-speech', 'aborted', or transient 'network', keep listening via MediaRecorder / auto-restart
+      };
+
+      rec.onend = () => {
+        if (pendingInterimSpeech.trim()) {
+          finalizedSpeech += (finalizedSpeech ? ' ' : '') + pendingInterimSpeech.trim();
+          pendingInterimSpeech = '';
+          const combined = [baseTextBeforeSpeech, finalizedSpeech].filter(Boolean).join(baseTextBeforeSpeech ? ' ' : '');
+          syncAnswerText(combined);
+        }
+        // CRITICAL FIX: Do NOT stop when the browser pauses! Auto-restart while userWantsMic is true.
+        if (userWantsMic) {
+          clearTimeout(restartTimer);
+          restartTimer = setTimeout(() => {
+            if (userWantsMic) createAndStartSpeechRecognition();
+          }, 140);
         }
       };
 
-      recognition.onend = () => {
-        recognition = null;
-        if (isListening) {
-          updateVoiceUI(false);
-        }
-      };
+      rec.start();
+    } catch {
+      // Even if SpeechRecognition fails to start, MediaRecorder is recording and will transcribe on stop
+    }
+  }
 
-      recognition.start();
-    } catch (err) {
-      stopVoiceInput(`Could not start microphone: ${err.message}`);
+  async function toggleVoiceInput() {
+    if (!quiz || !answerInput || answerInput.disabled) return;
+    if (userWantsMic) {
+      stopVoiceInput('', { transcribeFallback: true });
+      return;
+    }
+
+    baseTextBeforeSpeech = answerInput.value.trim();
+    finalizedSpeech = '';
+    pendingInterimSpeech = '';
+    recordedChunks = [];
+    userWantsMic = true;
+    updateVoiceUI(true, '🎙️ Starting microphone…');
+
+    // Warm up microphone & start MediaRecorder so voice works in ALL browsers
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        if (!userWantsMic) {
+          cleanupMediaStream();
+          return;
+        }
+        if (typeof MediaRecorder !== 'undefined') {
+          const preferredMime =
+            MediaRecorder.isTypeSupported?.('audio/webm;codecs=opus')
+              ? 'audio/webm;codecs=opus'
+              : MediaRecorder.isTypeSupported?.('audio/mp4')
+                ? 'audio/mp4'
+                : '';
+          mediaRecorder = preferredMime
+            ? new MediaRecorder(mediaStream, { mimeType: preferredMime })
+            : new MediaRecorder(mediaStream);
+          mediaRecorder.ondataavailable = (ev) => {
+            if (ev.data && ev.data.size > 0) recordedChunks.push(ev.data);
+          };
+          mediaRecorder.start(250);
+        }
+      } catch (err) {
+        stopVoiceInput(`Microphone access blocked (${err.message}). Allow microphone permission in your browser.`);
+        return;
+      }
+    }
+
+    updateVoiceUI(true, '🎙️ Listening continuously… speak your answer, then click "Stop Listening"');
+    if (SpeechRecognitionAPI) {
+      createAndStartSpeechRecognition();
     }
   }
 
   voiceBtn?.addEventListener('click', toggleVoiceInput);
 
-  // ---------- quiz runner (Typed or Spoken Answers verified by AI) ----------
-  async function startQuiz(c) {
+  // ---------- Quiz Runner (Typed / Spoken Answers + Requiz Support) ----------
+  async function startQuiz(c, requestedCount = null) {
     hidePop();
     banner('');
     stopVoiceInput();
+    const countToRequest = requestedCount || getEffectiveQuestionCount(c);
     sessionStorage.setItem(RETURN_KEY, JSON.stringify({ chapterId: c.id, subject: c.subject, exam: c.exam || '' }));
-    $('loading-text').textContent = `Reading the chapter and writing a ${c.subject} quiz on “${c.title}”… this takes a few seconds.`;
+    $('loading-text').textContent = `Reading the chapter and writing a ${countToRequest}-question ${c.subject} quiz on “${c.title}”… this takes a few seconds.`;
     show('view-loading');
     try {
-      const data = await postJson('/api/quizzes/generate', { telegramUserId: userId, chapterId: c.id });
+      const data = await postJson(
+        '/api/quizzes/generate',
+        { telegramUserId: userId, chapterId: c.id, questionCount: countToRequest },
+        150000
+      );
       quiz = {
         quizId: data.quizId,
+        attempt: data.attempt || 1,
         chapter: data.chapter,
         questions: data.questions,
         answers: data.questions.map(() => ''),
         index: 0,
       };
-      $('quiz-title').textContent = `${data.chapter.subject} · ${data.chapter.number != null ? 'Ch ' + data.chapter.number + ': ' : ''}${data.chapter.title}`;
+      $('quiz-title').textContent = `${data.chapter.subject} · ${
+        data.chapter.number != null ? 'Ch ' + data.chapter.number + ': ' : ''
+      }${data.chapter.title}${quiz.attempt > 1 ? ` (Attempt #${quiz.attempt})` : ''}`;
       $('quiz-meta').textContent = `${data.questions.length} questions`;
       if (aiThinkingEl) aiThinkingEl.hidden = true;
       show('view-quiz');
       scrollTo({ top: 0 });
       renderQuestion();
     } catch (e) {
-      // 409 = already taken (e.g. in another tab): refresh so the card shows its result
-      if (e.status === 409) await loadChapters({ silent: true }).catch(() => {});
       show('view-chapters');
       banner(e.message);
       scrollTo({ top: 0, behavior: 'smooth' });
@@ -625,7 +1295,9 @@
     $('prev-btn').disabled = index === 0;
     const next = $('next-btn');
     next.disabled = currentTyped.trim().length === 0;
-    next.innerHTML = last ? 'Finish <i class="fa-solid fa-flag-checkered" aria-hidden="true"></i>' : 'Next <i class="fa-solid fa-arrow-right" aria-hidden="true"></i>';
+    next.innerHTML = last
+      ? 'Finish <i class="fa-solid fa-flag-checkered" aria-hidden="true"></i>'
+      : 'Next <i class="fa-solid fa-arrow-right" aria-hidden="true"></i>';
     setTimeout(() => answerInput?.focus(), 30);
   }
 
@@ -651,6 +1323,7 @@
     quiz.index--;
     renderQuestion();
   });
+
   $('next-btn').addEventListener('click', () => {
     if (!quiz) return;
     stopVoiceInput();
@@ -662,6 +1335,7 @@
       submitQuiz();
     }
   });
+
   $('quit-btn').addEventListener('click', () => {
     stopVoiceInput();
     if (quiz && quiz.answers.some((a) => String(a || '').trim().length > 0) && !confirm('Leave this quiz? Your answers will not be saved.')) return;
@@ -671,6 +1345,7 @@
 
   function quizError(msg) {
     const el = $('quiz-error');
+    if (!el) return;
     el.textContent = msg || '';
     el.hidden = !msg;
     if (msg) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -692,7 +1367,11 @@
     next.textContent = 'Checking with AI…';
     let result;
     try {
-      result = await postJson('/api/quizzes/submit', { telegramUserId: userId, quizId: quiz.quizId, answers: quiz.answers }, 90000);
+      result = await postJson(
+        '/api/quizzes/submit',
+        { telegramUserId: userId, quizId: quiz.quizId, answers: quiz.answers },
+        120000
+      );
     } catch (e) {
       submitting = false;
       if (aiThinkingEl) aiThinkingEl.hidden = true;
@@ -701,7 +1380,7 @@
       prev.disabled = quiz.index === 0;
       next.disabled = false;
       next.innerHTML = 'Try again <i class="fa-solid fa-rotate-right" aria-hidden="true"></i>';
-      if (e.status === 410 || e.status === 409) {
+      if (e.status === 410) {
         quiz = null;
         await backToChapters({ scroll: false });
         banner(e.message);
@@ -712,96 +1391,159 @@
     }
     submitting = false;
     if (aiThinkingEl) aiThinkingEl.hidden = true;
-    quiz = null;
-    try {
-      showDone(result);
-    } catch (e) {
-      console.error(e);
-      banner(`Saved: ${result.score}/${result.total} (${result.percentage}%).`);
-      backToChapters({ scroll: true });
+
+    // Save local backup of the review & update in-memory chapter state immediately
+    saveLocalReviewBackup(result.chapter, result);
+    const chInList = chapters.find(
+      (x) =>
+        String(x.id) === String(result.chapter?.id) ||
+        (x.subject === result.chapter?.subject && x.title === result.chapter?.title)
+    );
+    if (chInList) {
+      chInList.result = {
+        score: result.score,
+        total: result.total,
+        percentage: result.percentage,
+        revision_tier: result.revision_tier,
+        revision_message: result.revision_message,
+        weak_subtopics: result.weak_subtopics || [],
+        attempts: result.attempts || 1,
+        review: result.review || [],
+      };
     }
+
+    quiz = null;
+    showDone(result, { openReviewImmediately: false });
   }
 
-  // ---------- completion + auto return ----------
-  function showDone(r) {
+  // ---------- Completion & Review Answers Screen (No Forced Auto-Redirect!) ----------
+  function showDone(r, { openReviewImmediately = false } = {}) {
+    activeDoneChapter =
+      chapters.find(
+        (x) =>
+          String(x.id) === String(r.chapter?.id) ||
+          (x.subject === r.chapter?.subject && x.title === r.chapter?.title)
+      ) || r.chapter || null;
+
     const t = tone(r.percentage);
     $('done-ring').className = `qz-ring ${t}`;
     $('done-ring').style.setProperty('--p', r.percentage);
     $('done-pct').textContent = `${r.percentage}%`;
-    $('done-title').textContent = r.percentage >= 80 ? 'Great work!' : r.percentage >= 50 ? 'Good effort' : 'Quiz complete';
-    $('done-score').textContent = `${r.score} of ${r.total} correct · ${r.chapter.title}`;
-    $('done-tier').textContent = r.revision_message;
+    $('done-title').textContent =
+      r.percentage >= 80 ? 'Great work!' : r.percentage >= 50 ? 'Good effort' : 'Quiz complete';
+    $('done-score').textContent = `${r.score} of ${r.total} correct · ${r.chapter?.title || ''}${
+      r.attempts ? ` (Attempt #${r.attempts})` : ''
+    }`;
+    $('done-tier').textContent = r.revision_message || '';
+
     const weak = $('done-weak');
-    weak.hidden = !r.weak_subtopics.length;
-    weak.textContent = r.weak_subtopics.length ? `Focus on: ${r.weak_subtopics.join(', ')}` : '';
+    const weakList = Array.isArray(r.weak_subtopics) ? r.weak_subtopics : [];
+    weak.hidden = !weakList.length;
+    weak.textContent = weakList.length ? `Focus on: ${weakList.join(', ')}` : '';
+
+    const redirectMsg = $('done-redirect');
+    if (redirectMsg) {
+      redirectMsg.hidden = true;
+      redirectMsg.textContent = '';
+    }
 
     const rv = $('done-review');
-    rv.hidden = true;
-    rv.innerHTML = r.review.map((q, i) => `
-      <div class="qz-rv ${q.correct ? 'ok' : ''}">
-        <h4>${i + 1}. ${esc(q.question)}</h4>
-        <p><b>Your answer:</b> ${q.userAnswer ? esc(q.userAnswer) : 'Skipped'} ${q.correct ? '✓' : '✗'}</p>
-        ${q.feedback ? `<p><b>AI book check:</b> ${esc(q.feedback)}</p>` : ''}
-        ${q.correct ? '' : `<p><b>Correct answer:</b> ${esc(q.expectedAnswer || '')}</p>`}
-        <p>${esc(q.explanation || '')}</p>
-      </div>`).join('');
+    const reviewItems = Array.isArray(r.review) ? r.review : [];
+    if (reviewItems.length > 0) {
+      rv.innerHTML = reviewItems
+        .map(
+          (q, i) => `
+        <div class="qz-rv ${q.correct ? 'ok' : ''}">
+          <h4>${i + 1}. ${esc(q.question)}</h4>
+          <p><b>Your answer:</b> ${q.userAnswer ? esc(q.userAnswer) : 'Skipped'} ${q.correct ? '✓' : '✗'}</p>
+          ${q.feedback ? `<p><b>AI book check:</b> ${esc(q.feedback)}</p>` : ''}
+          ${q.correct ? '' : `<p><b>Correct answer:</b> ${esc(q.expectedAnswer || '')}</p>`}
+          <p>${esc(q.explanation || '')}</p>
+        </div>`
+        )
+        .join('');
+    } else {
+      rv.innerHTML = `<div class="qz-rv ok"><p>Answer details for this earlier attempt were not stored. Click <b>Requiz (New Questions)</b> above to take a fresh quiz with full question-by-question AI book review!</p></div>`;
+    }
+
+    rv.hidden = !openReviewImmediately;
+    const reviewBtnLabel = $('done-review-btn-label');
+    if (reviewBtnLabel) {
+      reviewBtnLabel.textContent = openReviewImmediately ? 'Hide review' : 'Review answers';
+    }
 
     show('view-done');
-    scrollTo({ top: 0 });
-    let left = REDIRECT_SECONDS;
-    const label = $('done-redirect');
-    const tick = () => { label.textContent = `Taking you back to your chapters in ${left}s…`; };
-    tick();
-    clearInterval(redirectTimer);
-    redirectTimer = setInterval(() => {
-      left--;
-      if (left <= 0) { clearInterval(redirectTimer); backToChapters({ scroll: true }); } else tick();
-    }, 1000);
+    if (openReviewImmediately) {
+      setTimeout(() => rv.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+    } else {
+      scrollTo({ top: 0 });
+    }
   }
-  function cancelRedirect() {
-    clearInterval(redirectTimer);
-    redirectTimer = null;
-  }
-  $('done-review-btn').addEventListener('click', () => {
-    cancelRedirect();
-    $('done-redirect').textContent = '';
-    $('done-review').hidden = false;
-    $('done-review').scrollIntoView({ behavior: 'smooth', block: 'start' });
-  });
-  $('done-back-btn').addEventListener('click', () => { cancelRedirect(); backToChapters({ scroll: true }); });
 
-  // Return to the subject section the student started from, with fresh results, and point at the card
+  $('done-review-btn')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const rv = $('done-review');
+    const reviewBtnLabel = $('done-review-btn-label');
+    if (!rv) return;
+    const willShow = rv.hidden;
+    rv.hidden = !willShow;
+    if (reviewBtnLabel) {
+      reviewBtnLabel.textContent = willShow ? 'Hide review' : 'Review answers';
+    }
+    if (willShow) {
+      rv.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  });
+
+  $('done-requiz-btn')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (!activeDoneChapter) {
+      backToChapters({ scroll: false });
+      return;
+    }
+    startQuiz(activeDoneChapter, getEffectiveQuestionCount(activeDoneChapter));
+  });
+
+  $('done-back-btn')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    backToChapters({ scroll: true });
+  });
+
   async function backToChapters({ scroll }) {
-    cancelRedirect();
     let ret = null;
     try { ret = JSON.parse(sessionStorage.getItem(RETURN_KEY) || 'null'); } catch {}
+    currentView = 'view-chapters';
     const ok = await loadChapters({ silent: true, forceChaptersView: true });
-    if (!ok) { await loadChapters(); return; }
+    if (!ok) {
+      await loadChapters();
+      return;
+    }
     if (ret && scroll) activeTab = 'all';
     renderChapters();
     show('view-chapters');
-    if (!ret || !scroll) { scrollTo({ top: 0 }); return; }
+    if (!ret || !scroll) {
+      scrollTo({ top: 0 });
+      return;
+    }
     const card = document.querySelector(`.qz-chapter[data-chapter-id="${CSS.escape(String(ret.chapterId))}"]`);
     const section = card?.closest('.qz-section');
     if (!card) return;
-    section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    section?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     afterScroll(() => {
       card.classList.add('flash');
-      const c = chapters.find((x) => String(x.id) === String(ret.chapterId));
-      if (c?.result) {
-        const a = card.getBoundingClientRect();
-        if (a.top >= 0 && a.bottom <= innerHeight) {
-          showPop(card, c);
-          setTimeout(hidePop, 4500);
-        }
-      }
       sessionStorage.removeItem(RETURN_KEY);
     });
   }
 
   function afterScroll(cb) {
     let done = false;
-    const go = () => { if (done) return; done = true; removeEventListener('scrollend', go); cb(); };
+    const go = () => {
+      if (done) return;
+      done = true;
+      removeEventListener('scrollend', go);
+      cb();
+    };
     addEventListener('scrollend', go, { once: true });
     setTimeout(go, 1000);
   }

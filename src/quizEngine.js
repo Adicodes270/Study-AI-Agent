@@ -1,39 +1,42 @@
 // src/quizEngine.js
-// Question-count heuristic, Gemini open-ended quiz generation, and book-grounded AI answer verification.
+// Question-count heuristic (AI default min 10, max 50), Gemini open-ended quiz generation
+// (with fresh question sets on Requiz), and book-grounded AI answer verification.
 import { GoogleGenAI, Type } from "@google/genai";
 import { DEFAULT_CLASS_LEVEL, GEMINI_API_KEY, GEMINI_MODEL } from "./config.js";
 
-export const MIN_QUESTIONS = 5;
-export const MAX_QUESTIONS = 15;
+export const MIN_QUESTIONS = 10;
+export const MAX_QUESTIONS = 50;
 
 // ---------------------------------------------------------------------------
 // System Prompts (Book-Grounded Generation & High-Accuracy AI Verification)
 // ---------------------------------------------------------------------------
 export const QUIZ_GENERATION_SYSTEM_PROMPT = `You are an authoritative NCERT and CBSE subject-matter examiner and textbook researcher.
-Your task is to generate open-ended, short-answer questions (NEVER multiple-choice) where the student must type out their own answer.
+Your task is to generate open-ended, short-answer questions (NEVER multiple-choice) where the student must type or speak their own answer.
 
- Core Principles:
+Core Principles:
 1. Ground Every Question in the Book & Factual Research:
    - Base every question strictly on the official NCERT textbook chapter (if attached or matched) and verified academic facts for the student's class level.
    - Never invent facts, out-of-syllabus formulas, or ambiguous trick questions.
-2. Open-Ended Typed Format (No MCQs):
+2. Open-Ended Typed/Spoken Format (No MCQs):
    - Do NOT provide options (A, B, C, D).
-   - Frame each question so a student can type a clear, complete answer in 1 to 3 sentences, a short derivation/calculation, a definition, or a corrected sentence (for grammar).
-3. Authoritative Ground-Truth Reference Key:
+   - Frame each question so a student can type or speak a clear, complete answer in 1 to 3 sentences, a short derivation/calculation, a definition, or a corrected sentence (for grammar).
+3. Fresh Questions on Requiz:
+   - When previous questions are listed in the prompt, generate a completely new set of questions exploring different examples, subtopics, formulas, or cause-and-effect relationships from the chapter.
+4. Authoritative Ground-Truth Reference Key:
    - For every question, provide an exact, textbook-verified "expectedAnswer", a list of essential "keywords" / core concepts, and a clear "explanation" citing the underlying textbook principle.`;
 
-export const QUIZ_VERIFICATION_SYSTEM_PROMPT = `You are a rigorous, highly accurate NCERT/CBSE subject examiner and fact-checker grading a student's typed quiz answers.
+export const QUIZ_VERIFICATION_SYSTEM_PROMPT = `You are a rigorous, highly accurate NCERT/CBSE subject examiner and fact-checker grading a student's typed or voice-transcribed quiz answers.
 
 How You Must Verify Each Answer:
 1. Think Step-by-Step & Check the Book / Subject Facts:
    - Before deciding if an answer is right or wrong, carefully verify the question against the NCERT textbook chapter (if provided), the verified reference answer, and established scientific, mathematical, historical, or grammatical truth.
    - Write out your internal textbook/fact check in "verificationReasoning".
 2. High-Accuracy Grading Rules:
-   - Mark "correct": true ONLY if the student's typed answer is factually, conceptually, and (where applicable) numerically accurate according to the textbook and subject truth.
-   - Accept valid paraphrasing, synonyms, or concise phrasing in the student's own words as long as the core textbook concept/fact is genuinely right.
+   - Mark "correct": true ONLY if the student's answer is factually, conceptually, and (where applicable) numerically accurate according to the textbook and subject truth.
+   - Accept valid paraphrasing, synonyms, minor speech-to-text transcription quirks, or concise phrasing in the student's own words as long as the core textbook concept/fact is genuinely right.
    - Mark "correct": false if the student's answer contradicts the textbook, states a wrong formula/number/date/law, reverses cause-and-effect, is too vague to demonstrate understanding, or is blank/skipped.
 3. Constructive, Book-Grounded Feedback:
-   - In "feedback", clearly tell the student why their typed answer is right or wrong according to the textbook/research, pointing out the exact concept or detail they got right or missed.`;
+   - In "feedback", clearly tell the student why their answer is right or wrong according to the textbook/research, pointing out the exact concept or detail they got right or missed.`;
 
 // ---------------------------------------------------------------------------
 // Revision tiers (thresholds from the product spec)
@@ -49,25 +52,43 @@ export function revisionFor(percentage) {
 }
 
 // ---------------------------------------------------------------------------
-// How many questions? Short/narrow chapters get 5-6, broad ones up to 15.
+// How many questions?
+// - AI chapter analysis default is ALWAYS between 10 (MIN_QUESTIONS) and 50 (MAX_QUESTIONS).
+// - Users can also override with a custom count up to 50.
 // ---------------------------------------------------------------------------
-const HEAVY_SUBJECT = /math|physics|chemistry|science|biology|economics|accountancy|computer/i;
+const HEAVY_SUBJECT = /math|physics|chemistry|science|biology|economics|accountancy|computer|history|geography/i;
 const LIGHT_SUBJECT = /hindi|sanskrit|english|art|drawing|music|physical education/i;
 
-export function questionCountFor(chapter) {
-  const title = String(chapter.title ?? "");
-  const note = String(chapter.note ?? "");
-  const subject = String(chapter.subject ?? "");
-  let score = 7;
+export function questionCountFor(chapter, requestedCount = null) {
+  // 1. Explicit user-requested question count (from top bar or New Quiz input, 1..50)
+  if (requestedCount != null && requestedCount !== "") {
+    const n = parseInt(requestedCount, 10);
+    if (!Number.isNaN(n) && n >= 1) {
+      return Math.max(1, Math.min(MAX_QUESTIONS, n));
+    }
+  }
+
+  // 2. Saved AI-recommended or chapter-specific question count (clamped 10..50)
+  if (chapter?.recommended_questions != null) {
+    const rec = parseInt(chapter.recommended_questions, 10);
+    if (!Number.isNaN(rec) && rec >= 1) {
+      return Math.max(MIN_QUESTIONS, Math.min(MAX_QUESTIONS, rec));
+    }
+  }
+
+  // 3. AI chapter analysis heuristic (minimum default is ALWAYS 10, max 50)
+  const title = String(chapter?.title ?? "");
+  const note = String(chapter?.note ?? "");
+  const subject = String(chapter?.subject ?? "");
+  let score = 12; // baseline >= 10
   const topics = title.split(/\s*(?:,|;|\/|&|\band\b|\+|\s[-–—]\s)\s*/i).filter(Boolean).length;
-  score += Math.min(topics - 1, 3);
+  score += Math.min(Math.max(0, topics - 1) * 2, 6);
   const words = title.trim().split(/\s+/).filter(Boolean).length;
-  if (words >= 7) score += 2;
-  else if (words >= 4) score += 1;
-  else if (words <= 2) score -= 1;
-  if (note.length > 200) score += 2;
-  else if (note.length > 60) score += 1;
-  if (HEAVY_SUBJECT.test(subject)) score += 1;
+  if (words >= 7) score += 3;
+  else if (words >= 4) score += 2;
+  if (note.length > 200) score += 4;
+  else if (note.length > 60) score += 2;
+  if (HEAVY_SUBJECT.test(subject)) score += 3;
   if (LIGHT_SUBJECT.test(subject)) score -= 2;
   return Math.max(MIN_QUESTIONS, Math.min(MAX_QUESTIONS, score));
 }
@@ -156,14 +177,18 @@ const GRAMMAR = /grammar|tense|modal|determiner|preposition|conjunction|article|
 
 export const isGrammarChapter = (ch) => /english|hindi|sanskrit/i.test(String(ch.subject ?? "")) && GRAMMAR.test(`${ch.title ?? ""} ${ch.note ?? ""}`);
 
-export function buildPrompt(ch, count) {
+export function buildPrompt(ch, count, options = {}) {
   const cls = ch.class ?? DEFAULT_CLASS_LEVEL;
   const level = cls ? `Class ${cls}` : "school (class not known: keep it at an average middle/secondary-school level)";
   const code = bookCode(ch.pdf_url);
   const matched = ch.match_status === "matched" || Boolean(ch.pdf_url);
   const grammar = isGrammarChapter(ch);
+  const previousQuestions = Array.isArray(options.previousQuestions)
+    ? options.previousQuestions.filter(Boolean)
+    : [];
+  const attemptNumber = Number(options.attemptNumber) || (previousQuestions.length ? 2 : 1);
 
-  const head = `You are a CBSE exam-setter writing an open-ended, typed-answer chapter quiz for a ${level} student.
+  const head = `You are a CBSE exam-setter writing an open-ended, typed/spoken-answer chapter quiz for a ${level} student.
 
 Chapter: ${ch.number != null ? `Chapter ${ch.number} — ` : ""}${ch.title}
 Subject: ${ch.subject}${ch.exam ? `\nExam this is for: ${ch.exam}` : ""}${code ? `\nNCERT book code: ${code}` : ""}${ch.pdf_url ? `\nNCERT book PDF URL: ${ch.pdf_url}` : ""}${ch.note ? `\nSchool syllabus note (treat as the scope boundary): ${ch.note}` : ""}
@@ -177,16 +202,25 @@ Subject: ${ch.subject}${ch.exam ? `\nExam this is for: ${ch.exam}` : ""}${code ?
 - Ask the student to type the corrected sentence, fill in the blank with the right word/form, or transform/rewrite the given sentence.`
       : `This chapter is not linked to an NCERT chapter, so rely on the title and the school note for scope. Write exactly ${count} open-ended short-answer questions on "${ch.title}" at the level of a ${level} student.`;
 
+  const requizBlock = previousQuestions.length
+    ? `\nIMPORTANT — REQUIZ / RETAKE MODE (Attempt #${attemptNumber}, Variation Seed ${Date.now() % 10000}):
+The student is retaking this chapter's quiz to practice more!
+You MUST generate a FRESH, DIFFERENT set of ${count} questions that test new angles, different examples, other subtopics, numerical values, or deeper applications from the chapter.
+Avoid repeating these questions from their previous attempt:
+${previousQuestions.slice(0, 35).map((q, idx) => `${idx + 1}. ${q}`).join("\n")}\n`
+    : "";
+
   return `${head}
 ${scope}
-
-Format & Difficulty Rules (Typed Answers — NOT Multiple Choice):
-- The student will TYPE their answer in a text input box. Do NOT generate multiple-choice options (A/B/C/D).
+${requizBlock}
+Format & Difficulty Rules (Typed / Voice-Spoken Answers — NOT Multiple Choice):
+- Generate EXACTLY ${count} questions.
+- The student will TYPE or SPEAK their answer in a text input box. Do NOT generate multiple-choice options (A/B/C/D).
 - Keep question stems clear, direct, and answerable in 1 to 3 concise sentences, a key term/formula, or a single-step calculation.
-- About half the questions easy (direct concept explanation or definition in own words), about 40% medium (cause-and-effect, everyday scenario application, or simple 1-step calculation), and at most one or two slightly harder ones.
-- Spread the questions across the chapter's different subtopics instead of repeating one idea; start with easier questions and build up gently.
+- About half the questions easy (direct concept explanation or definition in own words), about 40% medium (cause-and-effect, everyday scenario application, or simple 1-step calculation), and at most 10% slightly harder ones.
+- Spread the questions across all of the chapter's subtopics instead of repeating one idea; start with easier questions and build up gently.
 - "subtopic": a short label (2-5 words) for the concept the question tests, so a student can see which concepts are weak.
-- "expectedAnswer": the accurate, textbook-verified model answer (1-3 sentences) against which the student's typed answer will be checked.
+- "expectedAnswer": the accurate, textbook-verified model answer (1-3 sentences) against which the student's answer will be checked.
 - "keywords": 2 to 5 essential textbook terms, facts, or values that a correct response should include.
 - "explanation": 1-3 sentences citing the textbook concept and explaining why the answer is right and what the common misconception is.`;
 }
@@ -217,20 +251,22 @@ export function cleanQuestions(raw, count) {
 }
 
 /**
- * Ask Gemini for a typed-answer quiz grounded in the chapter (and its NCERT PDF if available).
+ * Ask Gemini for a typed/spoken-answer quiz grounded in the chapter (and its NCERT PDF if available).
+ * Supports custom questionCount (1..50) and Requiz variation (previousQuestions).
  */
-export async function generateQuiz(chapter, apiKeys) {
+export async function generateQuiz(chapter, apiKeys, options = {}) {
   const keys = [...new Set([].concat(apiKeys || [], GEMINI_API_KEY).filter(Boolean))];
   if (!keys.length) {
     const e = new Error("No Gemini API key found. Save one on the setup page first.");
     e.status = 400;
     throw e;
   }
-  const count = questionCountFor(chapter);
-  const promptText = buildPrompt(chapter, count);
+  const count = questionCountFor(chapter, options.questionCount);
+  const promptText = buildPrompt(chapter, count, options);
   const pdfPart = await fetchChapterPdfPart(chapter.pdf_url);
   const contents = pdfPart ? [pdfPart, { text: promptText }] : promptText;
 
+  const isRequiz = Array.isArray(options.previousQuestions) && options.previousQuestions.length > 0;
   const request = {
     model: GEMINI_MODEL,
     contents,
@@ -238,7 +274,7 @@ export async function generateQuiz(chapter, apiKeys) {
       systemInstruction: QUIZ_GENERATION_SYSTEM_PROMPT,
       responseMimeType: "application/json",
       responseSchema: QUIZ_SCHEMA,
-      temperature: 0.4,
+      temperature: isRequiz ? 0.65 : 0.45,
     },
   };
   let lastErr;
@@ -246,7 +282,8 @@ export async function generateQuiz(chapter, apiKeys) {
     try {
       const res = await clientFor(key).models.generateContent(request);
       const questions = cleanQuestions(JSON.parse(res.text), count);
-      if (questions.length < Math.min(count, MIN_QUESTIONS)) {
+      const minRequired = Math.min(count, 5);
+      if (questions.length < minRequired) {
         throw new Error(`Gemini returned only ${questions.length} usable questions`);
       }
       return { questions, requested: count };
@@ -274,7 +311,7 @@ function normalizeTokens(str) {
 function fallbackGradeSingle(q, userAnswerRaw) {
   const ans = String(userAnswerRaw ?? "").trim();
   if (!ans) {
-    return { correct: false, feedback: "No answer was typed for this question." };
+    return { correct: false, feedback: "No answer was provided for this question." };
   }
   const ansLower = ans.toLowerCase();
   const expectedLower = String(q.expectedAnswer || "").toLowerCase();
@@ -314,7 +351,7 @@ function fallbackGradeSingle(q, userAnswerRaw) {
 }
 
 /**
- * Grade user-typed answers (array of strings) by having the AI think, check the book
+ * Grade user-typed or voice-spoken answers (array of strings) by having the AI think, check the book
  * (attaching the NCERT PDF if available) and research/verify each answer with high accuracy.
  */
 export async function grade(questions, answers, apiKeys = [], chapter = null) {
@@ -338,7 +375,7 @@ export async function grade(questions, answers, apiKeys = [], chapter = null) {
       studentTypedAnswer: normalizedAnswers[index] || "(Skipped / left blank)",
     }));
 
-    const verificationPrompt = `Verify and grade the student's typed answers for the following ${level} quiz.
+    const verificationPrompt = `Verify and grade the student's answers for the following ${level} quiz.
 
 Chapter: ${chapter?.number != null ? `Chapter ${chapter.number} — ` : ""}${chapter?.title || "Study Chapter"}
 Subject: ${chapter?.subject || "General"}${chapter?.exam ? ` (${chapter.exam})` : ""}
@@ -346,12 +383,12 @@ ${chapter?.pdf_url ? `NCERT Textbook PDF Source: ${chapter.pdf_url}` : ""}
 ${chapter?.note ? `Syllabus Scope / Notes: ${chapter.note}` : ""}
 
 Instructions:
-1. For each question (by "index"), think carefully and cross-check the student's typed answer ("studentTypedAnswer") against the textbook chapter, "textbookExpectedAnswer", "textbookKeyConcepts", and verified subject knowledge.
+1. For each question (by "index"), think carefully and cross-check the student's answer ("studentTypedAnswer") against the textbook chapter, "textbookExpectedAnswer", "textbookKeyConcepts", and verified subject knowledge.
 2. In "verificationReasoning", briefly state what the textbook/subject facts require and whether the student's statement satisfies or contradicts it.
-3. Set "correct": true ONLY if the student's typed answer is genuinely accurate (allowing natural phrasing in their own words). Set "correct": false if it is wrong, contradicts the book, misses the core point, or is blank.
+3. Set "correct": true ONLY if the student's answer is genuinely accurate (allowing natural phrasing or spoken dictation in their own words). Set "correct": false if it is wrong, contradicts the book, misses the core point, or is blank.
 4. In "feedback", write 1-2 clear sentences telling the student why their answer is right or wrong according to the textbook.
 
-Questions & Student Typed Answers to Verify:
+Questions & Student Answers to Verify:
 ${JSON.stringify(itemsToVerify, null, 2)}`;
 
     const pdfPart = chapter?.pdf_url ? await fetchChapterPdfPart(chapter.pdf_url) : null;
@@ -389,7 +426,7 @@ ${JSON.stringify(itemsToVerify, null, 2)}`;
     const correct = userAnswer ? Boolean(aiEv ? aiEv.correct : fbEv.correct) : false;
     const feedback = userAnswer
       ? String(aiEv?.feedback || fbEv.feedback)
-      : "Skipped — no answer was typed.";
+      : "Skipped — no answer was provided.";
 
     if (correct) score++;
     const w = weak.get(q.subtopic) || { wrong: 0, asked: 0 };

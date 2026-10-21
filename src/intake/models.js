@@ -8,6 +8,7 @@ export const Chapter = z.object({
   ncert_book_code: z.string().nullable().optional().default(null),
   ncert_chapter_number: z.number().int().nullable().optional().default(null),
   pdf_url: z.string().nullable().optional().default(null),
+  recommended_questions: z.number().int().nullable().optional().default(null),
 });
 
 export const Subject = z.object({

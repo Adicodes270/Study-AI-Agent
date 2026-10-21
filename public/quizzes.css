@@ -62,7 +62,7 @@ html.light {
 .qz-gate,
 .qz-center,
 .qz-done {
-  max-width: 640px;
+  max-width: 680px;
   margin: 2rem auto 0;
   text-align: center;
 }
@@ -230,6 +230,121 @@ html.light {
   border: 1px solid var(--accent-danger);
 }
 
+/* ---------- Question Count Selector (Top Bar & New Quiz Gate) ---------- */
+.qz-qcount-config,
+.qz-top-qcount-panel {
+  margin-top: 1.4rem;
+  padding: 1.1rem 1.25rem;
+  border-radius: 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  text-align: left;
+}
+
+.qz-top-qcount-panel {
+  background: var(--bg-surface);
+  border-color: var(--border-highlight);
+  box-shadow: var(--shadow-window);
+}
+
+.qz-qcount-config-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.qz-qcount-config-title {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.qz-qcount-config-sub {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  margin-top: 0.25rem;
+  line-height: 1.4;
+}
+
+.qz-qcount-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-top: 0.9rem;
+}
+
+.qz-qcount-controls input[type="range"] {
+  flex: 1;
+  min-width: 140px;
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+}
+
+.qz-qcount-num {
+  width: 72px;
+  padding: 0.45rem 0.6rem;
+  border-radius: 10px;
+  font: 700 0.95rem 'JetBrains Mono', monospace;
+  text-align: center;
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+}
+
+.qz-qcount-unit {
+  font: 500 0.8rem 'JetBrains Mono', monospace;
+  color: var(--text-muted);
+}
+
+.qz-qcount-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.75rem;
+}
+
+.qz-preset-pill {
+  font: 600 0.76rem 'JetBrains Mono', monospace;
+  padding: 0.28rem 0.68rem;
+  border-radius: 9999px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  transition: border-color 0.18s, color 0.18s, background 0.18s;
+}
+
+.qz-preset-pill:hover {
+  border-color: var(--accent-primary);
+  color: var(--text-primary);
+}
+
+.qz-preset-pill.active {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: #fff;
+}
+
+.qz-gate-ready {
+  margin-top: 1.2rem;
+  padding: 1rem 1.15rem;
+  border-radius: 14px;
+  background: var(--qz-good-soft);
+  border: 1px solid var(--qz-good);
+}
+
+.qz-gate-ready-title {
+  font-weight: 700;
+  color: var(--text-primary) !important;
+  font-size: 0.95rem;
+}
+
 /* ---------- Chapters dashboard ---------- */
 .qz-head {
   display: flex;
@@ -330,7 +445,7 @@ html.light {
 
 .qz-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(275px, 1fr));
   gap: 0.9rem;
 }
 
@@ -343,7 +458,7 @@ html.light {
   display: flex;
   flex-direction: column;
   gap: 0.7rem;
-  min-height: 118px;
+  min-height: 138px;
   padding: 1.05rem 1.1rem;
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
@@ -351,16 +466,11 @@ html.light {
   transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
-.qz-chapter:hover:not(:disabled),
-.qz-chapter:focus-visible {
+.qz-chapter:hover,
+.qz-chapter:focus-within {
   transform: translateY(-3px);
   border-color: var(--border-highlight);
   box-shadow: 0 16px 40px -22px var(--glow-primary);
-}
-
-.qz-chapter:disabled {
-  cursor: not-allowed;
-  opacity: 0.7;
 }
 
 .qz-chapter.flash {
@@ -405,6 +515,7 @@ html.light {
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
+  flex-wrap: wrap;
   font-size: 0.78rem;
   color: var(--text-muted);
 }
@@ -428,6 +539,48 @@ html.light {
 .qz-badge.bad {
   color: var(--qz-bad);
   background: var(--accent-danger-soft);
+}
+
+.qz-ch-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  margin-top: 0.35rem;
+  padding-top: 0.55rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.qz-ch-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.38rem 0.6rem;
+  border-radius: 9px;
+  font: 600 0.76rem 'Plus Jakarta Sans', sans-serif;
+  cursor: pointer;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  transition: border-color 0.18s, background 0.18s, color 0.18s;
+}
+
+.qz-ch-btn:hover {
+  border-color: var(--accent-primary);
+  color: var(--accent-primary);
+}
+
+.qz-ch-btn.primary {
+  background: var(--accent-primary-soft);
+  border-color: var(--border-highlight);
+  color: var(--accent-primary);
+}
+
+.qz-ch-btn.primary:hover {
+  background: var(--accent-primary);
+  color: #fff;
 }
 
 /* ---------- Hover popover ---------- */
@@ -722,7 +875,7 @@ html.light {
   margin-top: 1.6rem;
 }
 
-/* ---------- Completion ---------- */
+/* ---------- Completion & Answer Review ---------- */
 .qz-ring {
   --p: 0;
   --c: var(--qz-good);
@@ -871,16 +1024,6 @@ html.light {
   text-decoration: underline;
   margin-left: 0.4rem;
   font-weight: 700;
-}
-
-/* Completed chapters: one attempt only */
-.qz-chapter.done {
-  cursor: default;
-}
-
-.qz-chapter.done:hover,
-.qz-chapter.done:focus-visible {
-  transform: none;
 }
 
 /* ---- syllabus upload (computer) ---- */

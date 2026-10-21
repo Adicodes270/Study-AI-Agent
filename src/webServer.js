@@ -5,7 +5,20 @@ import path from "node:path";
 import { ROOT } from "./config.js";
 import { cancelLogin, confirmLogin, getLoginStatus, remoteLoginEnabled, startLogin, startRemoteLogin, takeLoginEmail, takeLoginSession } from "./notebooklmLogin.js";
 import { initDb, withDb } from "./db.js";
-import { getPairing, quizChapters, quizGenerate, quizSubmit, sendWelcome, syllabusUpload, telegramBotInfo } from "./api.js";
+import {
+  getPairing,
+  quizChapters,
+  quizGenerate,
+  quizGenerateCustom,
+  quizSubmit,
+  quizTranscribe,
+  resourceGet,
+  resourcesChapters,
+  resourcesGenerate,
+  sendWelcome,
+  syllabusUpload,
+  telegramBotInfo,
+} from "./api.js";
 import { deleteUserKey, getUserKeys, getUserProfile, inspectStorageState, saveUserConfig } from "./intake/userKeys.js";
 
 const MIME_TYPES = {
@@ -29,6 +42,18 @@ function tgRateLimited(ip, max) {
   if (!rec || rec.minute !== minute) { tgHits.set(ip, { minute, n: 1 }); return false; }
   if (tgHits.size > 5000) tgHits.clear();
   return ++rec.n > max;
+}
+
+function parseCookies(req) {
+  const cookies = {};
+  for (const part of String(req.headers.cookie || "").split(";")) {
+    const i = part.indexOf("=");
+    if (i < 1) continue;
+    try {
+      cookies[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+    } catch {}
+  }
+  return cookies;
 }
 
 export function startWebServer(port = 3000) {
@@ -98,10 +123,8 @@ export function startWebServer(port = 3000) {
               const id = parseId(body.telegram_user_id);
               if (Number.isNaN(id)) return json(400, { error: "Invalid Telegram user id" });
               const keys = Array.isArray(body.gemini_api_keys) ? body.gemini_api_keys : [];
-              // NotebookLM session captured by the login window (held server-side until now)
               let notebooklmState = null;
-              let loginEmail = null; // email read from the Google account that signed in
-              // Public site: the user uploads the storage_state.json made by `notebooklm login` on their own computer
+              let loginEmail = null;
               if (!body.notebooklm_login_id && body.notebooklm_storage_state) {
                 let st = body.notebooklm_storage_state;
                 if (typeof st === "string") { try { st = JSON.parse(st); } catch { throw new Error("That storage_state.json is not valid JSON"); } }
@@ -113,7 +136,6 @@ export function startWebServer(port = 3000) {
                 if (!notebooklmState) throw new Error("NotebookLM login not finished yet. Sign in first");
                 loginEmail = takeLoginEmail(String(body.notebooklm_login_id));
               }
-              // The signed-in Google account wins; a typed email is only a fallback if it could not be read
               const rawEmail = loginEmail || (typeof body.google_email === "string" ? body.google_email.trim().toLowerCase() : "");
               if (rawEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail)) throw new Error("That email address doesn't look valid");
               const saved = await saveUserConfig(id, { keys, notebooklmState, email: rawEmail || null });
@@ -128,7 +150,6 @@ export function startWebServer(port = 3000) {
         const id = parseId(url.pathname.split("/")[3]);
         if (Number.isNaN(id)) return json(400, { error: "Invalid Telegram user id" });
         if (req.method === "DELETE") return json(200, { ok: true, deleted: await deleteUserKey(id) });
-        // GET: never return the keys themselves, only a masked summary
         const keys = await getUserKeys(id);
         const profile = await getUserProfile(id);
         return json(200, { telegram_user_id: id, google_email: profile?.google_email || null, notebooklm_session_saved: Boolean(profile?.has_session), count: keys.length, masked: keys.map((k) => `AIza…${k.slice(-4)}`) });
@@ -137,13 +158,13 @@ export function startWebServer(port = 3000) {
       }
     }
 
-    // Telegram helpers for the setup page. The bot token stays here on the server (from .env).
+    // Telegram helpers for the setup page
     if (url.pathname.startsWith("/api/telegram/")) {
       const send = ({ status, body }) => {
         res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
         res.end(JSON.stringify(body));
       };
-      const parts = url.pathname.replace(/\/+$/, "").split("/"); // ["", "api", "telegram", ...]
+      const parts = url.pathname.replace(/\/+$/, "").split("/");
       if (req.method === "GET" && parts[3] === "bot" && parts.length === 4) return telegramBotInfo().then(send);
       if (req.method === "GET" && parts[3] === "pairing" && parts.length === 5) {
         if (tgRateLimited(clientIp, 90)) return send({ status: 429, body: { error: "Too many requests. Wait a minute." } });
@@ -163,29 +184,40 @@ export function startWebServer(port = 3000) {
       return send({ status: 404, body: { error: "Not found" } });
     }
 
-    // Quizzes: GET /api/quizzes/chapters, POST /api/quizzes/generate, POST /api/quizzes/submit
+    // Quizzes: GET /api/quizzes/chapters, POST /api/quizzes/generate, POST /api/quizzes/generate-custom, POST /api/quizzes/submit, POST /api/quizzes/transcribe
     if (url.pathname.startsWith("/api/quizzes/")) {
       const send = ({ status, body }) => {
         res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
         res.end(JSON.stringify(body));
       };
-      const cookies = {};
-      for (const part of String(req.headers.cookie || "").split(";")) {
-        const i = part.indexOf("=");
-        if (i < 1) continue;
-        try { cookies[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim()); } catch {}
-      }
-      const ctx = { cookies };
+      const ctx = { cookies: parseCookies(req) };
       const route = url.pathname.replace(/\/+$/, "");
       if (req.method === "GET" && route === "/api/quizzes/chapters") {
         return quizChapters(Object.fromEntries(url.searchParams), ctx).then(send);
+      }
+      if (req.method === "POST" && (route === "/api/quizzes/generate-custom" || route === "/api/quizzes/transcribe")) {
+        const LIMIT = 28 * 1024 * 1024;
+        const chunks = [];
+        let size = 0;
+        req.on("data", (c) => {
+          size += c.length;
+          if (size <= LIMIT) chunks.push(c);
+        });
+        req.on("end", () => {
+          if (size > LIMIT) return send({ status: 413, body: { error: "That payload is too big (20 MB max)." } });
+          let body;
+          try { body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"); } catch { return send({ status: 400, body: { error: "Invalid JSON" } }); }
+          const handler = route.endsWith("transcribe") ? quizTranscribe : quizGenerateCustom;
+          handler(body, ctx).then(send);
+        });
+        return;
       }
       if (req.method === "POST" && (route === "/api/quizzes/generate" || route === "/api/quizzes/submit")) {
         let raw = "";
         let tooBig = false;
         req.on("data", (c) => {
           raw += c;
-          if (raw.length > 200_000) { tooBig = true; req.destroy(); }
+          if (raw.length > 500_000) { tooBig = true; req.destroy(); }
         });
         req.on("end", () => {
           if (tooBig) return;
@@ -199,26 +231,56 @@ export function startWebServer(port = 3000) {
       return send({ status: 404, body: { error: "Not found" } });
     }
 
-    // POST /api/syllabus/upload: syllabus PDF (base64) or pasted text from the browser. Must come before the
-    // GET /api/syllabus/:chatId handler below, which matches every path under /api/syllabus/.
+    // NotebookLM Resources: GET /api/resources/chapters, GET /api/resources/item, POST /api/resources/generate
+    if (url.pathname.startsWith("/api/resources/")) {
+      const send = ({ status, body }) => {
+        res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.end(JSON.stringify(body));
+      };
+      const ctx = { cookies: parseCookies(req) };
+      const route = url.pathname.replace(/\/+$/, "");
+      if (req.method === "GET" && route === "/api/resources/chapters") {
+        return resourcesChapters(Object.fromEntries(url.searchParams), ctx).then(send);
+      }
+      if (req.method === "GET" && route === "/api/resources/item") {
+        return resourceGet(Object.fromEntries(url.searchParams), ctx).then(send);
+      }
+      if (req.method === "POST" && route === "/api/resources/generate") {
+        let raw = "";
+        let tooBig = false;
+        req.on("data", (c) => {
+          raw += c;
+          if (raw.length > 500_000) { tooBig = true; req.destroy(); }
+        });
+        req.on("end", () => {
+          if (tooBig) return send({ status: 413, body: { error: "Request payload too large" } });
+          let body;
+          try {
+            body = JSON.parse(raw || "{}");
+          } catch {
+            return send({ status: 400, body: { error: "Invalid JSON" } });
+          }
+          resourcesGenerate(body, ctx).then(send);
+        });
+        return;
+      }
+      return send({ status: 404, body: { error: "Not found" } });
+    }
+
+    // POST /api/syllabus/upload
     if (req.method === "POST" && url.pathname.replace(/\/+$/, "") === "/api/syllabus/upload") {
       const send = ({ status, body }) => {
         res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
         res.end(JSON.stringify(body));
       };
       if (tgRateLimited(clientIp + "|su", 6)) return send({ status: 429, body: { error: "Too many uploads. Wait a minute." } });
-      const cookies = {};
-      for (const part of String(req.headers.cookie || "").split(";")) {
-        const i = part.indexOf("=");
-        if (i < 1) continue;
-        try { cookies[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim()); } catch {}
-      }
-      const LIMIT = 28 * 1024 * 1024; // a 20 MB PDF is about 27 MB as base64
+      const cookies = parseCookies(req);
+      const LIMIT = 28 * 1024 * 1024;
       const chunks = [];
       let size = 0;
       req.on("data", (c) => {
         size += c.length;
-        if (size <= LIMIT) chunks.push(c); // past the limit: keep reading (so the reply can be delivered) but drop the data
+        if (size <= LIMIT) chunks.push(c);
       });
       req.on("end", () => {
         if (size > LIMIT) return send({ status: 413, body: { error: "That file is too big (20 MB max)." } });
@@ -240,7 +302,7 @@ export function startWebServer(port = 3000) {
       try {
         const chapters = await withDb(async (db) => {
           const { rows } = await db.query(
-            `SELECT subject, exam, number, title, match_status, pdf_url
+            `SELECT subject, exam, number, title, match_status, pdf_url, recommended_questions
              FROM syllabus_chapters
              WHERE chat_id = $1
              ORDER BY subject, number`,
@@ -256,11 +318,10 @@ export function startWebServer(port = 3000) {
       }
     }
 
-    // 2. Serve Static Files from /public (defaults "/" to "/index.html")
+    // 2. Serve Static Files from /public
     const safePath = path.normalize(url.pathname === "/" ? "/index.html" : url.pathname);
     const filePath = path.join(publicDir, safePath);
 
-    // Prevent directory traversal outside /public
     if (!filePath.startsWith(publicDir)) {
       res.writeHead(403);
       return res.end("Forbidden");
