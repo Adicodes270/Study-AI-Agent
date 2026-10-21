@@ -5,7 +5,7 @@ import path from "node:path";
 import { ROOT } from "./config.js";
 import { cancelLogin, confirmLogin, getLoginStatus, remoteLoginEnabled, startLogin, startRemoteLogin, takeLoginEmail, takeLoginSession } from "./notebooklmLogin.js";
 import { initDb, withDb } from "./db.js";
-import { getPairing, quizChapters, quizGenerate, quizSubmit, sendWelcome, telegramBotInfo } from "./api.js";
+import { getPairing, quizChapters, quizGenerate, quizSubmit, sendWelcome, syllabusUpload, telegramBotInfo } from "./api.js";
 import { deleteUserKey, getUserKeys, getUserProfile, inspectStorageState, saveUserConfig } from "./intake/userKeys.js";
 
 const MIME_TYPES = {
@@ -197,6 +197,36 @@ export function startWebServer(port = 3000) {
         return;
       }
       return send({ status: 404, body: { error: "Not found" } });
+    }
+
+    // POST /api/syllabus/upload: syllabus PDF (base64) or pasted text from the browser. Must come before the
+    // GET /api/syllabus/:chatId handler below, which matches every path under /api/syllabus/.
+    if (req.method === "POST" && url.pathname.replace(/\/+$/, "") === "/api/syllabus/upload") {
+      const send = ({ status, body }) => {
+        res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.end(JSON.stringify(body));
+      };
+      if (tgRateLimited(clientIp + "|su", 6)) return send({ status: 429, body: { error: "Too many uploads. Wait a minute." } });
+      const cookies = {};
+      for (const part of String(req.headers.cookie || "").split(";")) {
+        const i = part.indexOf("=");
+        if (i < 1) continue;
+        try { cookies[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim()); } catch {}
+      }
+      const LIMIT = 28 * 1024 * 1024; // a 20 MB PDF is about 27 MB as base64
+      const chunks = [];
+      let size = 0;
+      req.on("data", (c) => {
+        size += c.length;
+        if (size <= LIMIT) chunks.push(c); // past the limit: keep reading (so the reply can be delivered) but drop the data
+      });
+      req.on("end", () => {
+        if (size > LIMIT) return send({ status: 413, body: { error: "That file is too big (20 MB max)." } });
+        let body;
+        try { body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"); } catch { return send({ status: 400, body: { error: "Invalid JSON" } }); }
+        syllabusUpload(body, { cookies }).then(send);
+      });
+      return;
     }
 
     // 1. API Route: GET /api/syllabus/:chatId

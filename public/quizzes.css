@@ -242,3 +242,16 @@ html.light {
 /* Completed chapters: one attempt only */
 .qz-chapter.done { cursor: default; }
 .qz-chapter.done:hover, .qz-chapter.done:focus-visible { transform: none; }
+
+/* ---- syllabus upload (computer) ---- */
+.qz-or { display: flex; align-items: center; gap: 0.8rem; margin: 1.6rem 0 1rem; color: var(--text-muted); font-size: 0.82rem; }
+.qz-or::before, .qz-or::after { content: ""; flex: 1; height: 1px; background: currentColor; opacity: 0.25; }
+.qz-upload textarea {
+  width: 100%; margin: 0.9rem 0 0.6rem; padding: 0.7rem 0.8rem; border-radius: 10px; resize: vertical;
+  font: inherit; color: inherit; background: transparent; border: 1px solid rgba(128, 128, 128, 0.35);
+}
+.qz-upload textarea:focus { outline: 2px solid var(--accent, #6c8cff); outline-offset: 1px; }
+.qz-file-name { margin-top: 0.8rem; font-size: 0.85rem; word-break: break-all; }
+.qz-upload-status { margin-top: 0.8rem; font-size: 0.88rem; }
+.qz-upload-status.err { color: #e5484d; }
+.qz-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }

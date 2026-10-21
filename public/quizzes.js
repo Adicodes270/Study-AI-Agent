@@ -72,8 +72,8 @@
     }
     return data;
   }
-  const postJson = (path, body) =>
-    api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const postJson = (path, body, timeoutMs) =>
+    api(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, timeoutMs);
 
   // ---------- state ----------
   let userId = '';
@@ -147,6 +147,60 @@
     if (!found) banner('No syllabus yet. Send it to the bot and wait for its “Done!” reply, then refresh.');
     else banner('');
   });
+  // ---------- upload the syllabus from this computer (same result as sending it to the bot) ----------
+  const MAX_PDF_BYTES = 20 * 1024 * 1024;
+  const sylStatus = (msg, isErr = false) => {
+    const el = $('syl-status');
+    el.textContent = msg;
+    el.classList.toggle('err', isErr);
+    el.hidden = !msg;
+  };
+  const toBase64 = (file) => new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(',')[1] || '');
+    r.onerror = () => reject(new Error('Could not read that file'));
+    r.readAsDataURL(file);
+  });
+  async function sendSyllabus(payload, buttons) {
+    buttons.forEach((b) => { b.disabled = true; });
+    sylStatus('Reading your syllabus… this can take up to a minute.');
+    try {
+      await postJson('/api/syllabus/upload', { telegramUserId: userId, ...payload }, 150000);
+      sylStatus('Done! Loading your chapters…');
+      await loadChapters({ silent: true });
+      renderChapters();
+    } catch (e) {
+      sylStatus(e.message, true);
+    } finally {
+      buttons.forEach((b) => { b.disabled = false; });
+    }
+  }
+  $('syl-pick-btn').addEventListener('click', () => $('syl-file').click());
+  $('syl-file').addEventListener('change', async (e) => {
+    const input = e.currentTarget;
+    const file = input.files && input.files[0];
+    input.value = '';
+    if (!file) return;
+    const nameEl = $('syl-file-name');
+    nameEl.textContent = file.name;
+    nameEl.hidden = false;
+    if (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') return sylStatus('Please choose a PDF file.', true);
+    if (file.size > MAX_PDF_BYTES) return sylStatus('That PDF is over 20 MB, which is too big.', true);
+    try {
+      await sendSyllabus({ kind: 'pdf', dataBase64: await toBase64(file) }, [$('syl-pick-btn'), $('syl-text-send')]);
+    } catch (err) { sylStatus(err.message, true); }
+  });
+  $('syl-text-toggle').addEventListener('click', () => {
+    const panel = $('syl-text-panel');
+    panel.hidden = !panel.hidden;
+    if (!panel.hidden) $('syl-text').focus();
+  });
+  $('syl-text-send').addEventListener('click', () => {
+    const text = $('syl-text').value.trim();
+    if (text.length < 10) return sylStatus('Paste your syllabus text first.', true);
+    sendSyllabus({ kind: 'text', text }, [$('syl-pick-btn'), $('syl-text-send')]);
+  });
+
   $('refresh-chapters-btn').addEventListener('click', () => loadChapters({ silent: true }).then(renderChapters));
 
   // ---------- subject sections ----------

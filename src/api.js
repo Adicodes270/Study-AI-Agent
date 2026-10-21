@@ -7,6 +7,8 @@ import { createQuizSession, getChapterForUser, getChaptersWithResults, hasQuizRe
 import { generateQuiz, grade } from "./quizEngine.js";
 import crypto from "node:crypto";
 import { deleteUserKey, getUserKeys, getUserProfile, saveUserConfig } from "./intake/userKeys.js";
+import { saveSyllabus } from "./intake/storage.js";
+import { parseSyllabus, parseSyllabusPdf } from "./intake/syllabusParser.js";
 
 const parseId = (v) => (/^\d+$/.test(String(v ?? "")) ? Number(v) : NaN);
 const ok = (body) => ({ status: 200, body });
@@ -235,4 +237,49 @@ export const quizSubmit = safe(async (body = {}, ctx = {}) => {
     attempts: saved.attempts, review: g.review,
     chapter: { id: ch.id, subject: ch.subject, exam: ch.exam, title: ch.title },
   });
+});
+
+// POST /api/syllabus/upload { telegramUserId, kind: "pdf" | "text", dataBase64?, text?, geminiKey? }
+// The "upload from your computer" twin of sending the syllabus to the Telegram bot: same parser, same saveSyllabus(),
+// so the chapters land in the same table and the quiz page picks them up exactly like it does after the bot's "Done!".
+// In a private chat the bot's chat id equals the Telegram user id, so that is what the syllabus is stored under.
+export const MAX_SYLLABUS_PDF_BYTES = 20 * 1024 * 1024; // same cap as the bot
+export const syllabusUpload = safe(async (body = {}, ctx = {}) => {
+  const id = quizUserId(body.telegramUserId, ctx);
+  if (Number.isNaN(id)) return fail(400, "Missing or invalid Telegram user id");
+
+  const saved = await getUserKeys(id);
+  const extra = [body.geminiKey, ctx?.cookies?.sa_gemini_key].filter((k) => typeof k === "string" && k.length >= 20);
+  const keys = [...new Set([...saved, ...extra])];
+  if (!keys.length && !GEMINI_API_KEY) return fail(400, "No Gemini API key found. Save one on the setup page first.");
+
+  let parseFn, payload;
+  if (body.kind === "pdf") {
+    const b64 = String(body.dataBase64 || "");
+    if (!b64) return fail(400, "No file received");
+    const bytes = new Uint8Array(Buffer.from(b64, "base64"));
+    if (!bytes.length) return fail(400, "That file is empty");
+    if (bytes.length > MAX_SYLLABUS_PDF_BYTES) return fail(413, "That PDF is over 20 MB, which is too big.");
+    // %PDF magic number: don't trust the browser's file name or mime type
+    if (String.fromCharCode(...bytes.slice(0, 4)) !== "%PDF") return fail(400, "That file doesn't look like a PDF");
+    parseFn = parseSyllabusPdf; payload = bytes;
+  } else if (body.kind === "text") {
+    const text = String(body.text || "").trim();
+    if (text.length < 10) return fail(400, "Paste your syllabus text first");
+    if (text.length > 100_000) return fail(413, "That text is too long. Paste just the portion you need.");
+    parseFn = parseSyllabus; payload = text;
+  } else {
+    return fail(400, "kind must be \"pdf\" or \"text\"");
+  }
+
+  let syllabus;
+  try {
+    syllabus = await parseFn(payload, keys);
+  } catch (e) {
+    return fail(502, `Couldn't read that syllabus: ${e.message}`);
+  }
+  if (!syllabus?.subjects?.length) return fail(422, "I couldn't find any subjects in that.");
+
+  const results = await saveSyllabus(id, syllabus);
+  return ok({ ok: true, subjects: results }); // { "Physics": "added" | "updated" | "unchanged", ... }
 });
