@@ -3,7 +3,7 @@
 // Used by the Vercel functions in /api and by the local server (src/webServer.js).
 import { Api } from "grammy";
 import { TELEGRAM_BOT_TOKEN } from "./config.js";
-import { createQuizSession, getChapterForUser, getChaptersWithResults, hasQuizResult, initDb, takeQuizSession, upsertQuizResult, withDb } from "./db.js";
+import { createQuizSession, getChapterForUser, getChaptersWithResults, getResourcesForUser, hasQuizResult, initDb, takeQuizSession, upsertQuizResult, withDb } from "./db.js";
 import { generateQuiz, grade } from "./quizEngine.js";
 import crypto from "node:crypto";
 import { deleteUserKey, getUserKeys, getUserProfile, saveUserConfig } from "./intake/userKeys.js";
@@ -170,6 +170,13 @@ export const quizChapters = safe(async (query = {}, ctx = {}) => {
       matched: isMatched(c), result: c.result,
     })),
   });
+});
+
+// GET /api/resources?telegramUserId=...  (NotebookLM notebooks + generated items; same id-trust model as quizzes)
+export const getResources = safe(async (query = {}, ctx = {}) => {
+  const id = quizUserId(query.telegramUserId, ctx);
+  if (Number.isNaN(id)) return fail(400, "Missing or invalid Telegram user id");
+  return ok({ telegram_user_id: id, ...(await getResourcesForUser(id)) });
 });
 
 // POST /api/quizzes/generate { telegramUserId, chapterId, geminiKey? }

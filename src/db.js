@@ -112,6 +112,56 @@ CREATE TABLE IF NOT EXISTS chapter_quiz_results (
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (telegram_user_id, subject, exam, chapter_title)
 );
+
+-- ---- NotebookLM worker (Python /worker). Chapters are identified by
+-- (telegram_user_id, subject, exam, chapter_title), NOT by syllabus_chapters.id
+-- (saveSyllabus deletes and re-inserts those rows).
+CREATE TABLE IF NOT EXISTS nlm_notebooks (
+    id               SERIAL PRIMARY KEY,
+    telegram_user_id TEXT NOT NULL,
+    subject          TEXT NOT NULL,
+    exam             TEXT NOT NULL,
+    chapter_title    TEXT NOT NULL,
+    notebook_id      TEXT,
+    source_status    TEXT NOT NULL DEFAULT 'pending',
+    source_error     TEXT,
+    notified_at      TIMESTAMPTZ,
+    created_at       TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (telegram_user_id, subject, exam, chapter_title)
+);
+
+CREATE TABLE IF NOT EXISTS nlm_assets (
+    id              SERIAL PRIMARY KEY,
+    notebook_row_id INT NOT NULL REFERENCES nlm_notebooks(id) ON DELETE CASCADE,
+    asset_type      TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'pending',
+    attempts        INT NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMPTZ DEFAULT NOW(),
+    artifact_id     TEXT,
+    error_class     TEXT,
+    error_message   TEXT,
+    lease_until     TIMESTAMPTZ,
+    started_at      TIMESTAMPTZ,
+    finished_at     TIMESTAMPTZ,
+    UNIQUE (notebook_row_id, asset_type)
+);
+
+CREATE TABLE IF NOT EXISTS nlm_user_state (
+    telegram_user_id    TEXT PRIMARY KEY,
+    session_status      TEXT NOT NULL DEFAULT 'ok',
+    paused              BOOLEAN NOT NULL DEFAULT FALSE,
+    enabled_assets_json JSONB,
+    expired_notified_at TIMESTAMPTZ,
+    last_digest_at      TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS nlm_quota_blocks (
+    telegram_user_id TEXT NOT NULL,
+    asset_type       TEXT NOT NULL,
+    blocked_until    TIMESTAMPTZ NOT NULL,
+    strikes          INT NOT NULL DEFAULT 0,
+    PRIMARY KEY (telegram_user_id, asset_type)
+);
 `;
 
 // Runs once per process; concurrent callers share the same promise.
@@ -292,6 +342,40 @@ export async function savePairing({ code, chatId, userId, firstName = null, user
   );
   // Codes are only useful for an hour; keep the table tidy
   await getPool().query("DELETE FROM pairings WHERE created_at < now() - interval '1 day'");
+}
+
+/** NotebookLM study material for the Resources page: one notebook per chapter, with its generated items. */
+export async function getResourcesForUser(telegramUserId) {
+  await initDb();
+  const p = getPool();
+  const uid = String(telegramUserId); // nlm_* tables key the student as TEXT
+  const { rows: notebooks } = await p.query(
+    `SELECT n.id, n.subject, n.exam, n.chapter_title, n.notebook_id, n.source_status,
+            COALESCE(json_agg(json_build_object('type', a.asset_type, 'status', a.status) ORDER BY a.id)
+                     FILTER (WHERE a.id IS NOT NULL), '[]'::json) AS assets
+       FROM nlm_notebooks n LEFT JOIN nlm_assets a ON a.notebook_row_id = n.id
+      WHERE n.telegram_user_id = $1
+      GROUP BY n.id
+      ORDER BY n.subject, n.exam, n.id`,
+    [uid]
+  );
+  const { rows: stateRows } = await p.query(
+    "SELECT session_status, paused FROM nlm_user_state WHERE telegram_user_id = $1",
+    [uid]
+  );
+  const { rows: profileRows } = await p.query(
+    "SELECT google_email, (notebooklm_state IS NOT NULL) AS has_session FROM users WHERE telegram_user_id = $1",
+    [telegramUserId]
+  );
+  const st = stateRows[0];
+  const profile = profileRows[0];
+  return {
+    has_session: Boolean(profile?.has_session),
+    google_email: profile?.google_email || null,
+    session_status: st?.session_status || "ok",
+    paused: Boolean(st?.paused),
+    notebooks,
+  };
 }
 
 /** Has this student already taken the quiz for this chapter? (one attempt per chapter) */

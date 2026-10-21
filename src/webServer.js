@@ -5,7 +5,7 @@ import path from "node:path";
 import { ROOT } from "./config.js";
 import { cancelLogin, confirmLogin, getLoginStatus, remoteLoginEnabled, startLogin, startRemoteLogin, takeLoginEmail, takeLoginSession } from "./notebooklmLogin.js";
 import { initDb, withDb } from "./db.js";
-import { getPairing, quizChapters, quizGenerate, quizSubmit, sendWelcome, syllabusUpload, telegramBotInfo } from "./api.js";
+import { getPairing, getResources, quizChapters, quizGenerate, quizSubmit, sendWelcome, syllabusUpload, telegramBotInfo } from "./api.js";
 import { deleteUserKey, getUserKeys, getUserProfile, inspectStorageState, saveUserConfig } from "./intake/userKeys.js";
 
 const MIME_TYPES = {
@@ -161,6 +161,20 @@ export function startWebServer(port = 3000) {
         return;
       }
       return send({ status: 404, body: { error: "Not found" } });
+    }
+
+    // Resources (NotebookLM study material): GET /api/resources
+    if (req.method === "GET" && url.pathname.replace(/\/+$/, "") === "/api/resources") {
+      const cookies = {};
+      for (const part of String(req.headers.cookie || "").split(";")) {
+        const i = part.indexOf("=");
+        if (i < 1) continue;
+        try { cookies[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim()); } catch {}
+      }
+      return getResources(Object.fromEntries(url.searchParams), { cookies }).then(({ status, body }) => {
+        res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.end(JSON.stringify(body));
+      });
     }
 
     // Quizzes: GET /api/quizzes/chapters, POST /api/quizzes/generate, POST /api/quizzes/submit

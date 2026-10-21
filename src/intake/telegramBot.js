@@ -2,7 +2,7 @@
 import { Bot, HttpError } from "grammy";
 
 import { GEMINI_API_KEY, GEMINI_MODEL, TELEGRAM_BOT_TOKEN } from "../config.js";
-import { initDb, savePairing } from "../db.js";
+import { initDb, savePairing, withDb } from "../db.js";
 import { saveSyllabus } from "./storage.js";
 import { deleteUserKey, getUserKeys, isValidKey, saveUserKey } from "./userKeys.js";
 import { parseSyllabus, parseSyllabusPdf } from "./syllabusParser.js";
@@ -175,6 +175,46 @@ function onError(err) {
   console.log(`Unexpected error: ${error}`);
 }
 
+// ---- NotebookLM worker controls: /status /pause /resume (state lives in Neon) ----------------
+async function nlmStatus(ctx) {
+  const uid = String(ctx.from.id);
+  const { st, notebooks, assets, blocks } = await withDb(async (db) => ({
+    st: (await db.query("SELECT session_status, paused FROM nlm_user_state WHERE telegram_user_id = $1", [uid])).rows[0],
+    notebooks: (await db.query("SELECT source_status, COUNT(*)::int AS n FROM nlm_notebooks WHERE telegram_user_id = $1 GROUP BY 1", [uid])).rows,
+    assets: (await db.query("SELECT a.status, COUNT(*)::int AS n FROM nlm_assets a JOIN nlm_notebooks n ON n.id = a.notebook_row_id WHERE n.telegram_user_id = $1 GROUP BY 1", [uid])).rows,
+    blocks: (await db.query("SELECT asset_type, blocked_until FROM nlm_quota_blocks WHERE telegram_user_id = $1 AND blocked_until > NOW() ORDER BY blocked_until", [uid])).rows,
+  }));
+  if (!st && !notebooks.length) {
+    await ctx.reply("I haven't started on your NotebookLM study material yet. Make sure you've saved your NotebookLM sign-in on the setup page.");
+    return;
+  }
+  const by = (rows, k) => Object.fromEntries(rows.map((r) => [r[k], r.n]));
+  const nb = by(notebooks, "source_status"), as = by(assets, "status");
+  const lines = [];
+  if (st?.session_status === "expired") lines.push("Your NotebookLM sign-in has expired. Please sign in again on the setup page.");
+  else if (st?.paused) lines.push("Paused. Send /resume to continue.");
+  else lines.push("Working on your study material.");
+  lines.push(`Chapters: ${nb.added || 0} loaded, ${nb.pending || 0} waiting, ${nb.skipped_no_source || 0} skipped (no textbook PDF), ${nb.source_failed || 0} couldn't load.`);
+  lines.push(`Items: ${as.done || 0} ready, ${(as.pending || 0) + (as.running || 0)} in progress, ${as.blocked_quota || 0} waiting on daily limits, ${as.failed || 0} failed.`);
+  if (blocks.length) {
+    const mins = Math.max(1, Math.round((new Date(blocks[0].blocked_until) - Date.now()) / 60000));
+    lines.push(`Next retry for limited items in about ${mins >= 90 ? Math.round(mins / 60) + " hours" : mins + " minutes"}.`);
+  }
+  await ctx.reply(lines.join("\n"));
+}
+
+async function setNlmPaused(ctx, paused) {
+  const uid = String(ctx.from.id);
+  await withDb((db) => db.query(
+    "INSERT INTO nlm_user_state (telegram_user_id, paused) VALUES ($1, $2) " +
+      "ON CONFLICT (telegram_user_id) DO UPDATE SET paused = EXCLUDED.paused", [uid, paused]));
+  await ctx.reply(paused
+    ? "Paused. I won't start anything new in NotebookLM until you send /resume."
+    : "Resumed. I'll carry on with your study material.");
+}
+const nlmPause = (ctx) => setNlmPaused(ctx, true);
+const nlmResume = (ctx) => setNlmPaused(ctx, false);
+
 export async function runBot() {
   await initDb();
   const bot = new Bot(TELEGRAM_BOT_TOKEN);
@@ -182,6 +222,9 @@ export async function runBot() {
   bot.command("start", start);
   bot.command("setkey", setKey);
   bot.command("removekey", removeKey);
+  bot.command("status", nlmStatus);
+  bot.command("pause", nlmPause);
+  bot.command("resume", nlmResume);
   bot.on("message:document", (ctx, next) =>
     ctx.message.document.mime_type === "application/pdf" ? handlePdf(ctx) : next()
   );

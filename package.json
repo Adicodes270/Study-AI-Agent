@@ -8,9 +8,10 @@
     "study-agent": "src/index.js"
   },
   "scripts": {
-    "start": "node src/main.js",
-    "dev": "node --watch src/main.js"
-  },
+  "start": "concurrently -n \"NODE,AGENT\" -c \"cyan,yellow\" \"node src/main.js\" \"python agent/main.py\"",
+  "server": "node src/main.js",
+  "agent": "python agent/main.py"
+},
   "engines": {
     "node": ">=20"
   },
@@ -25,6 +26,7 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "concurrently": "^10.0.6",
     "serve": "^14.2.6"
   }
 }

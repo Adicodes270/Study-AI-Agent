@@ -1,5 +1,6 @@
 // src/intake/userKeys.js
 // Gemini API keys, stored per Telegram user id. keys[0] = primary, rest = fallbacks.
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { ROOT } from "../config.js";
@@ -15,6 +16,41 @@ export function inspectStorageState(state, domainPart = "google") {
   const google = cookies.filter((c) => String(c.domain || "").includes(domainPart));
   if (!google.length) throw new Error("The captured session has no Google cookies. Please sign in again.");
   return { cookie_count: cookies.length, google_cookie_count: google.length };
+}
+
+// ---- AES-256-GCM for the stored NotebookLM session ------------------------------------------
+// Stored format:  enc:v1:<iv hex>:<authTag hex>:<ciphertext hex>   (key: SESSION_ENC_KEY, 32 bytes as hex or base64)
+// Rows that don't start with "enc:v1:" are legacy plaintext JSON and are still readable.
+const ENC_PREFIX = "enc:v1:";
+
+function loadEncKey() {
+  const raw = (process.env.SESSION_ENC_KEY ?? "").trim();
+  if (!raw) return null;
+  const key = /^[0-9a-fA-F]{64}$/.test(raw) ? Buffer.from(raw, "hex") : Buffer.from(raw, "base64");
+  if (key.length !== 32) throw new Error("SESSION_ENC_KEY must be 32 bytes (64 hex chars or base64).");
+  return key;
+}
+
+export function encryptState(plaintext) {
+  const key = loadEncKey();
+  if (!key) {
+    console.log("WARNING: SESSION_ENC_KEY is not set; storing the NotebookLM session unencrypted.");
+    return plaintext;
+  }
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+  const ct = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
+  return `${ENC_PREFIX}${iv.toString("hex")}:${cipher.getAuthTag().toString("hex")}:${ct.toString("hex")}`;
+}
+
+export function decryptState(stored) {
+  if (typeof stored !== "string" || !stored.startsWith(ENC_PREFIX)) return stored; // legacy plaintext
+  const key = loadEncKey();
+  if (!key) throw new Error("Session is encrypted but SESSION_ENC_KEY is not set.");
+  const [ivHex, tagHex, ctHex] = stored.slice(ENC_PREFIX.length).split(":");
+  const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(ivHex, "hex"));
+  decipher.setAuthTag(Buffer.from(tagHex, "hex"));
+  return Buffer.concat([decipher.update(Buffer.from(ctHex, "hex")), decipher.final()]).toString("utf8");
 }
 
 /**
@@ -47,7 +83,13 @@ export async function saveUserConfig(telegramUserId, { keys = [], notebooklmStat
       await db.query(
         "UPDATE users SET notebooklm_state = $1, notebooklm_saved_at = now(), " +
           "updated_at = now() WHERE telegram_user_id = $2",
-        [JSON.stringify(notebooklmState), telegramUserId]
+        [encryptState(JSON.stringify(notebooklmState)), telegramUserId]
+      );
+      // A fresh sign-in un-expires the NotebookLM worker for this student (agent/main.py checks this row)
+      await db.query(
+        "INSERT INTO nlm_user_state (telegram_user_id, session_status, expired_notified_at) VALUES ($1, 'ok', NULL) " +
+          "ON CONFLICT (telegram_user_id) DO UPDATE SET session_status = 'ok', expired_notified_at = NULL",
+        [String(telegramUserId)]
       );
     }
   });
@@ -106,6 +148,6 @@ export async function exportStorageStateFile(telegramUserId, dir = path.join(ROO
   if (!row?.notebooklm_state) return null;
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `${telegramUserId}.json`);
-  fs.writeFileSync(file, row.notebooklm_state, { mode: 0o600 });
+  fs.writeFileSync(file, decryptState(row.notebooklm_state), { mode: 0o600 });
   return file;
 }

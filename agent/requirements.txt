@@ -1,0 +1,7 @@
+# NotebookLM client (unofficial). After installing, run `pip show notebooklm-py==0.8.5` and pin the
+# version you tested with, e.g. notebooklm-py==0.8.5==X.Y.Z, so a future release can't break the worker.
+notebooklm-py==0.8.5
+psycopg[binary]>=3.1
+httpx>=0.27
+cryptography>=42
+python-dotenv>=1.0
