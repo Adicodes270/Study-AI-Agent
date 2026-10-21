@@ -13,10 +13,12 @@ import {
   getChaptersWithResources,
   getChaptersWithResults,
   getLastQuizResult,
+  getQuizSession,
   hasChapterResource,
   hasQuizResult,
   initDb,
   saveChapterResource,
+  saveQuizProgress,
   takeQuizSession,
   upsertQuizResult,
   withDb,
@@ -30,7 +32,12 @@ import {
   saveUserConfig,
 } from "./intake/userKeys.js";
 import { saveSyllabus } from "./intake/storage.js";
-import { parseSyllabus, parseSyllabusPdf } from "./intake/syllabusParser.js";
+import {
+  classifyGranularSubject,
+  parseSyllabus,
+  parseSyllabusPdf,
+  splitSyllabusIntoGranularSubjects,
+} from "./intake/syllabusParser.js";
 
 const parseId = (v) => (/^\d+$/.test(String(v ?? "")) ? Number(v) : NaN);
 const ok = (body) => ({ status: 200, body });
@@ -101,15 +108,23 @@ export const removeKeys = safe(async (idRaw) => {
 export const getSyllabus = safe(async (chatIdRaw) => {
   const chatId = parseInt(chatIdRaw, 10);
   if (Number.isNaN(chatId)) return fail(400, "Invalid chat ID");
-  const chapters = await withDb(async (db) =>
-    (await db.query(
-      `SELECT subject, exam, number, title, match_status, pdf_url, recommended_questions
+  const chapters = await withDb(async (db) => {
+    const { rows } = await db.query(
+      `SELECT id, subject, exam, number, title, match_status, pdf_url, recommended_questions
        FROM syllabus_chapters
        WHERE chat_id = $1
        ORDER BY subject, number`,
       [chatId]
-    )).rows
-  );
+    );
+    for (const r of rows) {
+      const granular = classifyGranularSubject(r.subject, r.title, r.pdf_url, "", r.number);
+      if (granular && granular !== r.subject) {
+        r.subject = granular;
+        await db.query("UPDATE syllabus_chapters SET subject = $1 WHERE id = $2", [granular, r.id]).catch(() => {});
+      }
+    }
+    return rows;
+  });
   return ok({ chatId, chapters });
 });
 
@@ -162,7 +177,7 @@ export const sendWelcome = safe(async (body = {}) => {
 
 
 // ---------------------------------------------------------------------------
-// Quizzes (Typed / Spoken Answer Format + AI Textbook Verification + Requiz + Review)
+// Quizzes (Typed / Spoken Answer Format + Pending Save/Resume + AI Verification + Requiz + Review)
 // ---------------------------------------------------------------------------
 const quizUserId = (given, ctx) => parseId(given ?? ctx?.cookies?.sa_telegram_id);
 const isMatched = (c) => c.match_status === "matched" || Boolean(c.pdf_url);
@@ -179,23 +194,51 @@ export const quizChapters = safe(async (query = {}, ctx = {}) => {
     has_gemini_key: keys.length > 0 || Boolean(ctx?.cookies?.sa_gemini_key),
     chapters: rows.map((c) => ({
       id: c.id,
-      subject: c.subject,
+      subject: classifyGranularSubject(c.subject, c.title, c.pdf_url, "", c.number),
       exam: c.exam,
       number: c.number,
       title: c.title,
       matched: isMatched(c),
       recommended_questions: questionCountFor(c),
+      pending_quiz: c.pending_quiz || null,
       result: c.result,
     })),
   });
 });
 
-// POST /api/quizzes/generate { telegramUserId, chapterId, questionCount?, geminiKey? }
-// Supports both initial quiz AND Requiz (retaking any chapter with a fresh set of questions).
+// POST /api/quizzes/generate { telegramUserId, chapterId, questionCount?, resumeQuizId?, geminiKey? }
+// Supports initial quiz, resuming a Pending quiz from where the user left off, AND Requiz.
 export const quizGenerate = safe(async (body = {}, ctx = {}) => {
   const id = quizUserId(body.telegramUserId, ctx);
+  if (Number.isNaN(id)) return fail(400, "Missing Telegram user id");
+
+  // If the student clicked the yellow Pending button to resume an existing pending quiz session:
+  if (body.resumeQuizId) {
+    const existingSession = await getQuizSession(String(body.resumeQuizId), id);
+    if (existingSession && existingSession.questions?.length) {
+      const ch = existingSession.chapter;
+      const lastResult = await getLastQuizResult(id, ch.subject, ch.exam, ch.title);
+      return ok({
+        quizId: existingSession.quizId,
+        resumed: true,
+        attempt: (lastResult?.attempts || 0) + 1,
+        currentIndex: existingSession.currentIndex || 0,
+        answers: existingSession.answers || existingSession.questions.map(() => ""),
+        chapter: {
+          id: ch.id,
+          subject: classifyGranularSubject(ch.subject, ch.title, ch.pdf_url, "", ch.number),
+          exam: ch.exam,
+          number: ch.number,
+          title: ch.title,
+          recommended_questions: questionCountFor(ch),
+        },
+        questions: existingSession.questions.map(({ subtopic, question }) => ({ subtopic, question })),
+      });
+    }
+  }
+
   const chapterId = parseId(body.chapterId);
-  if (Number.isNaN(id) || Number.isNaN(chapterId)) return fail(400, "Missing Telegram user id or chapter id");
+  if (Number.isNaN(chapterId)) return fail(400, "Missing or invalid chapter id");
 
   const chapter = await getChapterForUser(id, chapterId);
   if (!chapter) return fail(404, "Chapter not found in your syllabus");
@@ -223,7 +266,10 @@ export const quizGenerate = safe(async (body = {}, ctx = {}) => {
   await createQuizSession(quizId, id, chapter, quiz.questions);
   return ok({
     quizId,
+    resumed: false,
     attempt: attemptNumber,
+    currentIndex: 0,
+    answers: quiz.questions.map(() => ""),
     chapter: {
       id: chapter.id,
       subject: chapter.subject,
@@ -237,7 +283,35 @@ export const quizGenerate = safe(async (body = {}, ctx = {}) => {
   });
 });
 
-// POST /api/quizzes/submit { telegramUserId, quizId, answers: ["typed/spoken answer 1", ...] }
+// POST /api/quizzes/progress { telegramUserId, quizId, answers, currentIndex, isPending }
+// Saves the student's current progress (answers in order + current question index) and marks the quiz as Pending.
+export const quizSaveProgress = safe(async (body = {}, ctx = {}) => {
+  const id = quizUserId(body.telegramUserId, ctx);
+  if (Number.isNaN(id)) return fail(400, "Missing or invalid Telegram user id");
+  const quizId = String(body.quizId || "").trim();
+  if (!quizId) return fail(400, "Missing quizId");
+  const answers = Array.isArray(body.answers) ? body.answers.map((a) => String(a ?? "")) : [];
+  const currentIndex = Math.max(0, parseInt(body.currentIndex, 10) || 0);
+  const isPending = body.isPending !== undefined ? Boolean(body.isPending) : true;
+
+  const updated = await saveQuizProgress({
+    quizId,
+    telegramUserId: id,
+    answers,
+    currentIndex,
+    isPending,
+  });
+
+  return ok({
+    ok: true,
+    quizId,
+    saved: Boolean(updated),
+    currentIndex,
+    isPending,
+  });
+});
+
+// POST /api/quizzes/submit { telegramUserId, quizId, answers: ["typed/spoken answer 1", ...], chapter?, questions? }
 export const quizSubmit = safe(async (body = {}, ctx = {}) => {
   const id = quizUserId(body.telegramUserId, ctx);
   if (Number.isNaN(id)) return fail(400, "Missing or invalid Telegram user id");
@@ -248,10 +322,35 @@ export const quizSubmit = safe(async (body = {}, ctx = {}) => {
   const apiKeys = [...new Set([...savedKeys, ...extraKeys])];
 
   const out = await withDb(async (db) => {
-    const session = await takeQuizSession(db, String(body.quizId || ""), id);
+    let session = await takeQuizSession(db, String(body.quizId || ""), id);
+    // Fallback if a pending quiz was resumed from localStorage after a DB reset
+    if (!session && body.chapter && Array.isArray(body.questions) && body.questions.length > 0) {
+      session = {
+        chapter: body.chapter,
+        questions: body.questions.map((q) => ({
+          subtopic: String(q.subtopic || "General"),
+          question: String(q.question || ""),
+          expectedAnswer: String(q.expectedAnswer || q.question || ""),
+          keywords: Array.isArray(q.keywords) ? q.keywords : [],
+          explanation: String(q.explanation || ""),
+        })),
+        savedAnswers: body.answers,
+      };
+    }
     if (!session) return null;
+
     const ch = session.chapter;
-    const g = await grade(session.questions, body.answers, apiKeys, ch);
+    ch.subject = classifyGranularSubject(ch.subject, ch.title, ch.pdf_url, "", ch.number);
+
+    // Merge saved pending answers with submitted answers in order so no previous answer is ever lost
+    const mergedAnswers = session.questions.map((_, idx) => {
+      const fromBody = typeof body.answers?.[idx] === "string" ? body.answers[idx].trim() : "";
+      if (fromBody) return fromBody;
+      const fromSaved = typeof session.savedAnswers?.[idx] === "string" ? session.savedAnswers[idx].trim() : "";
+      return fromSaved;
+    });
+
+    const g = await grade(session.questions, mergedAnswers, apiKeys, ch);
     const saved = await upsertQuizResult(
       {
         telegramUserId: id,
@@ -348,7 +447,7 @@ async function extractSingleChapterFallback(body, apiKeys) {
   const prompt = `This document is a single textbook chapter, NCERT PDF, or study notes${fileName ? ` (filename: "${fileName}")` : ""}.
 Identify:
 1. "class_level": integer class (e.g. 9 or 10)
-2. "subject": standard subject name (e.g. Science, Mathematics, History, Geography, Civics, Economics, English, Hindi)
+2. "subject": specific discipline name — MUST be one of "History", "Civics", "Geography", "Economics", "Physics", "Chemistry", "Biology", "Mathematics", "English", "Hindi", "Sanskrit" (NEVER use generic "Social Science" or "Science")
 3. "chapter_number": integer chapter number (1-based)
 4. "chapter_title": exact chapter title from the heading
 5. "is_ncert": true if this is an NCERT chapter
@@ -381,12 +480,19 @@ Identify:
             ? `https://ncert.nic.in/textbook/pdf/${bookCode}${String(chNum).padStart(2, "0")}.pdf`
             : null;
         const recQ = Math.max(10, Math.min(50, Number(d.recommended_questions) || 15));
+        const granularSubject = classifyGranularSubject(
+          d.subject,
+          d.chapter_title,
+          pdfUrl,
+          bookCode,
+          chNum
+        );
         return {
           class_level: d.class_level || DEFAULT_CLASS_LEVEL,
           exam: null,
           subjects: [
             {
-              name: d.subject,
+              name: granularSubject,
               chapters: [
                 {
                   number: d.chapter_number || chNum,
@@ -455,12 +561,13 @@ export const syllabusUpload = safe(async (body = {}, ctx = {}) => {
       body.kind === "pdf"
         ? String(body.fileName || "Uploaded Study PDF").replace(/\.pdf$/i, "").trim()
         : String(body.text || "Custom Study Topic").split("\n")[0].slice(0, 60).trim();
+    const inferredSubj = classifyGranularSubject("", fallbackTitle, "", "", 1);
     syllabus = {
       class_level: DEFAULT_CLASS_LEVEL,
       exam: "Custom Source",
       subjects: [
         {
-          name: "Custom Study",
+          name: inferredSubj !== "General" ? inferredSubj : "Custom Study",
           chapters: [
             {
               number: 1,
@@ -476,6 +583,8 @@ export const syllabusUpload = safe(async (body = {}, ctx = {}) => {
       ],
     };
   }
+
+  syllabus = splitSyllabusIntoGranularSubjects(syllabus);
 
   // Compute the AI-analyzed default question count (minimum 10, max 50) for the uploaded chapter(s)
   const firstSub = syllabus.subjects[0];
@@ -1038,7 +1147,7 @@ export const resourcesChapters = safe(async (query = {}, ctx = {}) => {
     chapters: rows.map((c) => ({
       id: c.id,
       class: c.class,
-      subject: c.subject,
+      subject: classifyGranularSubject(c.subject, c.title, c.pdf_url, "", c.number),
       exam: c.exam,
       number: c.number,
       title: c.title,

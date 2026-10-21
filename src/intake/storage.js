@@ -2,6 +2,7 @@
 import { DEFAULT_CLASS_LEVEL } from "../config.js";
 import { withDb } from "../db.js";
 import { questionCountFor } from "../quizEngine.js";
+import { classifyGranularSubject, splitSyllabusIntoGranularSubjects } from "./syllabusParser.js";
 
 function buildNcertPdfUrl(bookCode, chapterNumber) {
   if (!bookCode || !chapterNumber) return null;
@@ -10,8 +11,9 @@ function buildNcertPdfUrl(bookCode, chapterNumber) {
   return `https://ncert.nic.in/textbook/pdf/${cleanCode}${padded}.pdf`;
 }
 
-/** Save each subject. Returns {label: "added" | "updated" | "unchanged"}. */
-export async function saveSyllabus(chatId, syllabus, options = {}) {
+/** Save each subject (always split into granular subjects: History, Civics, Geography, Economics, Physics, Chemistry, Biology). */
+export async function saveSyllabus(chatId, rawSyllabus, options = {}) {
+  const syllabus = splitSyllabusIntoGranularSubjects(rawSyllabus);
   const exam = syllabus.exam || "";
   const results = {};
   const userQuestionCount =
@@ -30,6 +32,26 @@ export async function saveSyllabus(chatId, syllabus, options = {}) {
         "ON CONFLICT (chat_id) DO UPDATE SET class = EXCLUDED.class",
       [chatId, classValue]
     );
+
+    // Also migrate any legacy "Social Science" or "Science" rows in DB for this chat into granular subjects
+    const { rows: legacyRows } = await db.query(
+      "SELECT id, subject, exam, number, title, pdf_url FROM syllabus_chapters WHERE chat_id = $1",
+      [chatId]
+    );
+    for (const row of legacyRows) {
+      const granular = classifyGranularSubject(row.subject, row.title, row.pdf_url, "", row.number);
+      if (granular && granular !== row.subject) {
+        await db.query("UPDATE syllabus_chapters SET subject = $1 WHERE id = $2", [granular, row.id]);
+        await db
+          .query(
+            `UPDATE chapter_quiz_results
+                SET subject = $1
+              WHERE telegram_user_id = $2 AND subject = $3 AND exam = $4 AND chapter_title = $5`,
+            [granular, chatId, row.subject, row.exam || "", row.title]
+          )
+          .catch(() => {});
+      }
+    }
 
     for (const subject of syllabus.subjects) {
       const label = syllabus.exam ? `${subject.name} (${syllabus.exam})` : subject.name;

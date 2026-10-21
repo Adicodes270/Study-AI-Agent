@@ -1,12 +1,16 @@
 // ==========================================================================
 // quizzes.js — syllabus-linked quizzes
 // Features:
-// 1. Open-ended Typed + Dual-Engine Voice-Spoken Answers (Continuous Web Speech API + Gemini Audio Fallback)
-// 2. Book-Grounded AI Grading & Verification
-// 3. Requiz (fresh question sets) + Review Answers from both Completion screen & Chapters home screen
-//    (No forced auto-redirect timer kicking user back to homepage!)
-// 4. Top-bar Default Question Count (Max 50) + New Quiz Question Count Selector where AI analyzes
-//    the chapter and sets a default question count (minimum default 10, max 50) editable by the user
+// 1. Granular Subject Organization:
+//    - Social Science chapters are always organized into History, Civics, Economics, and Geography
+//    - Science chapters are always organized into Physics, Chemistry, and Biology
+// 2. Pending Quiz State (HSL Yellow Button, Auto-Save & Resume Where User Left Off):
+//    - Users can leave a quiz mid-way ("Mark as Pending & Leave" or "Back to chapters")
+//    - Chapter shows a yellow HSL "Pending" button on the dashboard
+//    - Clicking the yellow Pending button resumes at the exact question index where they left off
+//      with all previous answers saved in order so all answers are graded together on finish
+// 3. Open-ended Typed + Dual-Engine Voice-Spoken Answers + Book-Grounded AI Grading
+// 4. Requiz (fresh question sets) + Review Answers + Configurable Question Counts (10–50)
 // ==========================================================================
 (() => {
   'use strict';
@@ -16,10 +20,113 @@
   const GLOBAL_QCOUNT_KEY = 'sa_default_quiz_questions'; // 'auto' or '1'..'50'
   const CHAPTER_QCOUNT_KEY = 'sa_chapter_qcounts_v1'; // { [chapterKey]: number }
   const LOCAL_REVIEWS_KEY = 'sa_quiz_reviews_v1'; // backup cache of review arrays per chapter
+  const PENDING_QUIZZES_KEY = 'sa_pending_quizzes_v1'; // { [chapterKey]: { quizId, attempt, chapter, questions, answers, currentIndex, updatedAt } }
   const MIN_AI_DEFAULT_QUESTIONS = 10;
   const MAX_QUESTIONS = 50;
 
   const $ = (id) => document.getElementById(id);
+
+  // ---------- Granular Subject Classifier (History, Civics, Economics, Geography & Physics, Chemistry, Biology) ----------
+  const SCIENCE_CHAPTER_DISCIPLINE = {
+    iesc1: {
+      1: 'Chemistry', 2: 'Chemistry', 3: 'Chemistry', 4: 'Chemistry',
+      5: 'Biology', 6: 'Biology',
+      7: 'Physics', 8: 'Physics', 9: 'Physics', 10: 'Physics', 11: 'Physics',
+      12: 'Biology',
+    },
+    jesc1: {
+      1: 'Chemistry', 2: 'Chemistry', 3: 'Chemistry', 4: 'Chemistry',
+      5: 'Biology', 6: 'Biology', 7: 'Biology', 8: 'Biology',
+      9: 'Physics', 10: 'Physics', 11: 'Physics', 12: 'Physics',
+      13: 'Biology',
+    },
+  };
+
+  function classifyGranularSubjectClient(rawSubject, title = '', pdfUrl = '', bookCode = '', chNum = null) {
+    const subj = String(rawSubject || '').trim();
+    const text = `${title || ''} ${subj}`.toLowerCase();
+    const urlMatch = /\/([a-z]{4,5}\d)(\d{2})\.pdf$/i.exec(String(pdfUrl || ''));
+    const code = (bookCode || (urlMatch ? urlMatch[1] : '')).toLowerCase().trim();
+    const num = chNum || (urlMatch ? parseInt(urlMatch[2], 10) : null);
+
+    if (code === 'iess1' || code === 'jess1') return 'Geography';
+    if (code === 'iess2' || code === 'jess2') return 'Economics';
+    if (code === 'iess3' || code === 'jess3') return 'History';
+    if (code === 'iess4' || code === 'jess4') return 'Civics';
+    if ((code === 'iesc1' || code === 'jesc1') && num && SCIENCE_CHAPTER_DISCIPLINE[code]?.[num]) {
+      return SCIENCE_CHAPTER_DISCIPLINE[code][num];
+    }
+
+    if (/^history$/i.test(subj)) return 'History';
+    if (/^(civics|political science|polity)$/i.test(subj)) return 'Civics';
+    if (/^geography$/i.test(subj)) return 'Geography';
+    if (/^economics$/i.test(subj)) return 'Economics';
+    if (/^physics$/i.test(subj)) return 'Physics';
+    if (/^chemistry$/i.test(subj)) return 'Chemistry';
+    if (/^biology$/i.test(subj)) return 'Biology';
+
+    const isSocialScience = /^(social\s*science|social\s*studies|sst|s\.s\.t\.?)$/i.test(subj);
+    const isScience = /^(science|general\s*science|sci)$/i.test(subj);
+
+    if (isSocialScience || !subj) {
+      if (
+        /civics|politic|democracy|democratic|constitution|constitutional|electoral|election|parliament|judiciary|working of institutions|institution|fundamental rights|democratic rights|power.?sharing|federalism|gender,?\s*religion|caste|political parties|outcomes of democracy|government|panchayat|municipal|citizen|secularism|marginalisation|equality|legislature|executive/i.test(
+          text
+        )
+      ) {
+        return 'Civics';
+      }
+      if (
+        /economic|palampur|people as resource|poverty|food security|sectors of|money and credit|globalisation|consumer rights|problem of choice|scarcity|microeconomics|macroeconomics|production|market|budget|banking|gdp|employment/i.test(
+          text
+        )
+      ) {
+        return 'Economics';
+      }
+      if (
+        /geography|size and location|physical features|tectonic|himalaya|drainage|climate|monsoon|natural vegetation|wildlife|population|resources and development|forest and wildlife|water resources|agriculture|minerals|energy resources|manufacturing industries|lifelines of national economy|latitude|longitude|lithosphere|atmosphere|hydrosphere|biosphere|landform|drainage basin|peninsular/i.test(
+          text
+        )
+      ) {
+        return 'Geography';
+      }
+      if (
+        /history|early human|civilisation|civilization|revolution|nationalism|colonial|empire|dynasty|mughal|sultan|british|east india|world war|hitler|nazism|socialism|russian|french|industrialisation|industrialization|print culture|global world|forest society|pastoralist|peasants|kings|chronicle|harappa|vedic|mesopotamia|stone age|medieval|ancient|modern world|revolt|1857|gandhi|indo.?china|making of/i.test(
+          text
+        )
+      ) {
+        return 'History';
+      }
+      if (isSocialScience) return 'History';
+    }
+
+    if (isScience || !subj) {
+      if (
+        /chemistry|chemical|matter in our surroundings|matter around us pure|atoms and molecules|structure of the atom|acids,?\s*bases|salts|metals and non.?metals|carbon and its compounds|periodic|element|compound|mixture|solution|suspension|colloid|mole concept|valency|isotope|isobar|combustion|flame|coal|petroleum|synthetic fibre|plastic|polymer|redox|corrosion|rancidity|electrolysis|organic|hydrocarbon/i.test(
+          text
+        )
+      ) {
+        return 'Chemistry';
+      }
+      if (
+        /biology|fundamental unit of life|cell|tissues|diversity in living|living organism|life processes|control and coordination|reproduce|reproduction|heredity|evolution|our environment|ecosystem|food chain|ozone|improvement in food resources|crop|microorganism|why do we fall ill|disease|nutrition|respiration|transportation in|excretion|photosynthesis|nervous|hormone|endocrine|genetics|dna|chromosome|biodiversity/i.test(
+          text
+        )
+      ) {
+        return 'Biology';
+      }
+      if (
+        /physics|motion|force and laws|laws of motion|inertia|momentum|newton|gravitation|gravity|thrust|pressure|archimedes|buoyancy|work and energy|kinetic|potential energy|sound|wave|echo|ultrasound|light|reflection|refraction|mirror|lens|human eye|colourful world|prism|dispersion|scattering|electricity|ohm|circuit|resistance|magnetic effects|electric current|electromagnet|motor|generator|fleming|friction|heat|temperature|optics/i.test(
+          text
+        )
+      ) {
+        return 'Physics';
+      }
+      if (isScience) return 'Physics';
+    }
+
+    return subj || 'General';
+  }
 
   // ---------- cookies ----------
   const getCookie = (name) => {
@@ -53,7 +160,7 @@
   let currentView = 'view-loading';
   let pollTimer = null;
   let manualGateOpen = false;
-  let quiz = null; // { quizId, chapter, questions, answers: string[], index }
+  let quiz = null; // { quizId, attempt, chapter, questions, answers: string[], index }
   let activeDoneChapter = null; // chapter object currently shown in #view-done
   let gateAiRecommendedCount = 12; // AI-analyzed default (min 10, max 50) in New Quiz
   let gateCountManuallyEdited = false;
@@ -81,13 +188,13 @@
 
   function chapterStorageKey(c) {
     if (!c) return '';
-    return `${String(c.subject || '').toLowerCase()}||${String(c.title || '').toLowerCase()}`;
+    return `${String(c.title || '').toLowerCase().trim()}`;
   }
 
   function getSavedChapterQuestionCount(c) {
     try {
       const map = JSON.parse(localStorage.getItem(CHAPTER_QCOUNT_KEY) || '{}');
-      const v = map[chapterStorageKey(c)];
+      const v = map[chapterStorageKey(c)] ?? map[`${String(c.subject || '').toLowerCase()}||${String(c.title || '').toLowerCase()}`];
       if (v != null) {
         const n = parseInt(v, 10);
         if (!Number.isNaN(n) && n >= 1) return Math.min(MAX_QUESTIONS, n);
@@ -125,7 +232,7 @@
     if (words >= 7) score += 3;
     else if (words >= 4) score += 2;
 
-    if (/math|physics|chemistry|science|biology|economics|history|geography/i.test(subject || title)) {
+    if (/math|physics|chemistry|science|biology|economics|history|geography|civics/i.test(subject || title)) {
       score += 3;
     }
     if (textLen > 12000 || byteSize > 2.5 * 1024 * 1024) score += 6;
@@ -134,10 +241,6 @@
     return Math.max(MIN_AI_DEFAULT_QUESTIONS, Math.min(MAX_QUESTIONS, score));
   }
 
-  // Effective question count for a chapter card:
-  // 1. User's top-level default setting (if set to a number 1..50)
-  // 2. Per-chapter user override saved from New Quiz
-  // 3. AI's chapter-analyzed recommended_questions (min 10, max 50)
   function getEffectiveQuestionCount(c) {
     const globalSetting = getGlobalQuestionSetting();
     if (typeof globalSetting === 'number') return globalSetting;
@@ -146,7 +249,96 @@
     return analyzeChapterQuestionsHeuristic(c);
   }
 
-  // Backup storage for reviews in localStorage so Review Answers works even if DB row pre-dated review_json
+  // ---------- Pending Quiz Storage (Local + Server Sync) ----------
+  function getLocalPendingQuiz(chapter) {
+    if (!chapter) return null;
+    try {
+      const map = JSON.parse(localStorage.getItem(PENDING_QUIZZES_KEY) || '{}');
+      const entry = map[chapterStorageKey(chapter)] || null;
+      if (entry && Array.isArray(entry.questions) && entry.questions.length > 0) {
+        return entry;
+      }
+    } catch {}
+    return null;
+  }
+
+  function saveLocalPendingQuiz(quizState) {
+    if (!quizState || !quizState.chapter || !Array.isArray(quizState.questions)) return;
+    try {
+      const map = JSON.parse(localStorage.getItem(PENDING_QUIZZES_KEY) || '{}');
+      const k = chapterStorageKey(quizState.chapter);
+      const normalizedAnswers = quizState.questions.map((_, i) =>
+        typeof quizState.answers?.[i] === 'string' ? quizState.answers[i] : ''
+      );
+      const answeredCount = normalizedAnswers.filter((a) => a.trim().length > 0).length;
+      const savedObj = {
+        quizId: quizState.quizId,
+        attempt: quizState.attempt || 1,
+        chapter: quizState.chapter,
+        questions: quizState.questions,
+        answers: normalizedAnswers,
+        currentIndex: Math.max(0, Math.min(quizState.questions.length - 1, Number(quizState.index) || 0)),
+        answeredCount,
+        totalQuestions: quizState.questions.length,
+        updatedAt: new Date().toISOString(),
+      };
+      map[k] = savedObj;
+      localStorage.setItem(PENDING_QUIZZES_KEY, JSON.stringify(map));
+
+      // Also update in-memory chapter card immediately
+      const chInList = chapters.find(
+        (c) => String(c.id) === String(quizState.chapter.id) || chapterStorageKey(c) === k
+      );
+      if (chInList) {
+        chInList.pending_quiz = savedObj;
+      }
+    } catch {}
+  }
+
+  function clearPendingQuizForChapter(chapter) {
+    if (!chapter) return;
+    try {
+      const map = JSON.parse(localStorage.getItem(PENDING_QUIZZES_KEY) || '{}');
+      const k = chapterStorageKey(chapter);
+      delete map[k];
+      localStorage.setItem(PENDING_QUIZZES_KEY, JSON.stringify(map));
+      const chInList = chapters.find(
+        (c) => String(c.id) === String(chapter.id) || chapterStorageKey(c) === k
+      );
+      if (chInList) {
+        chInList.pending_quiz = null;
+      }
+    } catch {}
+  }
+
+  let syncPendingTimer = null;
+  function syncQuizProgressToServer(quizState, { immediate = false } = {}) {
+    if (!quizState || !quizState.quizId) return;
+    saveLocalPendingQuiz(quizState);
+
+    const sendNow = () => {
+      postJson(
+        '/api/quizzes/progress',
+        {
+          telegramUserId: userId,
+          quizId: quizState.quizId,
+          answers: quizState.answers,
+          currentIndex: quizState.index,
+          isPending: true,
+        },
+        15000
+      ).catch(() => {});
+    };
+
+    clearTimeout(syncPendingTimer);
+    if (immediate) {
+      sendNow();
+    } else {
+      syncPendingTimer = setTimeout(sendNow, 500);
+    }
+  }
+
+  // Backup storage for reviews in localStorage
   function saveLocalReviewBackup(chapter, resultObj) {
     if (!chapter || !resultObj) return;
     try {
@@ -160,7 +352,11 @@
     if (!chapter) return null;
     try {
       const map = JSON.parse(localStorage.getItem(LOCAL_REVIEWS_KEY) || '{}');
-      return map[chapterStorageKey(chapter)] || null;
+      return (
+        map[chapterStorageKey(chapter)] ||
+        map[`${String(chapter.subject || '').toLowerCase()}||${String(chapter.title || '').toLowerCase()}`] ||
+        null
+      );
     } catch {
       return null;
     }
@@ -396,7 +592,6 @@
 
   // ---------- Load Chapters ----------
   async function loadChapters({ silent = false, forceChaptersView = false } = {}) {
-    // NEVER clobber an active quiz or the completion/review screen during a silent background refresh
     if (silent && (currentView === 'view-quiz' || currentView === 'view-done')) {
       return true;
     }
@@ -410,7 +605,17 @@
         return false;
       }
       const prevCount = chapters.length;
-      chapters = data.chapters || [];
+      chapters = (data.chapters || []).map((c) => {
+        // Ensure every chapter is organized into granular subjects (History, Civics, Geography, Economics & Physics, Chemistry, Biology)
+        const granularSubject = classifyGranularSubjectClient(c.subject, c.title, c.pdf_url, '', c.number);
+        const localPending = getLocalPendingQuiz(c);
+        const pendingQuiz = localPending || c.pending_quiz || null;
+        return {
+          ...c,
+          subject: granularSubject,
+          pending_quiz: pendingQuiz,
+        };
+      });
 
       // Merge any local review backup if a chapter result doesn't have review_json populated yet
       for (const c of chapters) {
@@ -528,7 +733,7 @@
     else banner('');
   });
 
-  // ---------- Client-side NCERT Chapter PDF helper ----------
+  // ---------- Client-side NCERT Chapter PDF helper (with granular subjects!) ----------
   const CLIENT_NCERT_MAP = {
     iesc1: { cls: 9, subject: 'Science', chapters: { 1: 'Matter in Our Surroundings', 2: 'Is Matter Around Us Pure?', 3: 'Atoms and Molecules', 4: 'Structure of the Atom', 5: 'The Fundamental Unit of Life', 6: 'Tissues', 7: 'Motion', 8: 'Force and Laws of Motion', 9: 'Gravitation', 10: 'Work and Energy', 11: 'Sound', 12: 'Improvement in Food Resources' } },
     iemh1: { cls: 9, subject: 'Mathematics', chapters: { 1: 'Number Systems', 2: 'Polynomials', 3: 'Coordinate Geometry', 4: 'Linear Equations in Two Variables', 5: "Introduction to Euclid's Geometry", 6: 'Lines and Angles', 7: 'Triangles', 8: 'Quadrilaterals', 9: 'Circles', 10: "Heron's Formula", 11: 'Surface Areas and Volumes', 12: 'Statistics' } },
@@ -553,7 +758,8 @@
       const book = CLIENT_NCERT_MAP[code];
       if (book && chNum >= 1) {
         const chTitle = book.chapters[chNum] || `Chapter ${chNum}`;
-        return `Class ${book.cls} NCERT Syllabus\nSubject: ${book.subject}\nChapter ${chNum}: ${chTitle} (NCERT code: ${code})`;
+        const granularSubj = classifyGranularSubjectClient(book.subject, chTitle, '', code, chNum);
+        return `Class ${book.cls} NCERT Syllabus\nSubject: ${granularSubj}\nChapter ${chNum}: ${chTitle} (NCERT code: ${code})`;
       }
     }
 
@@ -572,7 +778,7 @@
                     { inlineData: { mimeType: 'application/pdf', data: payload.dataBase64 } },
                     {
                       text:
-                        'This PDF is an NCERT textbook chapter or study chapter. Identify its Class (e.g. 9 or 10), Subject (e.g. Science, Mathematics, History, Geography, Civics, Economics, English, Hindi), Chapter Number, and exact Chapter Title. Output ONLY in this exact format:\nClass <number> Syllabus\nSubject: <Subject Name>\nChapter <number>: <Chapter Title>',
+                        'This PDF is an NCERT textbook chapter or study chapter. Identify its Class (e.g. 9 or 10), specific Subject (MUST be one of Physics, Chemistry, Biology, History, Civics, Geography, Economics, Mathematics, English, Hindi, Sanskrit — NEVER generic Science or Social Science), Chapter Number, and exact Chapter Title. Output ONLY in this exact format:\nClass <number> Syllabus\nSubject: <Subject Name>\nChapter <number>: <Chapter Title>',
                     },
                   ],
                 },
@@ -589,7 +795,8 @@
     }
 
     const cleanName = fileName.replace(/\.pdf$/i, '').replace(/[_-]+/g, ' ').trim() || 'NCERT Study Chapter';
-    return `Class 9 Syllabus\nSubject: Science\nChapter 1: ${cleanName}`;
+    const guessedSubj = classifyGranularSubjectClient('', cleanName, '', '', 1);
+    return `Class 9 Syllabus\nSubject: ${guessedSubj !== 'General' ? guessedSubj : 'Physics'}\nChapter 1: ${cleanName}`;
   }
 
   // ---------- Upload PDF / Text in New Quiz ----------
@@ -615,7 +822,6 @@
     sylStatus('AI is reading your chapter & calculating the optimal question count…');
     const geminiKey = getCookie('sa_gemini_key') || undefined;
 
-    // Pre-estimate AI default question count (min 10, max 50) from file/text if user hasn't manually edited it
     if (!gateCountManuallyEdited) {
       const preEst = analyzeChapterQuestionsHeuristic(payload);
       setGateQuestionCount(preEst, { fromAi: true });
@@ -639,7 +845,6 @@
         }
       }
 
-      // AI analyzed the chapter and returned ai_recommended_questions (min 10, max 50)
       const aiCount = Math.max(
         MIN_AI_DEFAULT_QUESTIONS,
         Math.min(
@@ -674,6 +879,13 @@
         null;
 
       if (targetChapter) {
+        targetChapter.subject = classifyGranularSubjectClient(
+          targetChapter.subject,
+          targetChapter.title,
+          targetChapter.pdf_url,
+          '',
+          targetChapter.number
+        );
         gateLatestUploadedChapter = targetChapter;
         const finalCount = Math.max(
           1,
@@ -731,7 +943,6 @@
     if (!panel.hidden) $('syl-text')?.focus();
   });
 
-  // Live heuristic update as user pastes text into New Quiz
   $('syl-text')?.addEventListener('input', (e) => {
     if (!gateCountManuallyEdited) {
       const est = analyzeChapterQuestionsHeuristic({ text: e.currentTarget.value });
@@ -750,14 +961,37 @@
   );
 
   // ---------- Subject Sections & Chapter Cards ----------
+  const SUBJECT_DISPLAY_ORDER = [
+    'History',
+    'Civics',
+    'Geography',
+    'Economics',
+    'Physics',
+    'Chemistry',
+    'Biology',
+    'Mathematics',
+    'English',
+    'Hindi',
+    'Sanskrit',
+  ];
+
   function groupSections() {
     const map = new Map();
     for (const c of chapters) {
-      const key = `${c.subject}||${c.exam || ''}`;
-      if (!map.has(key)) map.set(key, { key, subject: c.subject, exam: c.exam || '', chapters: [] });
+      const granularSubj = classifyGranularSubjectClient(c.subject, c.title, c.pdf_url, '', c.number);
+      c.subject = granularSubj;
+      const key = `${granularSubj}||${c.exam || ''}`;
+      if (!map.has(key)) map.set(key, { key, subject: granularSubj, exam: c.exam || '', chapters: [] });
       map.get(key).chapters.push(c);
     }
-    return [...map.values()];
+    return [...map.values()].sort((a, b) => {
+      const idxA = SUBJECT_DISPLAY_ORDER.indexOf(a.subject);
+      const idxB = SUBJECT_DISPLAY_ORDER.indexOf(b.subject);
+      if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+      if (idxA !== -1) return -1;
+      if (idxB !== -1) return 1;
+      return a.subject.localeCompare(b.subject);
+    });
   }
 
   function renderChapters() {
@@ -787,6 +1021,7 @@
     for (const sec of sections) {
       if (activeTab !== 'all' && sec.subject !== activeTab) continue;
       const attempted = sec.chapters.filter((c) => c.result).length;
+      const pendingCount = sec.chapters.filter((c) => c.pending_quiz || getLocalPendingQuiz(c)).length;
       const mastered = sec.chapters.filter((c) => c.result && c.result.percentage >= 80).length;
       const el = document.createElement('section');
       el.className = 'qz-section';
@@ -797,7 +1032,7 @@
           <h2>${esc(sec.subject)}</h2>
           ${sec.exam ? `<span class="qz-exam">${esc(sec.exam)}</span>` : ''}
           <div class="qz-mastery" title="Chapters scoring 80% or more">
-            <span>${mastered} of ${sec.chapters.length} mastered${attempted ? ` · ${attempted} attempted` : ''}</span>
+            <span>${mastered} of ${sec.chapters.length} mastered${attempted ? ` · ${attempted} attempted` : ''}${pendingCount ? ` · ${pendingCount} pending` : ''}</span>
             <div class="qz-mastery-bar"><i style="width:${Math.round((mastered / sec.chapters.length) * 100)}%"></i></div>
           </div>
         </div>
@@ -808,15 +1043,88 @@
     }
   }
 
+  function getEffectivePendingQuiz(c) {
+    return getLocalPendingQuiz(c) || c.pending_quiz || null;
+  }
+
+  function computeResumeIndex(pending) {
+    if (!pending || !Array.isArray(pending.questions) || !pending.questions.length) return 0;
+    const total = pending.questions.length;
+    const savedIdx = Math.max(0, Math.min(total - 1, Number(pending.currentIndex) || 0));
+    const answers = Array.isArray(pending.answers) ? pending.answers : [];
+    // If the question at savedIdx has not been answered yet, stay on savedIdx;
+    // otherwise if there is a next unanswered question, advance to it or stay on savedIdx
+    if (!String(answers[savedIdx] || '').trim()) {
+      return savedIdx;
+    }
+    const firstUnansweredAfter = answers.findIndex((a, i) => i >= savedIdx && !String(a || '').trim());
+    if (firstUnansweredAfter !== -1) return firstUnansweredAfter;
+    const firstUnansweredAny = answers.findIndex((a) => !String(a || '').trim());
+    return firstUnansweredAny !== -1 ? firstUnansweredAny : savedIdx;
+  }
+
   function chapterCard(c) {
     const card = document.createElement('div');
     card.className = 'qz-chapter';
     card.dataset.chapterId = c.id;
     card.tabIndex = 0;
-    const qCount = getEffectiveQuestionCount(c);
 
-    if (c.result) {
+    const pending = getEffectivePendingQuiz(c);
+    const qCount = pending?.totalQuestions || pending?.questions?.length || getEffectiveQuestionCount(c);
+
+    if (pending) {
+      card.classList.add('pending');
+    } else if (c.result) {
       card.classList.add('done');
+    }
+
+    const resumeIdx = pending ? computeResumeIndex(pending) : 0;
+    const answeredCount = pending
+      ? (Array.isArray(pending.answers) ? pending.answers.filter((a) => String(a || '').trim().length > 0).length : pending.answeredCount || 0)
+      : 0;
+    const totalPendingQs = pending ? (pending.questions?.length || pending.totalQuestions || qCount) : qCount;
+
+    let footHtml = '';
+    if (pending) {
+      footHtml = `
+        <span class="qz-badge pending">Pending</span>
+        <span>${answeredCount}/${totalPendingQs} saved · Resume at Q${resumeIdx + 1}</span>`;
+    } else if (c.result) {
+      footHtml = `
+        <span class="qz-badge ${tone(c.result.percentage)}">${c.result.percentage}%</span>
+        <span>${c.result.score}/${c.result.total} · Attempt #${c.result.attempts || 1}</span>`;
+    } else {
+      footHtml = `<span>Not attempted yet</span><span>${qCount} questions</span>`;
+    }
+
+    let actionsHtml = '';
+    if (pending) {
+      actionsHtml = `
+        <button type="button" class="qz-ch-btn pending" data-action="pending" title="Resume your pending quiz from Question ${resumeIdx + 1} with all ${answeredCount} previous answer(s) saved in order">
+          <i class="fa-solid fa-clock" aria-hidden="true"></i> Pending · Resume (Q${resumeIdx + 1}/${totalPendingQs})
+        </button>
+        ${
+          c.result
+            ? `<button type="button" class="qz-ch-btn" data-action="review" title="Review answers from your last completed attempt">
+                 <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i> Review
+               </button>`
+            : `<button type="button" class="qz-ch-btn" data-action="requiz" title="Discard pending quiz and start a fresh quiz">
+                 <i class="fa-solid fa-rotate-right" aria-hidden="true"></i> Restart
+               </button>`
+        }`;
+    } else if (c.result) {
+      actionsHtml = `
+        <button type="button" class="qz-ch-btn primary" data-action="requiz" title="Take a new quiz on this chapter with fresh questions">
+          <i class="fa-solid fa-rotate-right" aria-hidden="true"></i> Requiz
+        </button>
+        <button type="button" class="qz-ch-btn" data-action="review" title="Review your answers and AI feedback from your last attempt">
+          <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i> Review Answers
+        </button>`;
+    } else {
+      actionsHtml = `
+        <button type="button" class="qz-ch-btn primary" data-action="start">
+          <i class="fa-solid fa-play" aria-hidden="true"></i> Start Quiz (${qCount} Qs)
+        </button>`;
     }
 
     card.innerHTML = `
@@ -825,28 +1133,13 @@
         <span class="chip ${c.matched ? 'ok' : 'wait'}">${c.matched ? 'NCERT' : 'By topic'}</span>
       </div>
       <div class="qz-ch-title">${esc(c.title)}</div>
-      <div class="qz-ch-foot">
-        ${
-          c.result
-            ? `<span class="qz-badge ${tone(c.result.percentage)}">${c.result.percentage}%</span>
-               <span>${c.result.score}/${c.result.total} · Attempt #${c.result.attempts || 1}</span>`
-            : `<span>Not attempted yet</span><span>${qCount} questions</span>`
-        }
-      </div>
-      <div class="qz-ch-actions">
-        ${
-          c.result
-            ? `<button type="button" class="qz-ch-btn primary" data-action="requiz" title="Take a new quiz on this chapter with fresh questions">
-                 <i class="fa-solid fa-rotate-right" aria-hidden="true"></i> Requiz
-               </button>
-               <button type="button" class="qz-ch-btn" data-action="review" title="Review your answers and AI feedback from your last attempt">
-                 <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i> Review Answers
-               </button>`
-            : `<button type="button" class="qz-ch-btn primary" data-action="start">
-                 <i class="fa-solid fa-play" aria-hidden="true"></i> Start Quiz (${qCount} Qs)
-               </button>`
-        }
-      </div>`;
+      <div class="qz-ch-foot">${footHtml}</div>
+      <div class="qz-ch-actions">${actionsHtml}</div>`;
+
+    card.querySelector('[data-action="pending"]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      resumePendingQuiz(c);
+    });
 
     card.querySelector('[data-action="start"]')?.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -855,6 +1148,7 @@
 
     card.querySelector('[data-action="requiz"]')?.addEventListener('click', (e) => {
       e.stopPropagation();
+      clearPendingQuizForChapter(c);
       startQuiz(c, getEffectiveQuestionCount(c));
     });
 
@@ -865,14 +1159,16 @@
 
     card.addEventListener('click', (e) => {
       if (e.target.closest('button')) return;
-      if (c.result) {
+      if (getEffectivePendingQuiz(c)) {
+        resumePendingQuiz(c);
+      } else if (c.result) {
         openSavedChapterReview(c);
       } else {
         startQuiz(c, getEffectiveQuestionCount(c));
       }
     });
 
-    if (c.result) {
+    if (c.result && !pending) {
       card.addEventListener('mouseenter', () => showPop(card, c));
       card.addEventListener('mouseleave', hidePop);
       card.addEventListener('focus', () => showPop(card, c));
@@ -952,10 +1248,6 @@
 
   // ==========================================================================
   // Dual-Engine Voice Input (#voice-answer-btn)
-  // 1. Continuous Web Speech API (`SpeechRecognition` / `webkitSpeechRecognition`)
-  //    with auto-restart on silence (`userWantsMic`) so it NEVER stops prematurely!
-  // 2. Parallel `MediaRecorder` + Gemini Audio Transcription fallback (`/api/quizzes/transcribe`)
-  //    so if the browser's SpeechRecognition fails or produces 0 words, Gemini transcribes the recording!
   // ==========================================================================
   const answerInput = $('quiz-answer-input');
   const charCountEl = $('quiz-char-count');
@@ -964,7 +1256,7 @@
   const voiceIcon = $('voice-answer-icon');
   const voiceLabel = $('voice-answer-label');
   const voiceStatusMsg = $('voice-status-msg');
-  const DEFAULT_FOOT_HINT = 'Press <kbd>Ctrl</kbd> + <kbd>Enter</kbd> to continue';
+  const DEFAULT_FOOT_HINT = 'Press <kbd>Ctrl</kbd> + <kbd>Enter</kbd> to continue · Progress auto-saved';
 
   const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
   let recognition = null;
@@ -981,7 +1273,10 @@
     if (!answerInput) return;
     const clipped = String(newVal || '').slice(0, 2000);
     answerInput.value = clipped;
-    if (quiz) quiz.answers[quiz.index] = clipped;
+    if (quiz) {
+      quiz.answers[quiz.index] = clipped;
+      syncQuizProgressToServer(quiz, { immediate: false });
+    }
     if (charCountEl) charCountEl.textContent = `${clipped.length} / 2000`;
     if ($('next-btn')) $('next-btn').disabled = clipped.trim().length === 0;
   }
@@ -1033,7 +1328,6 @@
     const mimeType = blob.type || 'audio/webm';
     const geminiKey = getCookie('sa_gemini_key') || undefined;
 
-    // 1. Try backend /api/quizzes/transcribe
     try {
       const res = await postJson(
         '/api/quizzes/transcribe',
@@ -1041,9 +1335,8 @@
         45000
       );
       if (res?.transcript) return String(res.transcript).trim();
-    } catch { /* fallback to direct Gemini REST call below */ }
+    } catch { /* fallback below */ }
 
-    // 2. Direct Gemini REST API fallback
     if (geminiKey) {
       try {
         const res = await fetch(
@@ -1158,7 +1451,6 @@
           stopVoiceInput('Microphone permission denied. Please allow microphone access in your browser.');
           return;
         }
-        // For 'no-speech', 'aborted', or transient 'network', keep listening via MediaRecorder / auto-restart
       };
 
       rec.onend = () => {
@@ -1168,7 +1460,6 @@
           const combined = [baseTextBeforeSpeech, finalizedSpeech].filter(Boolean).join(baseTextBeforeSpeech ? ' ' : '');
           syncAnswerText(combined);
         }
-        // CRITICAL FIX: Do NOT stop when the browser pauses! Auto-restart while userWantsMic is true.
         if (userWantsMic) {
           clearTimeout(restartTimer);
           restartTimer = setTimeout(() => {
@@ -1178,9 +1469,7 @@
       };
 
       rec.start();
-    } catch {
-      // Even if SpeechRecognition fails to start, MediaRecorder is recording and will transcribe on stop
-    }
+    } catch {}
   }
 
   async function toggleVoiceInput() {
@@ -1197,7 +1486,6 @@
     userWantsMic = true;
     updateVoiceUI(true, '🎙️ Starting microphone…');
 
-    // Warm up microphone & start MediaRecorder so voice works in ALL browsers
     if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
       try {
         mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -1234,7 +1522,87 @@
 
   voiceBtn?.addEventListener('click', toggleVoiceInput);
 
-  // ---------- Quiz Runner (Typed / Spoken Answers + Requiz Support) ----------
+  // ---------- Quiz Runner: Start, Resume Pending, Save Pending, Submit ----------
+  function mountQuizToUI(quizObj) {
+    quiz = quizObj;
+    const ch = quiz.chapter;
+    ch.subject = classifyGranularSubjectClient(ch.subject, ch.title, ch.pdf_url, '', ch.number);
+
+    $('quiz-title').textContent = `${ch.subject} · ${
+      ch.number != null ? 'Ch ' + ch.number + ': ' : ''
+    }${ch.title}${quiz.attempt > 1 ? ` (Attempt #${quiz.attempt})` : ''}`;
+    $('quiz-meta').textContent = `${quiz.questions.length} questions`;
+    if (aiThinkingEl) aiThinkingEl.hidden = true;
+    show('view-quiz');
+    scrollTo({ top: 0 });
+    renderQuestion();
+  }
+
+  async function resumePendingQuiz(c) {
+    hidePop();
+    banner('');
+    stopVoiceInput();
+    const pending = getEffectivePendingQuiz(c);
+    if (!pending) {
+      return startQuiz(c, getEffectiveQuestionCount(c));
+    }
+
+    sessionStorage.setItem(RETURN_KEY, JSON.stringify({ chapterId: c.id, subject: c.subject, exam: c.exam || '' }));
+
+    // If the pending object already has the full questions list in memory/localStorage, mount immediately!
+    if (Array.isArray(pending.questions) && pending.questions.length > 0) {
+      const normalizedAnswers = pending.questions.map((_, i) =>
+        typeof pending.answers?.[i] === 'string' ? pending.answers[i] : ''
+      );
+      const resumeIdx = computeResumeIndex({ ...pending, answers: normalizedAnswers });
+      mountQuizToUI({
+        quizId: pending.quizId,
+        attempt: pending.attempt || (c.result?.attempts ? c.result.attempts + 1 : 1),
+        chapter: {
+          id: c.id,
+          subject: c.subject,
+          exam: c.exam,
+          number: c.number,
+          title: c.title,
+        },
+        questions: pending.questions,
+        answers: normalizedAnswers,
+        index: resumeIdx,
+      });
+      return;
+    }
+
+    // Otherwise fetch the pending session from the server by quizId
+    $('loading-text').textContent = `Resuming your pending ${c.subject} quiz on “${c.title}” from where you left off…`;
+    show('view-loading');
+    try {
+      const data = await postJson(
+        '/api/quizzes/generate',
+        { telegramUserId: userId, chapterId: c.id, resumeQuizId: pending.quizId },
+        60000
+      );
+      const normalizedAnswers = data.questions.map((_, i) =>
+        typeof data.answers?.[i] === 'string' ? data.answers[i] : ''
+      );
+      const resumeIdx = computeResumeIndex({
+        questions: data.questions,
+        answers: normalizedAnswers,
+        currentIndex: data.currentIndex || 0,
+      });
+      mountQuizToUI({
+        quizId: data.quizId,
+        attempt: data.attempt || 1,
+        chapter: data.chapter,
+        questions: data.questions,
+        answers: normalizedAnswers,
+        index: resumeIdx,
+      });
+    } catch (e) {
+      show('view-chapters');
+      banner(e.message);
+    }
+  }
+
   async function startQuiz(c, requestedCount = null) {
     hidePop();
     banner('');
@@ -1249,7 +1617,7 @@
         { telegramUserId: userId, chapterId: c.id, questionCount: countToRequest },
         150000
       );
-      quiz = {
+      const newQuiz = {
         quizId: data.quizId,
         attempt: data.attempt || 1,
         chapter: data.chapter,
@@ -1257,14 +1625,9 @@
         answers: data.questions.map(() => ''),
         index: 0,
       };
-      $('quiz-title').textContent = `${data.chapter.subject} · ${
-        data.chapter.number != null ? 'Ch ' + data.chapter.number + ': ' : ''
-      }${data.chapter.title}${quiz.attempt > 1 ? ` (Attempt #${quiz.attempt})` : ''}`;
-      $('quiz-meta').textContent = `${data.questions.length} questions`;
-      if (aiThinkingEl) aiThinkingEl.hidden = true;
-      show('view-quiz');
-      scrollTo({ top: 0 });
-      renderQuestion();
+      // Save initial pending session so even if they close the tab on Q1, it's marked Pending
+      syncQuizProgressToServer(newQuiz, { immediate: true });
+      mountQuizToUI(newQuiz);
     } catch (e) {
       show('view-chapters');
       banner(e.message);
@@ -1279,7 +1642,10 @@
     const last = index === questions.length - 1;
     quizError('');
     if (aiThinkingEl) aiThinkingEl.hidden = true;
-    $('quiz-qcount').textContent = `Question ${index + 1} of ${questions.length}`;
+    const savedCount = answers.filter((a) => String(a || '').trim().length > 0).length;
+    $('quiz-qcount').textContent = `Question ${index + 1} of ${questions.length}${
+      savedCount > 0 ? ` · ${savedCount} answer${savedCount === 1 ? '' : 's'} saved` : ''
+    }`;
     $('quiz-progress-bar').style.width = `${(index / questions.length) * 100}%`;
     $('quiz-subtopic').textContent = q.subtopic;
     $('quiz-question').textContent = q.question;
@@ -1307,6 +1673,7 @@
     quiz.answers[quiz.index] = val;
     if (charCountEl) charCountEl.textContent = `${val.length} / 2000`;
     $('next-btn').disabled = val.trim().length === 0;
+    syncQuizProgressToServer(quiz, { immediate: false });
   });
 
   answerInput?.addEventListener('keydown', (e) => {
@@ -1321,6 +1688,7 @@
     stopVoiceInput();
     if (answerInput) quiz.answers[quiz.index] = answerInput.value;
     quiz.index--;
+    syncQuizProgressToServer(quiz, { immediate: true });
     renderQuestion();
   });
 
@@ -1330,17 +1698,31 @@
     if (answerInput) quiz.answers[quiz.index] = answerInput.value;
     if (quiz.index < quiz.questions.length - 1) {
       quiz.index++;
+      syncQuizProgressToServer(quiz, { immediate: true });
       renderQuestion();
     } else {
       submitQuiz();
     }
   });
 
-  $('quit-btn').addEventListener('click', () => {
+  function pauseAndMarkQuizAsPending() {
     stopVoiceInput();
-    if (quiz && quiz.answers.some((a) => String(a || '').trim().length > 0) && !confirm('Leave this quiz? Your answers will not be saved.')) return;
-    quiz = null;
-    backToChapters({ scroll: false });
+    if (quiz) {
+      if (answerInput) quiz.answers[quiz.index] = answerInput.value;
+      syncQuizProgressToServer(quiz, { immediate: true });
+      quiz = null;
+    }
+    backToChapters({ scroll: true });
+  }
+
+  $('pending-quiz-btn')?.addEventListener('click', pauseAndMarkQuizAsPending);
+  $('quit-btn')?.addEventListener('click', pauseAndMarkQuizAsPending);
+
+  addEventListener('beforeunload', () => {
+    if (quiz) {
+      if (answerInput) quiz.answers[quiz.index] = answerInput.value;
+      saveLocalPendingQuiz(quiz);
+    }
   });
 
   function quizError(msg) {
@@ -1355,6 +1737,7 @@
   async function submitQuiz() {
     if (submitting || !quiz) return;
     stopVoiceInput();
+    if (answerInput) quiz.answers[quiz.index] = answerInput.value;
     submitting = true;
     quizError('');
     const next = $('next-btn');
@@ -1369,7 +1752,13 @@
     try {
       result = await postJson(
         '/api/quizzes/submit',
-        { telegramUserId: userId, quizId: quiz.quizId, answers: quiz.answers },
+        {
+          telegramUserId: userId,
+          quizId: quiz.quizId,
+          answers: quiz.answers,
+          chapter: quiz.chapter,
+          questions: quiz.questions,
+        },
         120000
       );
     } catch (e) {
@@ -1381,6 +1770,7 @@
       next.disabled = false;
       next.innerHTML = 'Try again <i class="fa-solid fa-rotate-right" aria-hidden="true"></i>';
       if (e.status === 410) {
+        clearPendingQuizForChapter(quiz.chapter);
         quiz = null;
         await backToChapters({ scroll: false });
         banner(e.message);
@@ -1392,14 +1782,18 @@
     submitting = false;
     if (aiThinkingEl) aiThinkingEl.hidden = true;
 
-    // Save local backup of the review & update in-memory chapter state immediately
+    // Quiz is finished! Clear Pending status for this chapter and store the completed review
+    clearPendingQuizForChapter(quiz.chapter);
+    clearPendingQuizForChapter(result.chapter);
     saveLocalReviewBackup(result.chapter, result);
+
     const chInList = chapters.find(
       (x) =>
         String(x.id) === String(result.chapter?.id) ||
-        (x.subject === result.chapter?.subject && x.title === result.chapter?.title)
+        chapterStorageKey(x) === chapterStorageKey(result.chapter)
     );
     if (chInList) {
+      chInList.pending_quiz = null;
       chInList.result = {
         score: result.score,
         total: result.total,
@@ -1422,7 +1816,7 @@
       chapters.find(
         (x) =>
           String(x.id) === String(r.chapter?.id) ||
-          (x.subject === r.chapter?.subject && x.title === r.chapter?.title)
+          chapterStorageKey(x) === chapterStorageKey(r.chapter)
       ) || r.chapter || null;
 
     const t = tone(r.percentage);
@@ -1502,6 +1896,7 @@
       backToChapters({ scroll: false });
       return;
     }
+    clearPendingQuizForChapter(activeDoneChapter);
     startQuiz(activeDoneChapter, getEffectiveQuestionCount(activeDoneChapter));
   });
 

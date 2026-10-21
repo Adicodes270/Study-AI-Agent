@@ -29,6 +29,139 @@ async function generate(apiKeys, request) {
   throw lastErr;
 }
 
+// Chapter-level subject mapping for NCERT Science books (iesc1 = Class 9, jesc1 = Class 10)
+const NCERT_SCIENCE_CHAPTER_DISCIPLINE = {
+  iesc1: {
+    1: "Chemistry", // Matter in Our Surroundings
+    2: "Chemistry", // Is Matter Around Us Pure?
+    3: "Chemistry", // Atoms and Molecules
+    4: "Chemistry", // Structure of the Atom
+    5: "Biology",   // The Fundamental Unit of Life
+    6: "Biology",   // Tissues
+    7: "Physics",   // Motion
+    8: "Physics",   // Force and Laws of Motion
+    9: "Physics",   // Gravitation
+    10: "Physics",  // Work and Energy
+    11: "Physics",  // Sound
+    12: "Biology",  // Improvement in Food Resources
+  },
+  jesc1: {
+    1: "Chemistry", // Chemical Reactions and Equations
+    2: "Chemistry", // Acids, Bases and Salts
+    3: "Chemistry", // Metals and Non-metals
+    4: "Chemistry", // Carbon and its Compounds
+    5: "Biology",   // Life Processes
+    6: "Biology",   // Control and Coordination
+    7: "Biology",   // How do Organisms Reproduce?
+    8: "Biology",   // Heredity
+    9: "Physics",   // Light - Reflection and Refraction
+    10: "Physics",  // The Human Eye and the Colourful World
+    11: "Physics",  // Electricity
+    12: "Physics",  // Magnetic Effects of Electric Current
+    13: "Biology",  // Our Environment
+  },
+};
+
+/**
+ * Classifies any generic "Social Science" / "SST" chapter into History, Civics, Geography, or Economics,
+ * and any generic "Science" chapter into Physics, Chemistry, or Biology.
+ */
+export function classifyGranularSubject(rawSubject, title = "", pdfUrl = "", bookCode = "", chNum = null) {
+  const subj = String(rawSubject || "").trim();
+  const text = `${title || ""} ${subj}`.toLowerCase();
+  const urlCodeMatch = /\/([a-z]{4,5}\d)(\d{2})\.pdf$/i.exec(String(pdfUrl || ""));
+  const code = (bookCode || (urlCodeMatch ? urlCodeMatch[1] : "")).toLowerCase().trim();
+  const num = chNum || (urlCodeMatch ? parseInt(urlCodeMatch[2], 10) : null);
+
+  // 1. Check exact NCERT book code + chapter number
+  if (code === "iess1" || code === "jess1" || code === "fess2" || code === "gess2" || code === "hess2") {
+    return "Geography";
+  }
+  if (code === "iess2" || code === "jess2") {
+    return "Economics";
+  }
+  if (code === "iess3" || code === "jess3" || code === "fess1" || code === "gess1" || code === "hess1") {
+    return "History";
+  }
+  if (code === "iess4" || code === "jess4" || code === "fess3" || code === "gess3" || code === "hess3") {
+    return "Civics";
+  }
+  if ((code === "iesc1" || code === "jesc1") && num && NCERT_SCIENCE_CHAPTER_DISCIPLINE[code]?.[num]) {
+    return NCERT_SCIENCE_CHAPTER_DISCIPLINE[code][num];
+  }
+
+  // Normalize already-specific subjects
+  if (/^history$/i.test(subj)) return "History";
+  if (/^(civics|political science|polity)$/i.test(subj)) return "Civics";
+  if (/^geography$/i.test(subj)) return "Geography";
+  if (/^economics$/i.test(subj)) return "Economics";
+  if (/^physics$/i.test(subj)) return "Physics";
+  if (/^chemistry$/i.test(subj)) return "Chemistry";
+  if (/^biology$/i.test(subj)) return "Biology";
+
+  const isSocialScience = /^(social\s*science|social\s*studies|sst|s\.s\.t\.?)$/i.test(subj);
+  const isScience = /^(science|general\s*science|sci)$/i.test(subj);
+
+  if (isSocialScience || !subj) {
+    if (
+      /civics|politic|democracy|democratic|constitution|constitutional|electoral|election|parliament|judiciary|working of institutions|institution|fundamental rights|democratic rights|power.?sharing|federalism|gender,?\s*religion|caste|political parties|outcomes of democracy|government|panchayat|municipal|citizen|secularism|marginalisation|equality|legislature|executive/i.test(
+        text
+      )
+    ) {
+      return "Civics";
+    }
+    if (
+      /economic|palampur|people as resource|poverty|food security|sectors of|money and credit|globalisation|consumer rights|problem of choice|scarcity|microeconomics|macroeconomics|production|market|budget|banking|gdp|employment/i.test(
+        text
+      )
+    ) {
+      return "Economics";
+    }
+    if (
+      /geography|size and location|physical features|tectonic|himalaya|drainage|climate|monsoon|natural vegetation|wildlife|population|resources and development|forest and wildlife|water resources|agriculture|minerals|energy resources|manufacturing industries|lifelines of national economy|latitude|longitude|lithosphere|atmosphere|hydrosphere|biosphere|landform|drainage basin|peninsular/i.test(
+        text
+      )
+    ) {
+      return "Geography";
+    }
+    if (
+      /history|early human|civilisation|civilization|revolution|nationalism|colonial|empire|dynasty|mughal|sultan|british|east india|world war|hitler|nazism|socialism|russian|french|industrialisation|industrialization|print culture|global world|forest society|pastoralist|peasants|kings|chronicle|harappa|vedic|mesopotamia|stone age|medieval|ancient|modern world|revolt|1857|gandhi|indo.?china|making of/i.test(
+        text
+      )
+    ) {
+      return "History";
+    }
+    if (isSocialScience) return "History";
+  }
+
+  if (isScience || !subj) {
+    if (
+      /chemistry|chemical|matter in our surroundings|matter around us pure|atoms and molecules|structure of the atom|acids,?\s*bases|salts|metals and non.?metals|carbon and its compounds|periodic|element|compound|mixture|solution|suspension|colloid|mole concept|valency|isotope|isobar|combustion|flame|coal|petroleum|synthetic fibre|plastic|polymer|redox|corrosion|rancidity|electrolysis|organic|hydrocarbon/i.test(
+        text
+      )
+    ) {
+      return "Chemistry";
+    }
+    if (
+      /biology|fundamental unit of life|cell|tissues|diversity in living|living organism|life processes|control and coordination|reproduce|reproduction|heredity|evolution|our environment|ecosystem|food chain|ozone|improvement in food resources|crop|microorganism|why do we fall ill|disease|nutrition|respiration|transportation in|excretion|photosynthesis|nervous|hormone|endocrine|genetics|dna|chromosome|biodiversity/i.test(
+        text
+      )
+    ) {
+      return "Biology";
+    }
+    if (
+      /physics|motion|force and laws|laws of motion|inertia|momentum|newton|gravitation|gravity|thrust|pressure|archimedes|buoyancy|work and energy|kinetic|potential energy|sound|wave|echo|ultrasound|light|reflection|refraction|mirror|lens|human eye|colourful world|prism|dispersion|scattering|electricity|ohm|circuit|resistance|magnetic effects|electric current|electromagnet|motor|generator|fleming|friction|heat|temperature|optics/i.test(
+        text
+      )
+    ) {
+      return "Physics";
+    }
+    if (isScience) return "Physics";
+  }
+
+  return subj || "General";
+}
+
 // Lookup table for official NCERT book codes (e.g. iesc101.pdf, jesc102.pdf)
 const NCERT_BOOKS_CATALOG = {
   iesc1: {
@@ -229,8 +362,37 @@ const NCERT_BOOKS_CATALOG = {
 };
 
 /**
+ * Splits any subjects in a parsed Syllabus object so that "Social Science" chapters are
+ * organized into History, Civics, Geography, and Economics, and "Science" chapters are
+ * organized into Physics, Chemistry, and Biology.
+ */
+export function splitSyllabusIntoGranularSubjects(syllabus) {
+  if (!syllabus || !Array.isArray(syllabus.subjects)) return syllabus;
+  const bySubjectName = new Map();
+
+  for (const sub of syllabus.subjects) {
+    for (const ch of sub.chapters || []) {
+      const granularName = classifyGranularSubject(
+        sub.name,
+        ch.title,
+        ch.pdf_url,
+        ch.ncert_book_code,
+        ch.ncert_chapter_number || ch.number
+      );
+      if (!bySubjectName.has(granularName)) {
+        bySubjectName.set(granularName, { name: granularName, chapters: [] });
+      }
+      bySubjectName.get(granularName).chapters.push(ch);
+    }
+  }
+
+  syllabus.subjects = [...bySubjectName.values()];
+  return syllabus;
+}
+
+/**
  * If the uploaded file name matches an NCERT chapter code (e.g. "iesc101.pdf" or "jesc105.pdf"),
- * return a ready-made Syllabus object immediately.
+ * return a ready-made Syllabus object immediately with the specific subject (Physics/Chemistry/Biology/History/Civics/Geography/Economics).
  */
 export function inferNcertFromFilename(fileName) {
   const m = /(?:^|[^a-z0-9])([a-z]{4}\d)(\d{2})(?:[^0-9]|$)/i.exec(String(fileName || ""));
@@ -243,12 +405,13 @@ export function inferNcertFromFilename(fileName) {
   const entry = NCERT_BOOKS_CATALOG[bookCode];
   if (entry) {
     const title = entry.chapters[chNum] || `Chapter ${chNum}`;
+    const specificSubject = classifyGranularSubject(entry.subject, title, pdfUrl, bookCode, chNum);
     return {
       class_level: entry.class_level,
       exam: null,
       subjects: [
         {
-          name: entry.subject,
+          name: specificSubject,
           chapters: [
             {
               number: chNum,
@@ -268,37 +431,21 @@ export function inferNcertFromFilename(fileName) {
 }
 
 const CLASS_9_AND_10_NCERT_REFERENCE = `
-Complete Class 9 NCERT Books & Chapters Reference:
-- Science ("iesc1"):
-  1: Matter in Our Surroundings | 2: Is Matter Around Us Pure? | 3: Atoms and Molecules | 4: Structure of the Atom | 5: The Fundamental Unit of Life | 6: Tissues | 7: Motion | 8: Force and Laws of Motion | 9: Gravitation | 10: Work and Energy | 11: Sound | 12: Improvement in Food Resources
-  (Note: Older editions also had Diversity in Living Organisms, Why Do We Fall Ill, Natural Resources)
-- Mathematics ("iemh1"):
-  1: Number Systems | 2: Polynomials | 3: Coordinate Geometry | 4: Linear Equations in Two Variables | 5: Introduction to Euclid's Geometry | 6: Lines and Angles | 7: Triangles | 8: Quadrilaterals | 9: Circles | 10: Heron's Formula | 11: Surface Areas and Volumes | 12: Statistics
-- Social Science - Geography: Contemporary India-I ("iess1"):
-  1: India - Size and Location | 2: Physical Features of India (covers Theory of Plate Tectonics, Tectonic Plates, Himalayas, Northern Plains, Peninsular Plateau, Indian Desert, Coastal Plains, Islands) | 3: Drainage | 4: Climate | 5: Natural Vegetation and Wildlife | 6: Population
-- Social Science - Economics ("iess2"):
-  1: The Story of Village Palampur (Introductory Economics concepts / Factors of Production) | 2: People as Resource | 3: Poverty as a Challenge | 4: Food Security in India
-- Social Science - History: India and the Contemporary World-I ("iess3"):
-  1: The French Revolution | 2: Socialism in Europe and the Russian Revolution | 3: Nazism and the Rise of Hitler | 4: Forest Society and Colonialism | 5: Pastoralists in the Modern World
-- Social Science - Civics / Political Science: Democratic Politics-I ("iess4"):
-  1: What is Democracy? Why Democracy? (Introductory Political Science / Democracy concepts) | 2: Constitutional Design | 3: Electoral Politics | 4: Working of Institutions | 5: Democratic Rights
-- English - Beehive ("iebe1"):
-  1: The Fun They Had / The Road Not Taken | 2: The Sound of Music / Wind | 3: The Little Girl / Rain on the Roof | 4: A Truly Beautiful Mind / The Lake Isle of Innisfree | 5: The Snake and the Mirror / A Legend of the Northland | 6: My Childhood / No Men Are Foreign | 7: Reach for the Top / On Killing a Tree | 8: Kathmandu / A Slumber Did My Spirit Seal | 9: If I Were You
-- English - Moments ("iemo1"):
-  1: The Lost Child | 2: The Adventures of Toto | 3: Iswaran the Storyteller | 4: In the Kingdom of Fools | 5: The Happy Prince | 6: Weathering the Storm in Ersama | 7: The Last Leaf | 8: A House Is Not a Home | 9: The Beggar
-- Hindi - Kshitij Part 1 ("ihks1"):
-  1: Do Bailon Ki Katha | 2: Lhasa Ki Aur | 3: Upbhoktavad Ki Sanskriti | 4: Sanwale Sapnon Ki Yaad | 5: Premchand Ke Phate Joote | 6: Mere Bachpan Ke Din | 7: Sakhiyan Evam Sabad (Kabir) | 8: Vaakh (Lalladyad) | 9: Savaiye (Raskhan) | 10: Kaidi Aur Kokila | 11: Gram Shree | 12: Megh Aaye | 13: Bachche Kaam Par Ja Rahe Hain
-- Hindi - Kritika Part 1 ("ihkr1"):
-  1: Is Jal Pralay Mein | 2: Mere Sang Ki Auratein | 3: Reedh Ki Haddi
-- Hindi - Sparsh Part 1 ("ihsp1"):
-  1: Dukh Ka Adhikar | 2: Everest: Meri Shikhar Yatra | 3: Tum Kab Jaoge, Atithi | 4: Vaigyanik Chetna Ke Vahak | 5: Shukratare Ke Saman | 6: Pad (Raidas) | 7: Dohe (Rahim) | 8: Geet-Ageet | 9: Agnipath | 10: Naye Ilake Mein / Khushboo Rachte Hain Haath
-- Hindi - Sanchayan Part 1 ("ihsa1"):
-  1: Gillu | 2: Smriti | 3: Kallu Kumhar Ki Unakoti | 4: Mera Chota Sa Niji Pustakalay
-- Sanskrit - Shemushi Part 1 ("issh1"):
-  1: Bharativasantgeetih | 2: Swarnakakah | 3: Godohanam | 4: Suktimauktikam | 5: Bhranto Balah | 6: Pratyabhigyanam | 7: Lauhatula | 8: SiktaSetuh | 9: Jatayoh Shauryam | 10: Paryavaranam | 11: Vangmanah PranSwarupam
+Complete Class 9 NCERT Books & Chapters Reference (Use Exact Specific Subject Names: Physics, Chemistry, Biology, History, Civics, Geography, Economics):
+- Chemistry ("iesc1"): 1: Matter in Our Surroundings | 2: Is Matter Around Us Pure? | 3: Atoms and Molecules | 4: Structure of the Atom
+- Biology ("iesc1"): 5: The Fundamental Unit of Life | 6: Tissues | 12: Improvement in Food Resources (Older editions: Diversity in Living Organisms, Why Do We Fall Ill, Natural Resources)
+- Physics ("iesc1"): 7: Motion | 8: Force and Laws of Motion | 9: Gravitation | 10: Work and Energy | 11: Sound
+- Mathematics ("iemh1"): 1: Number Systems | 2: Polynomials | 3: Coordinate Geometry | 4: Linear Equations in Two Variables | 5: Introduction to Euclid's Geometry | 6: Lines and Angles | 7: Triangles | 8: Quadrilaterals | 9: Circles | 10: Heron's Formula | 11: Surface Areas and Volumes | 12: Statistics
+- Geography ("iess1"): 1: India - Size and Location | 2: Physical Features of India | 3: Drainage | 4: Climate | 5: Natural Vegetation and Wildlife | 6: Population
+- Economics ("iess2"): 1: The Story of Village Palampur | 2: People as Resource | 3: Poverty as a Challenge | 4: Food Security in India
+- History ("iess3"): 1: The French Revolution | 2: Socialism in Europe and the Russian Revolution | 3: Nazism and the Rise of Hitler | 4: Forest Society and Colonialism | 5: Pastoralists in the Modern World
+- Civics ("iess4"): 1: What is Democracy? Why Democracy? | 2: Constitutional Design | 3: Electoral Politics | 4: Working of Institutions | 5: Democratic Rights
+- English - Beehive ("iebe1") & Moments ("iemo1"), Hindi - Kshitij ("ihks1"), Kritika ("ihkr1"), Sparsh ("ihsp1"), Sanchayan ("ihsa1"), Sanskrit - Shemushi ("issh1").
 
 Complete Class 10 NCERT Books & Chapters Reference:
-- Science ("jesc1"): 1: Chemical Reactions and Equations | 2: Acids, Bases and Salts | 3: Metals and Non-metals | 4: Carbon and its Compounds | 5: Life Processes | 6: Control and Coordination | 7: How do Organisms Reproduce? | 8: Heredity | 9: Light - Reflection and Refraction | 10: The Human Eye and the Colourful World | 11: Electricity | 12: Magnetic Effects of Electric Current | 13: Our Environment
+- Chemistry ("jesc1"): 1: Chemical Reactions and Equations | 2: Acids, Bases and Salts | 3: Metals and Non-metals | 4: Carbon and its Compounds
+- Biology ("jesc1"): 5: Life Processes | 6: Control and Coordination | 7: How do Organisms Reproduce? | 8: Heredity | 13: Our Environment
+- Physics ("jesc1"): 9: Light - Reflection and Refraction | 10: The Human Eye and the Colourful World | 11: Electricity | 12: Magnetic Effects of Electric Current
 - Mathematics ("jemh1"): 1: Real Numbers | 2: Polynomials | 3: Pair of Linear Equations in Two Variables | 4: Quadratic Equations | 5: Arithmetic Progressions | 6: Triangles | 7: Coordinate Geometry | 8: Introduction to Trigonometry | 9: Some Applications of Trigonometry | 10: Circles | 11: Areas Related to Circles | 12: Surface Areas and Volumes | 13: Statistics | 14: Probability
 - Geography ("jess1"): 1: Resources and Development | 2: Forest and Wildlife Resources | 3: Water Resources | 4: Agriculture | 5: Minerals and Energy Resources | 6: Manufacturing Industries | 7: Lifelines of National Economy
 - Economics ("jess2"): 1: Development | 2: Sectors of the Indian Economy | 3: Money and Credit | 4: Globalisation and the Indian Economy | 5: Consumer Rights
@@ -317,26 +464,23 @@ ${DEFAULT_CLASS_LEVEL ? `Note: If the document does not mention the class/grade 
 ${CLASS_9_AND_10_NCERT_REFERENCE}
 
 Rules:
+- STRICT SUBJECT GRANULARITY RULE (NEVER USE GENERIC "Social Science" OR "Science"):
+  1. NEVER group chapters under the generic subject name "Social Science" or "SST"! Always organize Social Science chapters into their exact discipline: "History", "Civics", "Geography", or "Economics".
+  2. NEVER group chapters under the generic subject name "Science"! Always organize Science chapters into their exact discipline: "Physics", "Chemistry", or "Biology".
 - CRITICAL — IF THE DOCUMENT IS AN NCERT CHAPTER PDF OR SINGLE-CHAPTER STUDY DOCUMENT:
   1. NEVER return an empty subjects list!
-  2. Identify the Subject (e.g. Science, Mathematics, Social Science, History, Geography, Civics, Economics, Physics, Chemistry, Biology, English, Hindi, Sanskrit) from the chapter's content, headings, and topics.
-  3. Extract the Chapter number and Chapter title from the PDF/text (and if it matches an NCERT chapter from the reference list above, use the exact NCERT chapter title, book code, chapter number, and pdf_url).
+  2. Identify the exact granular Subject ("Physics", "Chemistry", "Biology", "History", "Civics", "Geography", "Economics", "Mathematics", "English", "Hindi", "Sanskrit", etc.) from the chapter's content and headings.
+  3. Extract the Chapter number and Chapter title from the PDF/text.
   4. Return a 1-element "subjects" array containing that subject and its chapter(s).
 - IF THE DOCUMENT IS A SCHOOL SYLLABUS / PORTION SHEET:
-  1. Include EVERY subject that appears (English, Hindi, Sanskrit, Mathematics, Physics, Chemistry, Biology, Science, Social Science, Artificial Intelligence, etc.). Never skip a subject.
+  1. Include EVERY subject that appears, splitting any "Science" section into "Physics", "Chemistry", and "Biology", and splitting any "Social Science" section into "History", "Civics", "Geography", and "Economics".
   2. For each subject, list the actual study units in order: textbook chapters, lessons, poems, units or topics.
-  3. Headings like "Section A: Reading" or "Section B: Writing" are NOT chapters. List the lessons and topics under them.
-- For EVERY chapter, analyze its breadth, length, and concept density and set "recommended_questions" to an integer between 10 and 50 (MINIMUM 10, MAXIMUM 50; e.g. 10–12 for short chapters, 15–20 for medium chapters, 22–30 for long/dense chapters).
-- Use standard English subject names.
+- For EVERY chapter, analyze its breadth, length, and concept density and set "recommended_questions" to an integer between 10 and 50 (MINIMUM 10, MAXIMUM 50).
 - Set exam to one of: Term Test 1, Term Test 2, Half Yearly, Annual, Pre-Board (or leave exam as null/empty if not mentioned).
-- Semantic & Fuzzy NCERT Chapter Matching (CRITICAL):
-  1. Syllabus documents or chapter PDFs may use shortened, paraphrased, or sub-topic names (for example, "Tectonic Plates" -> Class 9 Geography Chapter 2 "Physical Features of India").
-  2. EXCEPTION FOR ENGLISH, HINDI, AND SANSKRIT GRAMMAR/WRITING/READING:
-     All Grammar (Vyakaran), Writing Skills, and Reading Comprehension are NOT in NCERT textbooks ("is_ncert": false, fields null).
-  3. When a chapter or PDF matches an NCERT textbook chapter ("is_ncert": true), you MUST provide:
-     - "ncert_book_code": the 5-character NCERT textbook code in lowercase (e.g. "iesc1", "jemh1", "iess1", "iess3", "iess4").
-     - "ncert_chapter_number": the 1-based chapter number in that NCERT book.
-     - "pdf_url": "https://ncert.nic.in/textbook/pdf/<ncert_book_code><2_digit_padded_ncert_chapter_number>.pdf"
+- When a chapter or PDF matches an NCERT textbook chapter ("is_ncert": true), you MUST provide:
+  - "ncert_book_code": the 5-character NCERT textbook code in lowercase (e.g. "iesc1", "jemh1", "iess1", "iess2", "iess3", "iess4").
+  - "ncert_chapter_number": the 1-based chapter number in that NCERT book.
+  - "pdf_url": "https://ncert.nic.in/textbook/pdf/<ncert_book_code><2_digit_padded_ncert_chapter_number>.pdf"
 `;
 
 // JSON schema handed to Gemini (mirrors the Syllabus model)
@@ -406,7 +550,8 @@ const UNMATCHED_RESOLVER_SCHEMA = {
 
 /**
  * Second-pass AI resolver: takes any unmatched chapters from the initial parse
- * and asks Gemini to figure out if they correspond to an existing NCERT chapter.
+ * and asks Gemini to figure out if they correspond to an existing NCERT chapter,
+ * then enforces granular subject splitting (History/Civics/Geography/Economics & Physics/Chemistry/Biology).
  */
 async function resolveUnmatchedChapters(syllabus, apiKey) {
   const classLevel = syllabus.class_level || DEFAULT_CLASS_LEVEL || 9;
@@ -427,20 +572,17 @@ async function resolveUnmatchedChapters(syllabus, apiKey) {
     }
   }
 
-  if (!unmatchedRefs.length) return syllabus;
+  if (unmatchedRefs.length) {
+    const payloadForAi = unmatchedRefs.map(({ idx, subject, number, title }) => ({
+      idx,
+      subject,
+      number,
+      title,
+    }));
 
-  const payloadForAi = unmatchedRefs.map(({ idx, subject, number, title }) => ({
-    idx,
-    subject,
-    number,
-    title,
-  }));
-
-  const resolverPrompt = `You are an expert on NCERT textbooks for Class ${classLevel}.
+    const resolverPrompt = `You are an expert on NCERT textbooks for Class ${classLevel}.
 Below is a list of syllabus/chapter items (each with a unique "idx") that were initially marked as "unmatched".
-Your job is to figure out if each item can be mapped to an NCERT textbook chapter for Class ${classLevel}:
-- Paraphrased, abbreviated, or sub-topic titles (e.g. "Tectonic Plates" -> Class 9 Geography "iess1" Chapter 2 "Physical Features of India").
-- Poems or supplementary stories listed separately from their main chapter.
+Your job is to figure out if each item can be mapped to an NCERT textbook chapter for Class ${classLevel}.
 
 IMPORTANT:
 - If the item is English, Hindi, or Sanskrit Grammar (Vyakaran), Writing Skills, or Reading Comprehension, keep "is_ncert": false and fields null.
@@ -451,34 +593,35 @@ ${CLASS_9_AND_10_NCERT_REFERENCE}
 Unmatched items to verify for Class ${classLevel}:
 ${JSON.stringify(payloadForAi, null, 2)}`;
 
-  try {
-    const response = await generate(apiKey, {
-      model: GEMINI_MODEL,
-      contents: resolverPrompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: UNMATCHED_RESOLVER_SCHEMA,
-      },
-    });
+    try {
+      const response = await generate(apiKey, {
+        model: GEMINI_MODEL,
+        contents: resolverPrompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: UNMATCHED_RESOLVER_SCHEMA,
+        },
+      });
 
-    const resolvedList = JSON.parse(response.text);
-    for (const item of resolvedList) {
-      const target = unmatchedRefs[item.idx]?.ref;
-      if (target && item.is_ncert && item.ncert_book_code && item.ncert_chapter_number) {
-        const cleanCode = item.ncert_book_code.toLowerCase().trim();
-        const paddedCh = String(item.ncert_chapter_number).padStart(2, "0");
-        target.is_ncert = true;
-        target.ncert_book_code = cleanCode;
-        target.ncert_chapter_number = item.ncert_chapter_number;
-        target.pdf_url =
-          item.pdf_url || `https://ncert.nic.in/textbook/pdf/${cleanCode}${paddedCh}.pdf`;
+      const resolvedList = JSON.parse(response.text);
+      for (const item of resolvedList) {
+        const target = unmatchedRefs[item.idx]?.ref;
+        if (target && item.is_ncert && item.ncert_book_code && item.ncert_chapter_number) {
+          const cleanCode = item.ncert_book_code.toLowerCase().trim();
+          const paddedCh = String(item.ncert_chapter_number).padStart(2, "0");
+          target.is_ncert = true;
+          target.ncert_book_code = cleanCode;
+          target.ncert_chapter_number = item.ncert_chapter_number;
+          target.pdf_url =
+            item.pdf_url || `https://ncert.nic.in/textbook/pdf/${cleanCode}${paddedCh}.pdf`;
+        }
       }
+    } catch (e) {
+      console.log(`Unmatched AI resolution skipped: ${e.message}`);
     }
-  } catch (e) {
-    console.log(`Unmatched AI resolution skipped: ${e.message}`);
   }
 
-  return syllabus;
+  return splitSyllabusIntoGranularSubjects(syllabus);
 }
 
 /**
@@ -486,9 +629,9 @@ ${JSON.stringify(payloadForAi, null, 2)}`;
  */
 async function fallbackExtractSingleDocument(contents, apiKey, fileName = "") {
   const singleDocPrompt = `This document is a single textbook chapter, NCERT PDF, or study handout${fileName ? ` (File name: "${fileName}")` : ""}.
-Identify its Subject name (e.g. Science, Mathematics, History, Geography, Civics, Economics, English, Hindi, Physics, Chemistry, Biology), its Chapter number, its Chapter title, and analyze the chapter to set "recommended_questions" (an integer between 10 and 50; minimum 10).
+Identify its exact granular Subject name ("Physics", "Chemistry", "Biology", "History", "Civics", "Geography", "Economics", "Mathematics", "English", "Hindi", "Sanskrit" — NEVER use generic "Science" or "Social Science"), its Chapter number, its Chapter title, and set "recommended_questions" (an integer between 10 and 50; minimum 10).
 If it is an NCERT textbook chapter, also fill in "is_ncert": true, "ncert_book_code", "ncert_chapter_number", and "pdf_url".
-You MUST return at least 1 subject and 1 chapter in "subjects" (NEVER return an empty subjects array).
+You MUST return at least 1 subject and 1 chapter in "subjects".
 
 ${CLASS_9_AND_10_NCERT_REFERENCE}`;
 
@@ -507,7 +650,7 @@ ${CLASS_9_AND_10_NCERT_REFERENCE}`;
     });
     const result = Syllabus.safeParse(JSON.parse(response.text));
     if (result.success && result.data.subjects.length > 0) {
-      return result.data;
+      return splitSyllabusIntoGranularSubjects(result.data);
     }
   } catch (e) {
     console.log(`Single-document fallback extraction failed: ${e.message}`);
@@ -516,7 +659,6 @@ ${CLASS_9_AND_10_NCERT_REFERENCE}`;
 }
 
 async function ask(contents, apiKey, fileName = "") {
-  // Fast-path check if the filename itself is a known NCERT book+chapter code (e.g. iesc101.pdf, jesc102.pdf)
   const inferredByFilename = inferNcertFromFilename(fileName);
 
   let parsed = null;
@@ -541,7 +683,6 @@ async function ask(contents, apiKey, fileName = "") {
     throw new Error("Could not read the document.");
   }
 
-  // If the first pass returned no subjects (e.g. a single NCERT chapter PDF), run the single-document extractor
   if (!parsed.subjects || parsed.subjects.length === 0) {
     const fallback = await fallbackExtractSingleDocument(contents, apiKey, fileName);
     if (fallback && fallback.subjects?.length) {

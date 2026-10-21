@@ -2,6 +2,7 @@
 import pg from "pg";
 
 import { DATABASE_URL } from "./config.js";
+import { classifyGranularSubject } from "./intake/syllabusParser.js";
 
 // Telegram ids can be larger than int32, so the columns are BIGINT.
 // node-postgres returns BIGINT as a string by default; ids fit safely in a JS number.
@@ -84,16 +85,29 @@ CREATE TABLE IF NOT EXISTS pairings (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- A quiz that has been generated but not yet submitted. Kept in the database (not in server memory)
--- so it survives restarts, redeploys and running more than one server instance. The answer key
--- lives in questions_json and never leaves the server until the quiz is submitted.
+-- A quiz that has been generated or marked as Pending (paused mid-quiz) and not yet submitted.
+-- Stores questions_json (with answer key), answers_json (saved answers in order), and current_index
+-- so a student can pause/leave a quiz as Pending and resume from the exact question where they left off.
 CREATE TABLE IF NOT EXISTS quiz_sessions (
     id               TEXT PRIMARY KEY,
     telegram_user_id BIGINT NOT NULL,
     chapter_json     TEXT NOT NULL,
     questions_json   TEXT NOT NULL,
+    answers_json     TEXT NOT NULL DEFAULT '[]',
+    current_index    INTEGER NOT NULL DEFAULT 0,
+    is_pending       BOOLEAN NOT NULL DEFAULT false,
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE quiz_sessions
+    ADD COLUMN IF NOT EXISTS answers_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE quiz_sessions
+    ADD COLUMN IF NOT EXISTS current_index INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE quiz_sessions
+    ADD COLUMN IF NOT EXISTS is_pending BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE quiz_sessions
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 
 -- Latest quiz result per student per chapter.
 -- Stores review_json as well so students can review their answers anytime from the quiz home screen
@@ -191,13 +205,70 @@ export async function closeDb() {
 }
 
 // ---------------------------------------------------------------------------
+// Granular Subject Migration Helper
+// Automatically reorganizes any legacy "Social Science" chapters into History, Civics,
+// Economics, or Geography, and any "Science" chapters into Physics, Chemistry, or Biology.
+// ---------------------------------------------------------------------------
+async function migrateUserChaptersToGranularSubjects(p, telegramUserId, chapters, results = []) {
+  for (const c of chapters) {
+    const granular = classifyGranularSubject(c.subject, c.title, c.pdf_url, "", c.number);
+    if (granular && granular !== c.subject) {
+      const oldSubj = c.subject;
+      c.subject = granular;
+      await p
+        .query("UPDATE syllabus_chapters SET subject = $1 WHERE id = $2", [granular, c.id])
+        .catch(() => {});
+      await p
+        .query(
+          `UPDATE chapter_quiz_results
+              SET subject = $1
+            WHERE telegram_user_id = $2 AND subject = $3 AND exam = $4 AND chapter_title = $5`,
+          [granular, telegramUserId, oldSubj, c.exam || "", c.title]
+        )
+        .catch(() => {});
+      await p
+        .query(
+          `UPDATE chapter_resources
+              SET subject = $1
+            WHERE telegram_user_id = $2 AND subject = $3 AND exam = $4 AND chapter_title = $5`,
+          [granular, telegramUserId, oldSubj, c.exam || "", c.title]
+        )
+        .catch(() => {});
+    }
+  }
+
+  for (const r of results) {
+    const granular = classifyGranularSubject(r.subject, r.chapter_title, "", "", null);
+    if (granular && granular !== r.subject) {
+      const oldSubj = r.subject;
+      r.subject = granular;
+      await p
+        .query("UPDATE chapter_quiz_results SET subject = $1 WHERE id = $2", [granular, r.id])
+        .catch(() => {});
+      await p
+        .query(
+          `UPDATE chapter_resources
+              SET subject = $1
+            WHERE telegram_user_id = $2 AND subject = $3 AND exam = $4 AND chapter_title = $5`,
+          [granular, telegramUserId, oldSubj, r.exam || "", r.chapter_title]
+        )
+        .catch(() => {});
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Quiz helpers. A student's syllabus lives under chat_id; in a private chat with the bot the
 // chat id equals the Telegram user id, which is what the web app knows.
 // ---------------------------------------------------------------------------
 
-const chapterKey = (r) => [r.subject, r.exam || "", r.title ?? r.chapter_title];
+const chapterKey = (r) => [
+  classifyGranularSubject(r.subject, r.title ?? r.chapter_title, r.pdf_url || "", "", r.number),
+  r.exam || "",
+  String(r.title ?? r.chapter_title ?? "").toLowerCase().trim(),
+];
 
-/** Every syllabus chapter for this student, each with its latest quiz result (including review), plus custom-source quizzes. */
+/** Every syllabus chapter for this student, each with its latest quiz result (including review) and any Pending quiz session. */
 export async function getChaptersWithResults(telegramUserId) {
   await initDb();
   const p = getPool();
@@ -215,6 +286,47 @@ export async function getChaptersWithResults(telegramUserId) {
        ORDER BY updated_at DESC`,
     [telegramUserId]
   );
+
+  // Retroactively split any "Social Science" or "Science" chapters into History/Civics/Geography/Economics & Physics/Chemistry/Biology
+  await migrateUserChaptersToGranularSubjects(p, telegramUserId, chapters, results);
+
+  // Also load any saved Pending quiz sessions for this user
+  const { rows: pendingRows } = await p
+    .query(
+      `SELECT id, chapter_json, questions_json, answers_json, current_index, is_pending, updated_at
+         FROM quiz_sessions
+        WHERE telegram_user_id = $1 AND is_pending = true
+        ORDER BY updated_at DESC`,
+      [telegramUserId]
+    )
+    .catch(() => ({ rows: [] }));
+
+  const pendingByKey = new Map();
+  for (const row of pendingRows) {
+    try {
+      const ch = JSON.parse(row.chapter_json || "{}");
+      const questions = JSON.parse(row.questions_json || "[]");
+      const answers = JSON.parse(row.answers_json || "[]");
+      if (!ch?.title || !Array.isArray(questions) || !questions.length) continue;
+      const k = JSON.stringify(chapterKey(ch));
+      if (!pendingByKey.has(k)) {
+        const normalizedAnswers = questions.map((_, idx) =>
+          typeof answers[idx] === "string" ? answers[idx] : ""
+        );
+        const answeredCount = normalizedAnswers.filter((a) => a.trim().length > 0).length;
+        pendingByKey.set(k, {
+          quizId: row.id,
+          currentIndex: Math.max(0, Math.min(questions.length - 1, Number(row.current_index) || 0)),
+          answers: normalizedAnswers,
+          answeredCount,
+          totalQuestions: questions.length,
+          questions: questions.map(({ subtopic, question }) => ({ subtopic, question })),
+          updatedAt: row.updated_at,
+        });
+      }
+    } catch {}
+  }
+
   const byKey = new Map(results.map((r) => [JSON.stringify(chapterKey(r)), r]));
   const matchedKeys = new Set();
 
@@ -222,12 +334,14 @@ export async function getChaptersWithResults(telegramUserId) {
     const k = JSON.stringify(chapterKey(c));
     matchedKeys.add(k);
     const r = byKey.get(k);
+    const pendingQuiz = pendingByKey.get(k) || null;
     let weak = [];
     let review = [];
     try { weak = r ? JSON.parse(r.weak_subtopics_json) : []; } catch {}
     try { review = r && r.review_json ? JSON.parse(r.review_json) : []; } catch {}
     return {
       ...c,
+      pending_quiz: pendingQuiz,
       result: r
         ? {
             score: r.score,
@@ -263,6 +377,7 @@ export async function getChaptersWithResults(telegramUserId) {
       pdf_url: null,
       match_status: "custom",
       is_custom: true,
+      pending_quiz: pendingByKey.get(k) || null,
       result: {
         score: r.score,
         total: r.total,
@@ -283,14 +398,22 @@ export async function getChaptersWithResults(telegramUserId) {
 /** One chapter, only if it belongs to this student (null otherwise). */
 export async function getChapterForUser(telegramUserId, chapterId) {
   await initDb();
-  const { rows } = await getPool().query(
+  const p = getPool();
+  const { rows } = await p.query(
     `SELECT sc.id, COALESCE(sc.class, ch.class) AS class, sc.subject, sc.exam, sc.number,
             sc.title, sc.note, sc.pdf_url, sc.match_status, sc.recommended_questions
        FROM syllabus_chapters sc LEFT JOIN chats ch ON ch.chat_id = sc.chat_id
       WHERE sc.id = $1 AND sc.chat_id = $2`,
     [chapterId, telegramUserId]
   );
-  return rows[0] || null;
+  const row = rows[0] || null;
+  if (!row) return null;
+  const granular = classifyGranularSubject(row.subject, row.title, row.pdf_url, "", row.number);
+  if (granular && granular !== row.subject) {
+    row.subject = granular;
+    await p.query("UPDATE syllabus_chapters SET subject = $1 WHERE id = $2", [granular, row.id]).catch(() => {});
+  }
+  return row;
 }
 
 /** Get the student's previous quiz result (including review questions) for a chapter, if any. */
@@ -329,7 +452,8 @@ export async function getLastQuizResult(telegramUserId, subject, exam, title, db
 export async function upsertQuizResult(r, db = null) {
   await initDb();
   const q = db || getPool();
-  const key = [r.telegramUserId, r.subject, r.exam || "", r.title];
+  const granularSubject = classifyGranularSubject(r.subject, r.title, "", "", null);
+  const key = [r.telegramUserId, granularSubject, r.exam || "", r.title];
   const vals = [
     r.chapterId,
     r.score,
@@ -366,34 +490,127 @@ export async function upsertQuizResult(r, db = null) {
   return rows[0];
 }
 
-const QUIZ_SESSION_TTL = "3 hours";
+const QUIZ_SESSION_TTL = "30 days";
 
-/** Store a generated quiz (with its answer key) and return its id. */
+/** Store a generated quiz (with its answer key) and clear any older unsubmitted session for the same chapter. */
 export async function createQuizSession(id, telegramUserId, chapter, questions) {
   await initDb();
   const p = getPool();
-  await p.query(
-    "INSERT INTO quiz_sessions (id, telegram_user_id, chapter_json, questions_json) VALUES ($1,$2,$3,$4)",
-    [id, telegramUserId, JSON.stringify(chapter), JSON.stringify(questions)]
+  const initialAnswers = questions.map(() => "");
+
+  // Remove any older sessions for this exact chapter so only the latest session is tracked
+  const { rows: existing } = await p.query(
+    "SELECT id, chapter_json FROM quiz_sessions WHERE telegram_user_id = $1",
+    [telegramUserId]
   );
-  // keep the table tidy: forget quizzes nobody finished
-  await p.query(`DELETE FROM quiz_sessions WHERE created_at < now() - interval '${QUIZ_SESSION_TTL}'`).catch(() => {});
+  for (const row of existing) {
+    try {
+      const ch = JSON.parse(row.chapter_json || "{}");
+      if (
+        String(ch.id) === String(chapter.id) ||
+        (String(ch.title || "").toLowerCase() === String(chapter.title || "").toLowerCase() &&
+          String(ch.subject || "").toLowerCase() === String(chapter.subject || "").toLowerCase())
+      ) {
+        await p.query("DELETE FROM quiz_sessions WHERE id = $1", [row.id]);
+      }
+    } catch {}
+  }
+
+  await p.query(
+    `INSERT INTO quiz_sessions
+       (id, telegram_user_id, chapter_json, questions_json, answers_json, current_index, is_pending, updated_at)
+     VALUES ($1, $2, $3, $4, $5, 0, false, now())`,
+    [
+      id,
+      telegramUserId,
+      JSON.stringify(chapter),
+      JSON.stringify(questions),
+      JSON.stringify(initialAnswers),
+    ]
+  );
+  await p.query(`DELETE FROM quiz_sessions WHERE updated_at < now() - interval '${QUIZ_SESSION_TTL}'`).catch(() => {});
+}
+
+/**
+ * Save or update a student's in-progress (Pending) quiz answers and current question index
+ * so when they return later, they resume from the exact question where they left off.
+ */
+export async function saveQuizProgress({
+  quizId,
+  telegramUserId,
+  answers = [],
+  currentIndex = 0,
+  isPending = true,
+}) {
+  await initDb();
+  const p = getPool();
+  const idx = Math.max(0, parseInt(currentIndex, 10) || 0);
+  const { rows } = await p.query(
+    `UPDATE quiz_sessions
+        SET answers_json = $3,
+            current_index = $4,
+            is_pending = $5,
+            updated_at = now()
+      WHERE id = $1 AND telegram_user_id = $2
+      RETURNING id, current_index, is_pending, updated_at`,
+    [quizId, telegramUserId, JSON.stringify(answers || []), idx, Boolean(isPending)]
+  );
+  return rows[0] || null;
+}
+
+/**
+ * Retrieve an existing quiz session (without deleting it) so a student can resume a Pending quiz.
+ */
+export async function getQuizSession(quizId, telegramUserId) {
+  await initDb();
+  const p = getPool();
+  const { rows } = await p.query(
+    `SELECT id, chapter_json, questions_json, answers_json, current_index, is_pending, updated_at
+       FROM quiz_sessions
+      WHERE id = $1 AND telegram_user_id = $2`,
+    [quizId, telegramUserId]
+  );
+  if (!rows.length) return null;
+  const r = rows[0];
+  const chapter = JSON.parse(r.chapter_json || "{}");
+  const questions = JSON.parse(r.questions_json || "[]");
+  const answers = JSON.parse(r.answers_json || "[]");
+  return {
+    quizId: r.id,
+    chapter,
+    questions,
+    answers: questions.map((_, i) => (typeof answers[i] === "string" ? answers[i] : "")),
+    currentIndex: Math.max(0, Math.min(questions.length - 1, Number(r.current_index) || 0)),
+    isPending: Boolean(r.is_pending),
+  };
 }
 
 /**
  * Take a quiz session inside a transaction: deleting it makes a second submit of the same quiz
  * fail, and if saving the result later throws, the rollback puts the session back so the student can retry.
- * Returns { chapter, questions } or null (unknown, someone else's, or older than 3 hours).
  */
 export async function takeQuizSession(db, id, telegramUserId) {
   const { rows } = await db.query(
     `DELETE FROM quiz_sessions WHERE id = $1 AND telegram_user_id = $2
-        AND created_at > now() - interval '${QUIZ_SESSION_TTL}'
-     RETURNING chapter_json, questions_json`,
+        AND updated_at > now() - interval '${QUIZ_SESSION_TTL}'
+     RETURNING chapter_json, questions_json, answers_json`,
     [id, telegramUserId]
   );
   if (!rows.length) return null;
-  return { chapter: JSON.parse(rows[0].chapter_json), questions: JSON.parse(rows[0].questions_json) };
+  const ch = JSON.parse(rows[0].chapter_json);
+  // Also delete any other leftover pending sessions for the same chapter
+  await db
+    .query(
+      `DELETE FROM quiz_sessions
+        WHERE telegram_user_id = $1 AND chapter_json::jsonb->>'title' = $2`,
+      [telegramUserId, String(ch?.title || "")]
+    )
+    .catch(() => {});
+  return {
+    chapter: ch,
+    questions: JSON.parse(rows[0].questions_json),
+    savedAnswers: JSON.parse(rows[0].answers_json || "[]"),
+  };
 }
 
 /** Remember who sent "/start <code>" so the setup page can pick it up (see GET /api/telegram/pairing/:code). */
@@ -439,6 +656,8 @@ export async function getChaptersWithResources(telegramUserId) {
       ORDER BY sc.subject, sc.exam, sc.number NULLS LAST, sc.id`,
     [telegramUserId]
   );
+  await migrateUserChaptersToGranularSubjects(p, telegramUserId, chapters, []);
+
   const { rows: resources } = await p.query(
     `SELECT id, chapter_id, subject, exam, chapter_title, resource_type, title, summary,
             content_json, resource_url, created_at
@@ -530,6 +749,7 @@ export async function saveChapterResource(r, db = null) {
   await initDb();
   const q = db || getPool();
   const exam = r.exam || "";
+  const granularSubject = classifyGranularSubject(r.subject, r.chapterTitle, "", "", null);
   const contentJson = typeof r.content === "string" ? r.content : JSON.stringify(r.content || {});
 
   const { rows: existing } = await q.query(
@@ -539,7 +759,7 @@ export async function saveChapterResource(r, db = null) {
       WHERE telegram_user_id = $1 AND subject = $2 AND exam = $3
         AND chapter_title = $4 AND resource_type = $5
       LIMIT 1`,
-    [r.telegramUserId, r.subject, exam, r.chapterTitle, r.resourceType]
+    [r.telegramUserId, granularSubject, exam, r.chapterTitle, r.resourceType]
   );
   if (existing.length) {
     const row = existing[0];
@@ -559,7 +779,7 @@ export async function saveChapterResource(r, db = null) {
     [
       r.telegramUserId,
       r.chapterId ?? null,
-      r.subject,
+      granularSubject,
       exam,
       r.chapterTitle,
       r.resourceType,
@@ -572,7 +792,6 @@ export async function saveChapterResource(r, db = null) {
 
   const saved = rows[0];
   if (!saved) {
-    // Race condition fallback: fetch the winner
     const { rows: retry } = await q.query(
       `SELECT id, chapter_id, subject, exam, chapter_title, resource_type, title, summary,
               content_json, resource_url, created_at
@@ -580,7 +799,7 @@ export async function saveChapterResource(r, db = null) {
         WHERE telegram_user_id = $1 AND subject = $2 AND exam = $3
           AND chapter_title = $4 AND resource_type = $5
         LIMIT 1`,
-      [r.telegramUserId, r.subject, exam, r.chapterTitle, r.resourceType]
+      [r.telegramUserId, granularSubject, exam, r.chapterTitle, r.resourceType]
     );
     const row = retry[0];
     let parsed = null;

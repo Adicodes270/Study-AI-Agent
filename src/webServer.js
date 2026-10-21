@@ -10,6 +10,7 @@ import {
   quizChapters,
   quizGenerate,
   quizGenerateCustom,
+  quizSaveProgress,
   quizSubmit,
   quizTranscribe,
   resourceGet,
@@ -20,6 +21,7 @@ import {
   telegramBotInfo,
 } from "./api.js";
 import { deleteUserKey, getUserKeys, getUserProfile, inspectStorageState, saveUserConfig } from "./intake/userKeys.js";
+import { classifyGranularSubject } from "./intake/syllabusParser.js";
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -184,7 +186,7 @@ export function startWebServer(port = 3000) {
       return send({ status: 404, body: { error: "Not found" } });
     }
 
-    // Quizzes: GET /api/quizzes/chapters, POST /api/quizzes/generate, POST /api/quizzes/generate-custom, POST /api/quizzes/submit, POST /api/quizzes/transcribe
+    // Quizzes: GET /api/quizzes/chapters, POST /api/quizzes/generate, POST /api/quizzes/progress, POST /api/quizzes/generate-custom, POST /api/quizzes/submit, POST /api/quizzes/transcribe
     if (url.pathname.startsWith("/api/quizzes/")) {
       const send = ({ status, body }) => {
         res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
@@ -212,7 +214,12 @@ export function startWebServer(port = 3000) {
         });
         return;
       }
-      if (req.method === "POST" && (route === "/api/quizzes/generate" || route === "/api/quizzes/submit")) {
+      if (
+        req.method === "POST" &&
+        (route === "/api/quizzes/generate" ||
+          route === "/api/quizzes/submit" ||
+          route === "/api/quizzes/progress")
+      ) {
         let raw = "";
         let tooBig = false;
         req.on("data", (c) => {
@@ -223,7 +230,11 @@ export function startWebServer(port = 3000) {
           if (tooBig) return;
           let body;
           try { body = JSON.parse(raw || "{}"); } catch { return send({ status: 400, body: { error: "Invalid JSON" } }); }
-          const handler = route.endsWith("generate") ? quizGenerate : quizSubmit;
+          const handler = route.endsWith("generate")
+            ? quizGenerate
+            : route.endsWith("progress")
+              ? quizSaveProgress
+              : quizSubmit;
           handler(body, ctx).then(send);
         });
         return;
@@ -302,12 +313,19 @@ export function startWebServer(port = 3000) {
       try {
         const chapters = await withDb(async (db) => {
           const { rows } = await db.query(
-            `SELECT subject, exam, number, title, match_status, pdf_url, recommended_questions
+            `SELECT id, subject, exam, number, title, match_status, pdf_url, recommended_questions
              FROM syllabus_chapters
              WHERE chat_id = $1
              ORDER BY subject, number`,
             [chatId]
           );
+          for (const r of rows) {
+            const granular = classifyGranularSubject(r.subject, r.title, r.pdf_url, "", r.number);
+            if (granular && granular !== r.subject) {
+              r.subject = granular;
+              await db.query("UPDATE syllabus_chapters SET subject = $1 WHERE id = $2", [granular, r.id]).catch(() => {});
+            }
+          }
           return rows;
         });
         res.writeHead(200, { "Content-Type": "application/json" });

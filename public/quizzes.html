@@ -144,12 +144,12 @@
             <p id="loading-text">Loading your chapters…</p>
         </section>
 
-        <!-- Subject-divided chapters dashboard -->
+        <!-- Subject-divided chapters dashboard (History, Civics, Geography, Economics, Physics, Chemistry, Biology, etc.) -->
         <section id="view-chapters" hidden>
             <div class="qz-head">
                 <div>
                     <h1>Your Chapters</h1>
-                    <p class="qz-sub">Pick a chapter to take a quiz, requiz with new questions, or review your answers.</p>
+                    <p class="qz-sub">Pick a chapter to take a quiz, resume a pending quiz where you left off, requiz with new questions, or review your answers.</p>
                 </div>
                 <div class="qz-head-actions">
                     <button class="btn btn-ghost qz-small" type="button" id="top-qcount-btn" aria-expanded="false" aria-controls="top-qcount-panel" title="Set default number of questions for every chapter (max 50)">
@@ -195,11 +195,18 @@
             <div id="subject-sections"></div>
         </section>
 
-        <!-- Quiz runner (Typed or Voice-Spoken Answers verified by AI) -->
+        <!-- Quiz runner (Typed or Voice-Spoken Answers verified by AI + Save as Pending) -->
         <section class="qz-card qz-quiz" id="view-quiz" hidden>
             <div class="qz-quiz-top">
-                <button class="qz-link" type="button" id="quit-btn"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Back to chapters</button>
-                <span class="qz-quiz-meta" id="quiz-meta"></span>
+                <button class="qz-link" type="button" id="quit-btn">
+                    <i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Back to chapters
+                </button>
+                <div class="qz-quiz-top-right">
+                    <span class="qz-quiz-meta" id="quiz-meta"></span>
+                    <button class="btn qz-pending-btn qz-small" type="button" id="pending-quiz-btn" title="Save your current answers and mark this quiz as Pending so you can resume where you left off later">
+                        <i class="fa-solid fa-clock" aria-hidden="true"></i> Mark as Pending &amp; Leave
+                    </button>
+                </div>
             </div>
             <h2 class="qz-quiz-title" id="quiz-title"></h2>
             <div class="qz-progress" aria-hidden="true"><div id="quiz-progress-bar"></div></div>
@@ -223,7 +230,7 @@
                     placeholder="Type your answer here or press 'Speak Answer' to dictate… (the AI will check the book and verify if it's right or wrong)"
                 ></textarea>
                 <div class="qz-answer-foot">
-                    <span id="voice-status-msg">Press <kbd>Ctrl</kbd> + <kbd>Enter</kbd> to continue</span>
+                    <span id="voice-status-msg">Press <kbd>Ctrl</kbd> + <kbd>Enter</kbd> to continue · Progress auto-saved</span>
                     <span id="quiz-char-count">0 / 2000</span>
                 </div>
             </div>

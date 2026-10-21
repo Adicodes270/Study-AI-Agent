@@ -1,5 +1,6 @@
 /* ==========================================================================
    quizzes.css — Syllabus-linked quizzes. Uses the Royal Dark Blue / Obsidian tokens from theme.css.
+   Includes HSL yellow (--qz-pending) styling for Pending quiz buttons, badges, and cards.
    ========================================================================== */
 
 :root {
@@ -7,11 +8,21 @@
   --qz-good-soft: hsla(152, 68%, 48%, 0.14);
   --qz-mid: var(--accent-warning);
   --qz-bad: var(--accent-danger);
+  --qz-pending: hsl(48, 96%, 53%);
+  --qz-pending-hover: hsl(48, 96%, 46%);
+  --qz-pending-soft: hsla(48, 96%, 53%, 0.16);
+  --qz-pending-border: hsla(48, 96%, 53%, 0.55);
+  --qz-pending-ink: hsl(222, 47%, 10%);
 }
 
 html.light {
   --qz-good: hsl(152, 62%, 34%);
   --qz-good-soft: hsla(152, 62%, 34%, 0.12);
+  --qz-pending: hsl(45, 94%, 48%);
+  --qz-pending-hover: hsl(45, 94%, 42%);
+  --qz-pending-soft: hsla(45, 94%, 48%, 0.16);
+  --qz-pending-border: hsla(45, 94%, 42%, 0.55);
+  --qz-pending-ink: hsl(222, 47%, 10%);
 }
 
 .qz-bg {
@@ -473,6 +484,11 @@ html.light {
   box-shadow: 0 16px 40px -22px var(--glow-primary);
 }
 
+.qz-chapter.pending {
+  border-color: var(--qz-pending-border);
+  box-shadow: 0 12px 32px -22px hsla(48, 96%, 53%, 0.45);
+}
+
 .qz-chapter.flash {
   animation: qz-flash 1.8s ease 2;
 }
@@ -541,6 +557,18 @@ html.light {
   background: var(--accent-danger-soft);
 }
 
+.qz-badge.pending {
+  color: hsl(48, 96%, 53%);
+  background: hsla(48, 96%, 53%, 0.16);
+  border: 1px solid hsla(48, 96%, 53%, 0.45);
+}
+
+html.light .qz-badge.pending {
+  color: hsl(42, 92%, 30%);
+  background: hsla(48, 96%, 53%, 0.22);
+  border-color: hsla(45, 94%, 40%, 0.5);
+}
+
 .qz-ch-actions {
   display: flex;
   align-items: center;
@@ -549,6 +577,7 @@ html.light {
   margin-top: 0.35rem;
   padding-top: 0.55rem;
   border-top: 1px solid var(--border-subtle);
+  flex-wrap: wrap;
 }
 
 .qz-ch-btn {
@@ -564,7 +593,7 @@ html.light {
   border: 1px solid var(--border-subtle);
   background: var(--bg-elevated);
   color: var(--text-primary);
-  transition: border-color 0.18s, background 0.18s, color 0.18s;
+  transition: border-color 0.18s, background 0.18s, color 0.18s, transform 0.15s;
 }
 
 .qz-ch-btn:hover {
@@ -581,6 +610,23 @@ html.light {
 .qz-ch-btn.primary:hover {
   background: var(--accent-primary);
   color: #fff;
+}
+
+/* Yellow HSL Pending Button on Chapter Card & inside Quiz Runner */
+.qz-ch-btn.pending,
+.qz-pending-btn {
+  background: hsl(48, 96%, 53%);
+  border: 1px solid hsl(48, 96%, 53%);
+  color: hsl(222, 47%, 10%);
+  font-weight: 700;
+  box-shadow: 0 6px 18px -6px hsla(48, 96%, 53%, 0.5);
+}
+
+.qz-ch-btn.pending:hover,
+.qz-pending-btn:hover {
+  background: hsl(48, 96%, 46%);
+  border-color: hsl(48, 96%, 46%);
+  color: hsl(222, 47%, 8%);
 }
 
 /* ---------- Hover popover ---------- */
@@ -684,6 +730,13 @@ html.light {
   justify-content: space-between;
   align-items: center;
   gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.qz-quiz-top-right {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
   flex-wrap: wrap;
 }
 
