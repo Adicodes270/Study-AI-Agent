@@ -1,7 +1,8 @@
 // ==========================================================================
-// quizzes.js — syllabus-linked quizzes
+// quizzes.js — syllabus-linked quizzes (Typed or Voice-Spoken Answers + Book-Grounded AI Grading)
 // Flow: cookies -> (setup gate) -> chapters from the API -> (syllabus gate with polling)
-//       -> subject sections -> quiz runner -> submit -> back to the chapter the student started from
+//       -> subject sections (with New Quiz button before Refresh) -> typed/spoken quiz runner
+//       -> AI thinks & checks book/research -> submit -> back to the chapter
 // ==========================================================================
 (() => {
   'use strict';
@@ -41,6 +42,7 @@
   // ---------- small helpers ----------
   const VIEWS = ['view-setup', 'view-gate', 'view-loading', 'view-chapters', 'view-quiz', 'view-done'];
   function show(id) {
+    if (id !== 'view-quiz') stopVoiceInput();
     VIEWS.forEach((v) => { $(v).hidden = v !== id; });
     if (id !== 'view-chapters') hidePop();
   }
@@ -53,7 +55,7 @@
   const tone = (pct) => (pct >= 80 ? 'good' : pct >= 50 ? 'mid' : 'bad');
   const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
-  async function api(path, opts, timeoutMs = 60000) {
+  async function api(path, opts, timeoutMs = 90000) {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), timeoutMs);
     let res;
@@ -81,7 +83,8 @@
   let activeTab = 'all';
   let pollTimer = null;
   let redirectTimer = null;
-  let quiz = null; // { quizId, chapter, questions, answers, index }
+  let manualGateOpen = false; // true when user clicked "New Quiz" to upload another PDF / send via Telegram
+  let quiz = null; // { quizId, chapter, questions, answers: string[], index }
 
   // ---------- boot ----------
   async function init() {
@@ -100,31 +103,51 @@
   }
 
   // Step B: syllabus in the database?
-  async function loadChapters({ silent = false } = {}) {
+  async function loadChapters({ silent = false, forceChaptersView = false } = {}) {
     if (!silent) show('view-loading');
     try {
       const data = await api(`/api/quizzes/chapters?telegramUserId=${encodeURIComponent(userId)}`);
       banner('');
       if (!data.has_syllabus) {
-        showGate();
+        manualGateOpen = false;
+        showGate(false);
         return false;
       }
-      stopPolling();
+      const prevCount = chapters.length;
       chapters = data.chapters;
+      // If user opened "New Quiz" gate and a new syllabus/PDF arrived (or forceChaptersView is true), go to chapters
+      if (forceChaptersView || (manualGateOpen && chapters.length !== prevCount)) {
+        manualGateOpen = false;
+      }
+      if (manualGateOpen) {
+        return true;
+      }
+      stopPolling();
       renderChapters();
       show('view-chapters');
       return true;
     } catch (e) {
       if (silent) return false; // a failed background poll shouldn't clobber the page
-      show('view-gate');
+      showGate(chapters.length > 0);
       banner(`Couldn't reach the server: ${e.message}`);
-      startPolling();
       return false;
     }
   }
 
-  // ---------- onboarding gate + polling ----------
-  function showGate() {
+  // ---------- onboarding / "New Quiz" upload gate + polling ----------
+  function showGate(isNewQuizFlow = false) {
+    const backRow = $('gate-back-row');
+    const heading = $('gate-heading');
+    const subtext = $('gate-subtext');
+    if (backRow) backRow.hidden = !isNewQuizFlow && chapters.length === 0;
+    if (heading) {
+      heading.textContent = isNewQuizFlow ? 'Start a new quiz from another source' : 'Add your syllabus or NCERT chapter PDF';
+    }
+    if (subtext) {
+      subtext.textContent = isNewQuizFlow
+        ? 'Send your new syllabus or NCERT chapter PDF to the Study Agent bot on Telegram, or upload it from your computer below.'
+        : 'Send your syllabus or NCERT chapter PDF to the Study Agent bot on Telegram, or upload it from your computer below. This page picks it up automatically as soon as it has been read.';
+    }
     show('view-gate');
     startPolling();
   }
@@ -139,15 +162,97 @@
     clearInterval(pollTimer);
     pollTimer = null;
   }
+
+  // "New Quiz" button just before Refresh: opens the exact same Telegram / PDF / Text upload flow
+  $('new-quiz-btn')?.addEventListener('click', () => {
+    manualGateOpen = true;
+    sylStatus('');
+    if ($('syl-file-name')) $('syl-file-name').hidden = true;
+    showGate(true);
+    scrollTo({ top: 0, behavior: 'smooth' });
+  });
+
+  $('gate-back-btn')?.addEventListener('click', () => {
+    manualGateOpen = false;
+    stopPolling();
+    renderChapters();
+    show('view-chapters');
+  });
+
   $('refresh-btn').addEventListener('click', async (e) => {
     const btn = e.currentTarget;
     btn.disabled = true;
-    const found = await loadChapters({ silent: true });
+    const found = await loadChapters({ silent: true, forceChaptersView: true });
     btn.disabled = false;
-    if (!found) banner('No syllabus yet. Send it to the bot and wait for its “Done!” reply, then refresh.');
+    if (!found) banner('No syllabus or chapter found yet. Send it to the bot and wait for its “Done!” reply, then refresh.');
     else banner('');
   });
-  // ---------- upload the syllabus from this computer (same result as sending it to the bot) ----------
+
+  // ---------- Client-side NCERT Chapter PDF helper (fallback if backend returns "couldn't find any subjects") ----------
+  const CLIENT_NCERT_MAP = {
+    iesc1: { cls: 9, subject: 'Science', chapters: { 1: 'Matter in Our Surroundings', 2: 'Is Matter Around Us Pure?', 3: 'Atoms and Molecules', 4: 'Structure of the Atom', 5: 'The Fundamental Unit of Life', 6: 'Tissues', 7: 'Motion', 8: 'Force and Laws of Motion', 9: 'Gravitation', 10: 'Work and Energy', 11: 'Sound', 12: 'Improvement in Food Resources' } },
+    iemh1: { cls: 9, subject: 'Mathematics', chapters: { 1: 'Number Systems', 2: 'Polynomials', 3: 'Coordinate Geometry', 4: 'Linear Equations in Two Variables', 5: "Introduction to Euclid's Geometry", 6: 'Lines and Angles', 7: 'Triangles', 8: 'Quadrilaterals', 9: 'Circles', 10: "Heron's Formula", 11: 'Surface Areas and Volumes', 12: 'Statistics' } },
+    iess1: { cls: 9, subject: 'Geography', chapters: { 1: 'India - Size and Location', 2: 'Physical Features of India', 3: 'Drainage', 4: 'Climate', 5: 'Natural Vegetation and Wildlife', 6: 'Population' } },
+    iess2: { cls: 9, subject: 'Economics', chapters: { 1: 'The Story of Village Palampur', 2: 'People as Resource', 3: 'Poverty as a Challenge', 4: 'Food Security in India' } },
+    iess3: { cls: 9, subject: 'History', chapters: { 1: 'The French Revolution', 2: 'Socialism in Europe and the Russian Revolution', 3: 'Nazism and the Rise of Hitler', 4: 'Forest Society and Colonialism', 5: 'Pastoralists in the Modern World' } },
+    iess4: { cls: 9, subject: 'Civics', chapters: { 1: 'What is Democracy? Why Democracy?', 2: 'Constitutional Design', 3: 'Electoral Politics', 4: 'Working of Institutions', 5: 'Democratic Rights' } },
+    jesc1: { cls: 10, subject: 'Science', chapters: { 1: 'Chemical Reactions and Equations', 2: 'Acids, Bases and Salts', 3: 'Metals and Non-metals', 4: 'Carbon and its Compounds', 5: 'Life Processes', 6: 'Control and Coordination', 7: 'How do Organisms Reproduce?', 8: 'Heredity', 9: 'Light - Reflection and Refraction', 10: 'The Human Eye and the Colourful World', 11: 'Electricity', 12: 'Magnetic Effects of Electric Current', 13: 'Our Environment' } },
+    jemh1: { cls: 10, subject: 'Mathematics', chapters: { 1: 'Real Numbers', 2: 'Polynomials', 3: 'Pair of Linear Equations in Two Variables', 4: 'Quadratic Equations', 5: 'Arithmetic Progressions', 6: 'Triangles', 7: 'Coordinate Geometry', 8: 'Introduction to Trigonometry', 9: 'Some Applications of Trigonometry', 10: 'Circles', 11: 'Areas Related to Circles', 12: 'Surface Areas and Volumes', 13: 'Statistics', 14: 'Probability' } },
+    jess1: { cls: 10, subject: 'Geography', chapters: { 1: 'Resources and Development', 2: 'Forest and Wildlife Resources', 3: 'Water Resources', 4: 'Agriculture', 5: 'Minerals and Energy Resources', 6: 'Manufacturing Industries', 7: 'Lifelines of National Economy' } },
+    jess2: { cls: 10, subject: 'Economics', chapters: { 1: 'Development', 2: 'Sectors of the Indian Economy', 3: 'Money and Credit', 4: 'Globalisation and the Indian Economy', 5: 'Consumer Rights' } },
+    jess3: { cls: 10, subject: 'History', chapters: { 1: 'The Rise of Nationalism in Europe', 2: 'Nationalism in India', 3: 'The Making of a Global World', 4: 'The Age of Industrialisation', 5: 'Print Culture and the Modern World' } },
+    jess4: { cls: 10, subject: 'Civics', chapters: { 1: 'Power-sharing', 2: 'Federalism', 3: 'Gender, Religion and Caste', 4: 'Political Parties', 5: 'Outcomes of Democracy' } },
+  };
+
+  async function buildFallbackSyllabusTextFromPdf(payload) {
+    const fileName = String(payload.fileName || '');
+    const m = /(?:^|[^a-z0-9])([a-z]{4}\d)(\d{2})(?:[^0-9]|$)/i.exec(fileName);
+    if (m) {
+      const code = m[1].toLowerCase();
+      const chNum = parseInt(m[2], 10);
+      const book = CLIENT_NCERT_MAP[code];
+      if (book && chNum >= 1) {
+        const chTitle = book.chapters[chNum] || `Chapter ${chNum}`;
+        return `Class ${book.cls} NCERT Syllabus\nSubject: ${book.subject}\nChapter ${chNum}: ${chTitle} (NCERT code: ${code})`;
+      }
+    }
+
+    const geminiKey = getCookie('sa_gemini_key');
+    if (geminiKey && payload.dataBase64) {
+      try {
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(geminiKey)}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [
+                {
+                  parts: [
+                    { inlineData: { mimeType: 'application/pdf', data: payload.dataBase64 } },
+                    {
+                      text:
+                        'This PDF is an NCERT textbook chapter or study chapter. Identify its Class (e.g. 9 or 10), Subject (e.g. Science, Mathematics, History, Geography, Civics, Economics, English, Hindi), Chapter Number, and exact Chapter Title. Output ONLY in this exact format:\nClass <number> Syllabus\nSubject: <Subject Name>\nChapter <number>: <Chapter Title>',
+                    },
+                  ],
+                },
+              ],
+            }),
+          }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          const extracted = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+          if (extracted && extracted.length >= 10) return extracted;
+        }
+      } catch { /* fallback below */ }
+    }
+
+    const cleanName = fileName.replace(/\.pdf$/i, '').replace(/[_-]+/g, ' ').trim() || 'NCERT Study Chapter';
+    return `Class 9 Syllabus\nSubject: Science\nChapter 1: ${cleanName}`;
+  }
+
+  // ---------- upload the syllabus / NCERT PDF from this computer (same result as sending it to the bot) ----------
   const MAX_PDF_BYTES = 20 * 1024 * 1024;
   const sylStatus = (msg, isErr = false) => {
     const el = $('syl-status');
@@ -163,12 +268,27 @@
   });
   async function sendSyllabus(payload, buttons) {
     buttons.forEach((b) => { b.disabled = true; });
-    sylStatus('Reading your syllabus… this can take up to a minute.');
+    sylStatus('Reading your PDF / text… this can take up to a minute.');
+    const geminiKey = getCookie('sa_gemini_key') || undefined;
     try {
-      await postJson('/api/syllabus/upload', { telegramUserId: userId, ...payload }, 150000);
+      try {
+        await postJson('/api/syllabus/upload', { telegramUserId: userId, geminiKey, ...payload }, 150000);
+      } catch (firstErr) {
+        // If an older backend rejected a single NCERT chapter PDF with "couldn't find any subjects",
+        // automatically extract the chapter metadata and upload it as structured syllabus text.
+        if (/couldn't find any subjects/i.test(firstErr.message || '') && payload.kind === 'pdf') {
+          sylStatus('Detected single NCERT chapter PDF — extracting subject & chapter…');
+          const fallbackText = await buildFallbackSyllabusTextFromPdf(payload);
+          await postJson('/api/syllabus/upload', { telegramUserId: userId, geminiKey, kind: 'text', text: fallbackText }, 150000);
+        } else {
+          throw firstErr;
+        }
+      }
       sylStatus('Done! Loading your chapters…');
-      await loadChapters({ silent: true });
+      manualGateOpen = false;
+      await loadChapters({ silent: true, forceChaptersView: true });
       renderChapters();
+      show('view-chapters');
     } catch (e) {
       sylStatus(e.message, true);
     } finally {
@@ -187,7 +307,7 @@
     if (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') return sylStatus('Please choose a PDF file.', true);
     if (file.size > MAX_PDF_BYTES) return sylStatus('That PDF is over 20 MB, which is too big.', true);
     try {
-      await sendSyllabus({ kind: 'pdf', dataBase64: await toBase64(file) }, [$('syl-pick-btn'), $('syl-text-send')]);
+      await sendSyllabus({ kind: 'pdf', fileName: file.name, dataBase64: await toBase64(file) }, [$('syl-pick-btn'), $('syl-text-send')]);
     } catch (err) { sylStatus(err.message, true); }
   });
   $('syl-text-toggle').addEventListener('click', () => {
@@ -197,11 +317,11 @@
   });
   $('syl-text-send').addEventListener('click', () => {
     const text = $('syl-text').value.trim();
-    if (text.length < 10) return sylStatus('Paste your syllabus text first.', true);
+    if (text.length < 10) return sylStatus('Paste your syllabus or study text first.', true);
     sendSyllabus({ kind: 'text', text }, [$('syl-pick-btn'), $('syl-text-send')]);
   });
 
-  $('refresh-chapters-btn').addEventListener('click', () => loadChapters({ silent: true }).then(renderChapters));
+  $('refresh-chapters-btn').addEventListener('click', () => loadChapters({ silent: true, forceChaptersView: true }).then(renderChapters));
 
   // ---------- subject sections ----------
   function groupSections() {
@@ -323,22 +443,153 @@
     placePop();
   }
   function hidePop() { pop.hidden = true; popAnchor = null; }
-  // The popover follows its card while the page scrolls (e.g. the mouse is still, the page moves)
   addEventListener('scroll', () => { if (popAnchor) requestAnimationFrame(placePop); }, { passive: true });
   addEventListener('resize', placePop);
 
-  // ---------- quiz runner ----------
+  // ---------- Voice Input (Web Speech API SpeechRecognition) ----------
+  const answerInput = $('quiz-answer-input');
+  const charCountEl = $('quiz-char-count');
+  const aiThinkingEl = $('quiz-ai-thinking');
+  const voiceBtn = $('voice-answer-btn');
+  const voiceIcon = $('voice-answer-icon');
+  const voiceLabel = $('voice-answer-label');
+  const voiceStatusMsg = $('voice-status-msg');
+  const DEFAULT_FOOT_HINT = 'Press <kbd>Ctrl</kbd> + <kbd>Enter</kbd> to continue';
+
+  const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let recognition = null;
+  let isListening = false;
+  let baseTextBeforeSpeech = '';
+  let finalizedSpeech = '';
+
+  function syncAnswerText(newVal) {
+    if (!answerInput) return;
+    const clipped = String(newVal || '').slice(0, 2000);
+    answerInput.value = clipped;
+    if (quiz) quiz.answers[quiz.index] = clipped;
+    if (charCountEl) charCountEl.textContent = `${clipped.length} / 2000`;
+    if ($('next-btn')) $('next-btn').disabled = clipped.trim().length === 0;
+  }
+
+  function updateVoiceUI(listening, customStatus = '') {
+    isListening = listening;
+    if (voiceBtn) {
+      voiceBtn.classList.toggle('is-listening', listening);
+      voiceBtn.setAttribute('aria-pressed', String(listening));
+    }
+    if (voiceIcon) {
+      voiceIcon.className = listening ? 'fa-solid fa-stop' : 'fa-solid fa-microphone';
+    }
+    if (voiceLabel) {
+      voiceLabel.textContent = listening ? 'Stop Listening' : 'Speak Answer';
+    }
+    if (voiceStatusMsg) {
+      voiceStatusMsg.classList.toggle('is-listening', listening);
+      if (customStatus) {
+        voiceStatusMsg.textContent = customStatus;
+      } else if (listening) {
+        voiceStatusMsg.textContent = 'Listening… speak your answer clearly';
+      } else {
+        voiceStatusMsg.innerHTML = DEFAULT_FOOT_HINT;
+      }
+    }
+  }
+
+  function stopVoiceInput(customStatus = '') {
+    if (recognition) {
+      try {
+        recognition.onend = null;
+        recognition.stop();
+      } catch { /* ignore */ }
+      recognition = null;
+    }
+    updateVoiceUI(false, customStatus);
+  }
+
+  function toggleVoiceInput() {
+    if (!quiz || !answerInput || answerInput.disabled) return;
+    if (isListening) {
+      stopVoiceInput();
+      return;
+    }
+    if (!SpeechRecognitionAPI) {
+      updateVoiceUI(false, 'Voice input is not supported in this browser. Please use Chrome, Edge, or Safari.');
+      return;
+    }
+
+    try {
+      recognition = new SpeechRecognitionAPI();
+      recognition.lang = navigator.language || 'en-IN';
+      recognition.continuous = true;
+      recognition.interimResults = true;
+
+      baseTextBeforeSpeech = answerInput.value.trim();
+      finalizedSpeech = '';
+
+      recognition.onstart = () => {
+        updateVoiceUI(true, 'Listening… speak your answer clearly');
+      };
+
+      recognition.onresult = (event) => {
+        let interimTranscript = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalizedSpeech += (finalizedSpeech ? ' ' : '') + transcript.trim();
+          } else {
+            interimTranscript += transcript;
+          }
+        }
+        const spoken = [finalizedSpeech, interimTranscript.trim()].filter(Boolean).join(' ');
+        const combined = [baseTextBeforeSpeech, spoken].filter(Boolean).join(baseTextBeforeSpeech ? ' ' : '');
+        syncAnswerText(combined);
+      };
+
+      recognition.onerror = (event) => {
+        if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+          stopVoiceInput('Microphone access was denied. Allow microphone permissions in your browser.');
+        } else if (event.error === 'no-speech') {
+          stopVoiceInput('No speech detected. Click "Speak Answer" to try again.');
+        } else {
+          stopVoiceInput(`Voice input stopped (${event.error}).`);
+        }
+      };
+
+      recognition.onend = () => {
+        recognition = null;
+        if (isListening) {
+          updateVoiceUI(false);
+        }
+      };
+
+      recognition.start();
+    } catch (err) {
+      stopVoiceInput(`Could not start microphone: ${err.message}`);
+    }
+  }
+
+  voiceBtn?.addEventListener('click', toggleVoiceInput);
+
+  // ---------- quiz runner (Typed or Spoken Answers verified by AI) ----------
   async function startQuiz(c) {
     hidePop();
     banner('');
+    stopVoiceInput();
     sessionStorage.setItem(RETURN_KEY, JSON.stringify({ chapterId: c.id, subject: c.subject, exam: c.exam || '' }));
-    $('loading-text').textContent = `Writing a ${c.subject} quiz on “${c.title}”… this takes a few seconds.`;
+    $('loading-text').textContent = `Reading the chapter and writing a ${c.subject} quiz on “${c.title}”… this takes a few seconds.`;
     show('view-loading');
     try {
       const data = await postJson('/api/quizzes/generate', { telegramUserId: userId, chapterId: c.id });
-      quiz = { quizId: data.quizId, chapter: data.chapter, questions: data.questions, answers: data.questions.map(() => null), index: 0 };
+      quiz = {
+        quizId: data.quizId,
+        chapter: data.chapter,
+        questions: data.questions,
+        answers: data.questions.map(() => ''),
+        index: 0,
+      };
       $('quiz-title').textContent = `${data.chapter.subject} · ${data.chapter.number != null ? 'Ch ' + data.chapter.number + ': ' : ''}${data.chapter.title}`;
       $('quiz-meta').textContent = `${data.questions.length} questions`;
+      if (aiThinkingEl) aiThinkingEl.hidden = true;
       show('view-quiz');
       scrollTo({ top: 0 });
       renderQuestion();
@@ -352,55 +603,70 @@
   }
 
   function renderQuestion() {
+    stopVoiceInput();
     const { questions, index, answers } = quiz;
     const q = questions[index];
     const last = index === questions.length - 1;
     quizError('');
+    if (aiThinkingEl) aiThinkingEl.hidden = true;
     $('quiz-qcount').textContent = `Question ${index + 1} of ${questions.length}`;
     $('quiz-progress-bar').style.width = `${(index / questions.length) * 100}%`;
     $('quiz-subtopic').textContent = q.subtopic;
     $('quiz-question').textContent = q.question;
-    const box = $('quiz-options');
-    box.innerHTML = '';
-    q.options.forEach((text, i) => {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'qz-opt';
-      b.setAttribute('role', 'radio');
-      b.setAttribute('aria-checked', String(answers[index] === i));
-      b.innerHTML = `<span class="qz-opt-key">${'ABCD'[i]}</span><span></span>`;
-      b.lastChild.textContent = text;
-      b.addEventListener('click', () => {
-        answers[index] = i;
-        box.querySelectorAll('.qz-opt').forEach((o, j) => o.setAttribute('aria-checked', String(j === i)));
-        $('next-btn').disabled = false;
-      });
-      box.appendChild(b);
-    });
+
+    const currentTyped = answers[index] || '';
+    if (answerInput) {
+      answerInput.disabled = false;
+      answerInput.value = currentTyped;
+      if (charCountEl) charCountEl.textContent = `${currentTyped.length} / 2000`;
+    }
+    if (voiceBtn) voiceBtn.disabled = false;
+
     $('prev-btn').disabled = index === 0;
     const next = $('next-btn');
-    next.disabled = answers[index] === null;
+    next.disabled = currentTyped.trim().length === 0;
     next.innerHTML = last ? 'Finish <i class="fa-solid fa-flag-checkered" aria-hidden="true"></i>' : 'Next <i class="fa-solid fa-arrow-right" aria-hidden="true"></i>';
-    $('quiz-question').focus({ preventScroll: true });
+    setTimeout(() => answerInput?.focus(), 30);
   }
 
+  answerInput?.addEventListener('input', () => {
+    if (!quiz) return;
+    const val = answerInput.value;
+    quiz.answers[quiz.index] = val;
+    if (charCountEl) charCountEl.textContent = `${val.length} / 2000`;
+    $('next-btn').disabled = val.trim().length === 0;
+  });
+
+  answerInput?.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      if (!$('next-btn').disabled) $('next-btn').click();
+    }
+  });
+
   $('prev-btn').addEventListener('click', () => {
-    if (quiz.index > 0) { quiz.index--; renderQuestion(); }
+    if (!quiz || quiz.index <= 0) return;
+    stopVoiceInput();
+    if (answerInput) quiz.answers[quiz.index] = answerInput.value;
+    quiz.index--;
+    renderQuestion();
   });
   $('next-btn').addEventListener('click', () => {
-    if (quiz.index < quiz.questions.length - 1) { quiz.index++; renderQuestion(); }
-    else submitQuiz();
+    if (!quiz) return;
+    stopVoiceInput();
+    if (answerInput) quiz.answers[quiz.index] = answerInput.value;
+    if (quiz.index < quiz.questions.length - 1) {
+      quiz.index++;
+      renderQuestion();
+    } else {
+      submitQuiz();
+    }
   });
   $('quit-btn').addEventListener('click', () => {
-    if (quiz && quiz.answers.some((a) => a !== null) && !confirm('Leave this quiz? Your answers will not be saved.')) return;
+    stopVoiceInput();
+    if (quiz && quiz.answers.some((a) => String(a || '').trim().length > 0) && !confirm('Leave this quiz? Your answers will not be saved.')) return;
     quiz = null;
     backToChapters({ scroll: false });
-  });
-  // number / letter keys pick an option while the quiz is open
-  addEventListener('keydown', (e) => {
-    if ($('view-quiz').hidden || !quiz || e.ctrlKey || e.metaKey || e.altKey) return;
-    const i = '1234'.indexOf(e.key) >= 0 ? '1234'.indexOf(e.key) : 'abcd'.indexOf(e.key.toLowerCase());
-    if (i >= 0 && e.key.length === 1) $('quiz-options').children[i]?.click();
   });
 
   function quizError(msg) {
@@ -413,17 +679,26 @@
   let submitting = false;
   async function submitQuiz() {
     if (submitting || !quiz) return;
+    stopVoiceInput();
     submitting = true;
     quizError('');
     const next = $('next-btn');
+    const prev = $('prev-btn');
     next.disabled = true;
-    next.textContent = 'Saving…';
+    prev.disabled = true;
+    if (answerInput) answerInput.disabled = true;
+    if (voiceBtn) voiceBtn.disabled = true;
+    if (aiThinkingEl) aiThinkingEl.hidden = false;
+    next.textContent = 'Checking with AI…';
     let result;
     try {
-      result = await postJson('/api/quizzes/submit', { telegramUserId: userId, quizId: quiz.quizId, answers: quiz.answers }, 30000);
+      result = await postJson('/api/quizzes/submit', { telegramUserId: userId, quizId: quiz.quizId, answers: quiz.answers }, 90000);
     } catch (e) {
       submitting = false;
-      // Stay on the last question with the answers intact so Finish can simply be pressed again
+      if (aiThinkingEl) aiThinkingEl.hidden = true;
+      if (answerInput) answerInput.disabled = false;
+      if (voiceBtn) voiceBtn.disabled = false;
+      prev.disabled = quiz.index === 0;
       next.disabled = false;
       next.innerHTML = 'Try again <i class="fa-solid fa-rotate-right" aria-hidden="true"></i>';
       if (e.status === 410 || e.status === 409) {
@@ -432,15 +707,15 @@
         banner(e.message);
         return;
       }
-      quizError(`Couldn't save your result: ${e.message}`);
+      quizError(`Couldn't verify your result: ${e.message}`);
       return;
     }
     submitting = false;
+    if (aiThinkingEl) aiThinkingEl.hidden = true;
     quiz = null;
     try {
       showDone(result);
     } catch (e) {
-      // The result IS saved; if drawing the summary fails, don't leave the student stuck
       console.error(e);
       banner(`Saved: ${result.score}/${result.total} (${result.percentage}%).`);
       backToChapters({ scroll: true });
@@ -465,9 +740,10 @@
     rv.innerHTML = r.review.map((q, i) => `
       <div class="qz-rv ${q.correct ? 'ok' : ''}">
         <h4>${i + 1}. ${esc(q.question)}</h4>
-        <p><b>Your answer:</b> ${q.picked === null ? 'Skipped' : esc(q.options[q.picked])} ${q.correct ? '✓' : '✗'}</p>
-        ${q.correct ? '' : `<p><b>Correct answer:</b> ${esc(q.options[q.correctIndex])}</p>`}
-        <p>${esc(q.explanation)}</p>
+        <p><b>Your answer:</b> ${q.userAnswer ? esc(q.userAnswer) : 'Skipped'} ${q.correct ? '✓' : '✗'}</p>
+        ${q.feedback ? `<p><b>AI book check:</b> ${esc(q.feedback)}</p>` : ''}
+        ${q.correct ? '' : `<p><b>Correct answer:</b> ${esc(q.expectedAnswer || '')}</p>`}
+        <p>${esc(q.explanation || '')}</p>
       </div>`).join('');
 
     show('view-done');
@@ -499,7 +775,7 @@
     cancelRedirect();
     let ret = null;
     try { ret = JSON.parse(sessionStorage.getItem(RETURN_KEY) || 'null'); } catch {}
-    const ok = await loadChapters({ silent: true });
+    const ok = await loadChapters({ silent: true, forceChaptersView: true });
     if (!ok) { await loadChapters(); return; }
     if (ret && scroll) activeTab = 'all';
     renderChapters();
@@ -523,8 +799,6 @@
     });
   }
 
-  // Run cb once a smooth scroll has settled (scrollend where supported, otherwise a timer).
-  // The popover hides on scroll, so the auto-shown one has to wait for the scroll to finish.
   function afterScroll(cb) {
     let done = false;
     const go = () => { if (done) return; done = true; removeEventListener('scrollend', go); cb(); };

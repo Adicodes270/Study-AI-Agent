@@ -1,17 +1,17 @@
 // src/intake/telegramBot.js
 import { Bot, HttpError } from "grammy";
 
-import { GEMINI_API_KEY, GEMINI_MODEL, TELEGRAM_BOT_TOKEN } from "../config.js";
+import { DEFAULT_CLASS_LEVEL, GEMINI_API_KEY, GEMINI_MODEL, TELEGRAM_BOT_TOKEN } from "../config.js";
 import { initDb, savePairing } from "../db.js";
 import { saveSyllabus } from "./storage.js";
 import { deleteUserKey, getUserKeys, isValidKey, saveUserKey } from "./userKeys.js";
-import { parseSyllabus, parseSyllabusPdf } from "./syllabusParser.js";
+import { inferNcertFromFilename, parseSyllabus, parseSyllabusPdf } from "./syllabusParser.js";
 
 const MAX_PDF_BYTES = 20 * 1024 * 1024; // Telegram bots can't download files over 20 MB
 
-// In groups, only look at messages that seem to be about a syllabus.
+// In groups, only look at messages that seem to be about a syllabus or NCERT chapter.
 const SYLLABUS_HINTS = new RegExp(
-  "syllabus|portion|subject|chapter|topic|lesson" +
+  "syllabus|portion|subject|chapter|topic|lesson|ncert|\\b[a-z]{4}\\d{3}\\b" +
     "|\\bch[\\s.\\-:\\d]|\\btt\\d|half[\\s-]?yearly|annual|pre-?board" +
     "|physics|chemistry|biology|math|science|history|geography|economics" +
     "|english|hindi|sanskrit",
@@ -36,13 +36,13 @@ async function start(ctx) {
     await ctx.reply(
       `🎉 Hey ${ctx.from.first_name || "there"}! Study Agent is linked!\n\n` +
         `Your Telegram ID (${ctx.from.id}) is now paired with the setup page. Go back to it and press Save Configuration, ` +
-        `then send me your syllabus as text or a PDF.`
+        `then send me your syllabus or NCERT chapter as text or a PDF.`
     );
     return;
   }
   await ctx.reply(
     `Hi! First add your Gemini API key on the setup page (or send it here in private: /setkey YOUR_KEY).\n\n` +
-      `Then send your syllabus as text or as a PDF and I'll read it.\n(Using model: ${GEMINI_MODEL})\n\n` +
+      `Then send your syllabus or NCERT chapter as text or as a PDF and I'll read it.\n(Using model: ${GEMINI_MODEL})\n\n` +
       `/removekey deletes your saved key.`
   );
 }
@@ -60,7 +60,7 @@ async function setKey(ctx) {
     return;
   }
   await saveUserKey(ctx.from.id, key);
-  await ctx.reply("Saved your Gemini key. I deleted your message so the key isn't left in the chat. Now send your syllabus!");
+  await ctx.reply("Saved your Gemini key. I deleted your message so the key isn't left in the chat. Now send your syllabus or NCERT PDF!");
 }
 
 async function removeKey(ctx) {
@@ -69,7 +69,7 @@ async function removeKey(ctx) {
 }
 
 /** Shared by text and PDF: parse, save, reply. */
-async function processSyllabus(ctx, parseFn, payload, hintText) {
+async function processSyllabus(ctx, parseFn, payload, hintText, fileName = "") {
   const group = inGroup(ctx);
 
   if (group && !SYLLABUS_HINTS.test(hintText)) {
@@ -86,27 +86,54 @@ async function processSyllabus(ctx, parseFn, payload, hintText) {
   }
 
   if (!group) {
-    await ctx.reply("Got it, reading your syllabus...");
+    await ctx.reply("Got it, reading your document...");
   }
   await ctx.replyWithChatAction("typing");
 
   let syllabus;
   try {
-    syllabus = await parseFn(payload, apiKey);
+    syllabus = await parseFn(payload, apiKey, fileName);
   } catch (e) {
     console.log(`Parse error: ${e.message}`);
-    if (!group) {
-      await ctx.reply(`Sorry, I couldn't read that: ${e.message}`);
+    const inferred = inferNcertFromFilename(fileName || hintText);
+    if (inferred) {
+      syllabus = inferred;
+    } else {
+      if (!group) {
+        await ctx.reply(`Sorry, I couldn't read that: ${e.message}`);
+      }
+      return;
     }
-    return;
   }
 
-  if (!syllabus.subjects.length) {
-    console.log("Gemini found no subjects");
-    if (!group) {
-      await ctx.reply("I couldn't find any subjects in that.");
+  if (!syllabus?.subjects?.length) {
+    const inferred = inferNcertFromFilename(fileName || hintText);
+    if (inferred) {
+      syllabus = inferred;
+    } else {
+      const fallbackTitle = fileName
+        ? String(fileName).replace(/\.pdf$/i, "").trim()
+        : String(hintText || "Uploaded Study Material").split("\n")[0].slice(0, 60).trim();
+      syllabus = {
+        class_level: DEFAULT_CLASS_LEVEL,
+        exam: "Custom Source",
+        subjects: [
+          {
+            name: "Custom Study",
+            chapters: [
+              {
+                number: 1,
+                title: fallbackTitle || "Uploaded Study Material",
+                is_ncert: false,
+                ncert_book_code: null,
+                ncert_chapter_number: null,
+                pdf_url: null,
+              },
+            ],
+          },
+        ],
+      };
     }
-    return;
   }
 
   const results = await saveSyllabus(ctx.chat.id, syllabus);
@@ -163,7 +190,7 @@ async function handlePdf(ctx) {
     return;
   }
 
-  await processSyllabus(ctx, parseSyllabusPdf, pdfBytes, hint);
+  await processSyllabus(ctx, parseSyllabusPdf, pdfBytes, hint, doc.file_name || "");
 }
 
 function onError(err) {

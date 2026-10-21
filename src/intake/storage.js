@@ -35,7 +35,7 @@ export async function saveSyllabus(chatId, syllabus) {
         const pdfUrl =
           c.is_ncert
             ? buildNcertPdfUrl(bookCode, ncertChNum) || c.pdf_url || null
-            : null;
+            : c.pdf_url || null;
         const matchStatus = pdfUrl ? "matched" : "unmatched";
 
         return {
@@ -48,12 +48,37 @@ export async function saveSyllabus(chatId, syllabus) {
         };
       });
 
-      const fresh = preparedChapters.map((c) => [c.number, c.title, c.pdfUrl, c.matchStatus]);
       const { rows: oldRows } = await db.query(
         "SELECT number, title, pdf_url, match_status FROM syllabus_chapters " +
           "WHERE chat_id = $1 AND subject = $2 AND exam = $3 ORDER BY id",
         [chatId, subject.name, exam]
       );
+
+      // If the user uploaded a single NCERT chapter PDF (1-2 chapters) via "New Quiz" and already has
+      // chapters for this subject, merge the new chapter(s) in instead of wiping out their existing chapters!
+      let finalChapters = preparedChapters;
+      if (oldRows.length > 0 && preparedChapters.length <= 2) {
+        const merged = oldRows.map((r) => ({
+          number: r.number,
+          title: r.title,
+          bookCode: null,
+          ncertChNum: r.number,
+          pdfUrl: r.pdf_url,
+          matchStatus: r.match_status,
+        }));
+        for (const inc of preparedChapters) {
+          const idx = merged.findIndex(
+            (m) =>
+              m.title.toLowerCase() === inc.title.toLowerCase() ||
+              (m.pdfUrl && inc.pdfUrl && m.pdfUrl === inc.pdfUrl)
+          );
+          if (idx >= 0) merged[idx] = inc;
+          else merged.push(inc);
+        }
+        finalChapters = merged;
+      }
+
+      const fresh = finalChapters.map((c) => [c.number, c.title, c.pdfUrl, c.matchStatus]);
       const old = oldRows.map((r) => [r.number, r.title, r.pdf_url, r.match_status]);
 
       if (JSON.stringify(old) === JSON.stringify(fresh)) {
@@ -67,15 +92,16 @@ export async function saveSyllabus(chatId, syllabus) {
         [chatId, subject.name, exam]
       );
 
-      for (const c of preparedChapters) {
+      for (const c of finalChapters) {
         let ncertId = null;
 
         if (c.pdfUrl) {
           const effectiveClass = classValue || 0;
           const bookName = c.bookCode || subject.name;
+          const chNum = c.ncertChNum || c.number || 1;
           const { rows: found } = await db.query(
             "SELECT id, pdf_url FROM ncert_chapters WHERE class = $1 AND book = $2 AND number = $3",
-            [effectiveClass, bookName, c.ncertChNum]
+            [effectiveClass, bookName, chNum]
           );
           const existing = found[0];
 
@@ -92,7 +118,7 @@ export async function saveSyllabus(chatId, syllabus) {
             const { rows: inserted } = await db.query(
               "INSERT INTO ncert_chapters (class, book, edition, number, title, pdf_url, pdf_path) " +
                 "VALUES ($1, $2, 'latest', $3, $4, $5, NULL) RETURNING id",
-              [effectiveClass, bookName, c.ncertChNum, c.title, c.pdfUrl]
+              [effectiveClass, bookName, chNum, c.title, c.pdfUrl]
             );
             ncertId = inserted[0].id;
           }

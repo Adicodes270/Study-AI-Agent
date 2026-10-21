@@ -55,15 +55,20 @@
             <a class="btn btn-solid" href="setup.html"><i class="fa-solid fa-gear" aria-hidden="true"></i> Go to Setup</a>
         </section>
 
-        <!-- Step B: no syllabus uploaded yet -->
+        <!-- Step B: upload syllabus / NCERT chapter PDF via Telegram or computer -->
         <section class="qz-card qz-gate" id="view-gate" hidden>
+            <div class="qz-gate-top" id="gate-back-row" hidden>
+                <button class="qz-link" type="button" id="gate-back-btn">
+                    <i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Back to chapters
+                </button>
+            </div>
             <div class="qz-gate-icon"><i class="fa-brands fa-telegram" aria-hidden="true"></i></div>
-            <h1>Add your syllabus first</h1>
-            <p>Send it to the Study Agent bot on Telegram, or upload it from your computer below.
+            <h1 id="gate-heading">Add your syllabus or NCERT chapter PDF</h1>
+            <p id="gate-subtext">Send your syllabus or NCERT chapter PDF to the Study Agent bot on Telegram, or upload it from your computer below.
                 This page picks it up automatically as soon as it has been read.</p>
             <ol class="qz-steps">
                 <li>Open the bot on Telegram</li>
-                <li>Send the syllabus PDF (or paste the text)</li>
+                <li>Send the syllabus or NCERT chapter PDF (or paste the text)</li>
                 <li>Wait for the bot's “Done!” reply</li>
             </ol>
             <div class="qz-cta-row">
@@ -77,19 +82,19 @@
                 <input type="file" id="syl-file" accept="application/pdf,.pdf" hidden>
                 <div class="qz-cta-row">
                     <button class="btn btn-solid" type="button" id="syl-pick-btn">
-                        <i class="fa-solid fa-file-arrow-up" aria-hidden="true"></i> Choose syllabus PDF</button>
+                        <i class="fa-solid fa-file-arrow-up" aria-hidden="true"></i> Choose syllabus / NCERT PDF</button>
                     <button class="btn btn-ghost" type="button" id="syl-text-toggle">
                         <i class="fa-solid fa-paste" aria-hidden="true"></i> Paste text instead</button>
                 </div>
                 <p class="qz-file-name" id="syl-file-name" hidden></p>
                 <div id="syl-text-panel" hidden>
-                    <label class="qz-sr" for="syl-text">Syllabus text</label>
-                    <textarea id="syl-text" rows="6" maxlength="100000" placeholder="Paste your syllabus / portion here…"></textarea>
+                    <label class="qz-sr" for="syl-text">Syllabus or chapter text</label>
+                    <textarea id="syl-text" rows="6" maxlength="100000" placeholder="Paste your syllabus, NCERT chapter, or study notes here…"></textarea>
                     <button class="btn btn-solid" type="button" id="syl-text-send">Read pasted text</button>
                 </div>
                 <p class="qz-upload-status" id="syl-status" role="status" aria-live="polite" hidden></p>
             </div>
-            <p class="qz-poll"><span class="qz-pulse" aria-hidden="true"></span> Checking for your syllabus every 5 seconds…</p>
+            <p class="qz-poll"><span class="qz-pulse" aria-hidden="true"></span> Checking for your chapters every 5 seconds…</p>
         </section>
 
         <section class="qz-card qz-center" id="view-loading" aria-live="polite">
@@ -102,16 +107,20 @@
             <div class="qz-head">
                 <div>
                     <h1>Your Chapters</h1>
-                    <p class="qz-sub">Pick a matched chapter to take a quiz. Hover a chapter you've attempted to see what to revise.</p>
+                    <p class="qz-sub">Pick a chapter to take a quiz. Hover a chapter you've attempted to see what to revise.</p>
                 </div>
-                <button class="btn btn-ghost qz-small" type="button" id="refresh-chapters-btn">
-                    <i class="fa-solid fa-rotate" aria-hidden="true"></i> Refresh</button>
+                <div class="qz-head-actions">
+                    <button class="btn btn-solid qz-small" type="button" id="new-quiz-btn">
+                        <i class="fa-solid fa-plus" aria-hidden="true"></i> New Quiz</button>
+                    <button class="btn btn-ghost qz-small" type="button" id="refresh-chapters-btn">
+                        <i class="fa-solid fa-rotate" aria-hidden="true"></i> Refresh</button>
+                </div>
             </div>
             <div class="qz-tabs" id="subject-tabs" role="tablist" aria-label="Filter by subject"></div>
             <div id="subject-sections"></div>
         </section>
 
-        <!-- Quiz runner -->
+        <!-- Quiz runner (Typed or Voice-Spoken Answers verified by AI) -->
         <section class="qz-card qz-quiz" id="view-quiz" hidden>
             <div class="qz-quiz-top">
                 <button class="qz-link" type="button" id="quit-btn"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Back to chapters</button>
@@ -122,7 +131,33 @@
             <p class="qz-qcount" id="quiz-qcount" aria-live="polite"></p>
             <span class="qz-subtopic" id="quiz-subtopic"></span>
             <h3 class="qz-question" id="quiz-question" tabindex="-1"></h3>
-            <div class="qz-options" id="quiz-options" role="radiogroup" aria-labelledby="quiz-question"></div>
+
+            <div class="qz-answer-box" id="quiz-options">
+                <div class="qz-answer-toolbar">
+                    <label class="qz-answer-label" for="quiz-answer-input">Your Answer (type or speak)</label>
+                    <button type="button" class="btn btn-ghost qz-voice-btn" id="voice-answer-btn" aria-pressed="false" title="Speak your answer using your microphone">
+                        <i class="fa-solid fa-microphone" id="voice-answer-icon" aria-hidden="true"></i>
+                        <span id="voice-answer-label">Speak Answer</span>
+                    </button>
+                </div>
+                <textarea
+                    id="quiz-answer-input"
+                    class="qz-answer-input"
+                    rows="4"
+                    maxlength="2000"
+                    placeholder="Type your answer here or press 'Speak Answer' to dictate… (the AI will check the book and verify if it's right or wrong)"
+                ></textarea>
+                <div class="qz-answer-foot">
+                    <span id="voice-status-msg">Press <kbd>Ctrl</kbd> + <kbd>Enter</kbd> to continue</span>
+                    <span id="quiz-char-count">0 / 2000</span>
+                </div>
+            </div>
+
+            <div class="qz-ai-thinking" id="quiz-ai-thinking" role="status" aria-live="polite" hidden>
+                <div class="qz-spinner qz-spinner-sm" aria-hidden="true"></div>
+                <span>AI is thinking, checking the textbook &amp; researching to verify your answers…</span>
+            </div>
+
             <p class="qz-inline-error" id="quiz-error" role="alert" hidden></p>
             <div class="qz-quiz-nav">
                 <button class="btn btn-ghost" type="button" id="prev-btn"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Previous</button>
