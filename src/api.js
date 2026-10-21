@@ -2,17 +2,37 @@
 // All API logic lives here and returns { status, body }.
 // Used by the Vercel functions in /api and by the local server (src/webServer.js).
 import { Api } from "grammy";
-import { TELEGRAM_BOT_TOKEN } from "./config.js";
-import { createQuizSession, getChapterForUser, getChaptersWithResults, hasQuizResult, initDb, takeQuizSession, upsertQuizResult, withDb } from "./db.js";
+import { GoogleGenAI, Type } from "@google/genai";
+import { DEFAULT_CLASS_LEVEL, GEMINI_API_KEY, GEMINI_MODEL, TELEGRAM_BOT_TOKEN } from "./config.js";
+import {
+  createQuizSession,
+  getChapterForUser,
+  getChapterResource,
+  getChaptersWithResources,
+  getChaptersWithResults,
+  hasChapterResource,
+  hasQuizResult,
+  initDb,
+  saveChapterResource,
+  takeQuizSession,
+  upsertQuizResult,
+  withDb,
+} from "./db.js";
 import { generateQuiz, grade } from "./quizEngine.js";
 import crypto from "node:crypto";
-import { deleteUserKey, getUserKeys, getUserProfile, saveUserConfig } from "./intake/userKeys.js";
+import {
+  deleteUserKey,
+  exportStorageStateFile,
+  getUserKeys,
+  getUserProfile,
+  saveUserConfig,
+} from "./intake/userKeys.js";
 import { saveSyllabus } from "./intake/storage.js";
 import { parseSyllabus, parseSyllabusPdf } from "./intake/syllabusParser.js";
 
 const parseId = (v) => (/^\d+$/.test(String(v ?? "")) ? Number(v) : NaN);
 const ok = (body) => ({ status: 200, body });
-const fail = (status, error) => ({ status, body: { error } });
+const fail = (status, error, extra = {}) => ({ status, body: { error, ...extra } });
 
 /** Wraps a handler: makes sure tables exist and turns thrown errors into JSON 500s. */
 export function safe(fn) {
@@ -282,4 +302,691 @@ export const syllabusUpload = safe(async (body = {}, ctx = {}) => {
 
   const results = await saveSyllabus(id, syllabus);
   return ok({ ok: true, subjects: results }); // { "Physics": "added" | "updated" | "unchanged", ... }
+});
+
+
+// ---------------------------------------------------------------------------
+// NotebookLM Resource Generation Flow (public/resources.html)
+// Supported resource types exclude "Infographics" and "Report" per strict rule.
+// ---------------------------------------------------------------------------
+export const NOTEBOOKLM_RESOURCE_TYPES = [
+  {
+    id: "audio_overview",
+    label: "Audio Overview",
+    icon: "fa-solid fa-headphones",
+    description: "Two-host AI deep-dive conversation unpacking the chapter's big ideas.",
+  },
+  {
+    id: "study_guide",
+    label: "Study Guide",
+    icon: "fa-solid fa-book-open-reader",
+    description: "Structured concept breakdown, glossary of key terms, and short-answer review.",
+  },
+  {
+    id: "briefing_doc",
+    label: "Briefing Doc",
+    icon: "fa-solid fa-file-lines",
+    description: "Executive summary of core principles, formulas, and high-yield exam takeaways.",
+  },
+  {
+    id: "faq",
+    label: "FAQ",
+    icon: "fa-solid fa-circle-question",
+    description: "Frequently asked exam questions with clear, step-by-step model explanations.",
+  },
+  {
+    id: "timeline",
+    label: "Timeline",
+    icon: "fa-solid fa-timeline",
+    description: "Sequential flow of events, scientific processes, or step-by-step derivations.",
+  },
+  {
+    id: "flashcards",
+    label: "Flashcards",
+    icon: "fa-solid fa-layer-group",
+    description: "Active-recall Q&A cards covering definitions, equations, and key distinctions.",
+  },
+  {
+    id: "mind_map",
+    label: "Mind Map",
+    icon: "fa-solid fa-diagram-project",
+    description: "Hierarchical topic tree mapping how every subtopic in the chapter connects.",
+  },
+  {
+    id: "slide_deck",
+    label: "Slide Deck",
+    icon: "fa-solid fa-chalkboard",
+    description: "Slide-by-slide visual revision outline for rapid pre-exam review.",
+  },
+];
+
+export const EXCLUDED_RESOURCE_TYPES = new Set([
+  "infographics",
+  "infographic",
+  "report",
+  "reports",
+]);
+
+const VALID_RESOURCE_IDS = new Set(NOTEBOOKLM_RESOURCE_TYPES.map((t) => t.id));
+const RESOURCE_META_BY_ID = new Map(NOTEBOOKLM_RESOURCE_TYPES.map((t) => [t.id, t]));
+
+// Per-user NotebookLM quota tracker (protects session from rapid burst exhaustion)
+const USER_QUOTA_WINDOW_MS = 15 * 60 * 1000; // 15-minute rolling window
+const USER_MAX_GENERATIONS_PER_WINDOW = parseInt(process.env.NOTEBOOKLM_QUOTA_PER_WINDOW ?? "", 10) || 24;
+const userQuotaHits = new Map(); // telegramUserId -> { timestamps: number[], cooldownUntil: number }
+
+function formatWaitDuration(ms) {
+  const totalSec = Math.max(1, Math.ceil(ms / 1000));
+  if (totalSec < 60) return `${totalSec} second${totalSec === 1 ? "" : "s"}`;
+  const mins = Math.ceil(totalSec / 60);
+  if (mins < 60) return `${mins} minute${mins === 1 ? "" : "s"}`;
+  const hrs = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return remMins > 0 ? `${hrs}h ${remMins}m` : `${hrs} hour${hrs === 1 ? "" : "s"}`;
+}
+
+function checkUserNotebookLMQuota(userId) {
+  const now = Date.now();
+  let rec = userQuotaHits.get(userId);
+  if (!rec) {
+    rec = { timestamps: [], cooldownUntil: 0 };
+    userQuotaHits.set(userId, rec);
+  }
+  if (rec.cooldownUntil > now) {
+    return { allowed: false, retryAfter: formatWaitDuration(rec.cooldownUntil - now) };
+  }
+  rec.timestamps = rec.timestamps.filter((t) => now - t < USER_QUOTA_WINDOW_MS);
+  if (rec.timestamps.length >= USER_MAX_GENERATIONS_PER_WINDOW) {
+    const oldest = rec.timestamps[0];
+    const waitMs = Math.max(60_000, USER_QUOTA_WINDOW_MS - (now - oldest));
+    rec.cooldownUntil = now + waitMs;
+    return { allowed: false, retryAfter: formatWaitDuration(waitMs) };
+  }
+  return { allowed: true, recordHit: () => rec.timestamps.push(Date.now()) };
+}
+
+function extractQuotaRetryTime(err) {
+  if (!err) return null;
+  if (err.retryAfter) return String(err.retryAfter);
+  const msg = String(err.message || err || "");
+  const isQuota =
+    err.status === 429 ||
+    err.code === 429 ||
+    /quota|rate.?limit|resource_exhausted|too many requests|429|limit reached/i.test(msg);
+  if (!isQuota) return null;
+
+  // Try extracting an explicit duration from the upstream error message
+  const retryMatch =
+    msg.match(/try again (?:in|after)\s+([0-9]+\s*(?:seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h)(?:\s*[0-9]+\s*(?:minutes?|mins?|m|seconds?|secs?|s))?)/i) ||
+    msg.match(/retry(?:Delay| in| after)?["':\s]+([0-9]+(?:\.[0-9]+)?\s*(?:seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h))/i);
+  if (retryMatch) {
+    const raw = retryMatch[1].trim();
+    const secMatch = /^([0-9]+(?:\.[0-9]+)?)\s*s$/i.exec(raw);
+    if (secMatch) return formatWaitDuration(Math.ceil( parseFloat(secMatch[1]) * 1000 ));
+    return raw;
+  }
+  return "15 minutes";
+}
+
+const genClients = new Map();
+const getGenClient = (key) => {
+  if (!genClients.has(key)) genClients.set(key, new GoogleGenAI({ apiKey: key }));
+  return genClients.get(key);
+};
+
+const RESOURCE_RESPONSE_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    title: { type: Type.STRING },
+    summary: { type: Type.STRING },
+    sections: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          heading: { type: Type.STRING },
+          body: { type: Type.STRING },
+          bullets: { type: Type.ARRAY, items: { type: Type.STRING } },
+        },
+        required: ["heading", "body", "bullets"],
+      },
+    },
+    items: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          label: { type: Type.STRING },
+          prompt: { type: Type.STRING },
+          detail: { type: Type.STRING },
+        },
+        required: ["label", "prompt", "detail"],
+      },
+    },
+    markdown: { type: Type.STRING },
+  },
+  required: ["title", "summary", "sections", "items", "markdown"],
+};
+
+function buildResourcePrompt(chapter, resourceType) {
+  const meta = RESOURCE_META_BY_ID.get(resourceType) || { label: resourceType };
+  const cls = chapter.class ?? DEFAULT_CLASS_LEVEL;
+  const level = cls ? `Class ${cls}` : "CBSE Secondary School";
+  const chNum = chapter.number != null ? `Chapter ${chapter.number}: ` : "";
+
+  const specificInstructions = {
+    audio_overview: `Create a NotebookLM-style two-host "Audio Overview" deep-dive dialogue between Host A (Alex, curious & structured) and Host B (Sam, insightful & example-driven).
+- In "items", provide 8 to 12 conversational turns where label is "Host A (Alex)" or "Host B (Sam)", prompt is the subtopic being discussed, and detail is the spoken dialogue line.
+- In "sections", summarize the key takeaways and analogies discussed in the episode.
+- In "markdown", provide the full formatted transcript and show notes.`,
+    study_guide: `Create a comprehensive NotebookLM Study Guide for exam preparation.
+- In "sections", include: (1) Core Concepts & Big Picture, (2) Key Definitions & Formulas, (3) Common Exam Pitfalls, and (4) Short-Answer Review Prompts with Model Answers.
+- In "items", provide 6 to 8 key glossary terms where label is the term, prompt is its category/formula, and detail is its clear definition.`,
+    briefing_doc: `Create a concise NotebookLM Briefing Document.
+- In "sections", include: (1) Executive Overview, (2) Essential Principles & Mechanisms, (3) High-Yield Exam Takeaways, and (4) Quick Revision Checklist.
+- In "items", list 5 to 7 critical facts or principles (label = principle name, prompt = why it matters, detail = concise explanation).`,
+    faq: `Create a NotebookLM FAQ (Frequently Asked Questions) resource targeting high-probability exam questions.
+- In "items", provide 6 to 8 Q&A pairs where label is "Q1", "Q2", etc., prompt is the exact question a student or examiner asks, and detail is the complete, step-by-step model answer.
+- In "sections", group the themes covered by these FAQs.`,
+    timeline: `Create a NotebookLM Timeline / Sequential Process Breakdown for this chapter.
+- In "items", provide 6 to 9 ordered steps, stages, derivations, or chronological milestones where label is the Step/Stage/Year (e.g. "Stage 1", "Step 2"), prompt is the milestone title, and detail is what happens and why.
+- In "sections", explain how the sequence connects from start to finish.`,
+    flashcards: `Create a deck of NotebookLM Active-Recall Flashcards for this chapter.
+- In "items", provide 8 to 10 flashcards where label is the subtopic tag (e.g. "Formula", "Definition", "Concept"), prompt is the Front of the card (question/term), and detail is the Back of the card (concise, accurate answer).
+- In "sections", provide quick memory hooks and mnemonics.`,
+    mind_map: `Create a structured NotebookLM Mind Map for this chapter.
+- In "sections", represent the main branches of the chapter (each section heading is a primary branch node, body explains the branch, and bullets list the child sub-nodes and connections).
+- In "items", list 6 to 8 key cross-topic connections (label = Concept A -> Concept B, prompt = Relationship type, detail = How they interact).`,
+    slide_deck: `Create a NotebookLM Slide Deck outline for rapid visual revision.
+- In "items", provide 7 to 9 slides where label is "Slide 1", "Slide 2", etc., prompt is the Slide Headline, and detail is the key talking points & visual callout for that slide.
+- In "sections", group the deck into Introduction, Core Concepts, Worked Examples, and Summary.`,
+  };
+
+  return `You are Google NotebookLM generating a "${meta.label}" study artifact grounded in the student's syllabus chapter.
+
+Student Level: ${level}
+Subject: ${chapter.subject}${chapter.exam ? ` (${chapter.exam})` : ""}
+Chapter: ${chNum}${chapter.title}
+${chapter.pdf_url ? `NCERT Textbook Source PDF: ${chapter.pdf_url}` : ""}
+${chapter.note ? `Syllabus Scope / Notes: ${chapter.note}` : ""}
+
+Task Instructions:
+${specificInstructions[resourceType] || `Create a detailed ${meta.label} covering ${chapter.title}.`}
+
+Ensure all content is 100% accurate for ${level} ${chapter.subject}, clearly structured, and directly useful for exam revision.`;
+}
+
+function buildFallbackResourceContent(chapter, resourceType) {
+  const meta = RESOURCE_META_BY_ID.get(resourceType) || { label: resourceType };
+  const chNum = chapter.number != null ? `Chapter ${chapter.number}: ` : "";
+  const fullChapterTitle = `${chNum}${chapter.title}`;
+  const scopeNote = chapter.note ? `Syllabus scope: ${chapter.note}.` : `Aligned with ${chapter.subject} curriculum standards.`;
+
+  if (resourceType === "audio_overview") {
+    return {
+      title: `Audio Overview: ${fullChapterTitle}`,
+      summary: `Two-host deep-dive conversation exploring the core concepts, real-world applications, and exam highlights of ${chapter.title} (${chapter.subject}).`,
+      sections: [
+        {
+          heading: "Episode Overview",
+          body: `In this NotebookLM Audio Overview, Alex and Sam unpack ${fullChapterTitle} in ${chapter.subject}, breaking down foundational definitions, step-by-step mechanisms, and high-yield exam takeaways.`,
+          bullets: [
+            `Core theme and intuition behind ${chapter.title}`,
+            "How examiners test this chapter in objective and descriptive questions",
+            "Common misconceptions and how to avoid them",
+          ],
+        },
+      ],
+      items: [
+        {
+          label: "Host A (Alex)",
+          prompt: "Introduction & Big Picture",
+          detail: `Welcome back! Today we're diving into ${fullChapterTitle} in ${chapter.subject}. If you've ever wondered how this topic connects to real-world problems and what actually matters for your exam, we've got you covered.`,
+        },
+        {
+          label: "Host B (Sam)",
+          prompt: "Core Intuition",
+          detail: `Exactly. The best way to approach ${chapter.title} is not by memorizing isolated lines, but by understanding the central mechanism first. ${scopeNote}`,
+        },
+        {
+          label: "Host A (Alex)",
+          prompt: "Key Definitions & Relationships",
+          detail: `Let's break down the primary building blocks of ${chapter.title}. Whenever you see a question from this unit, it almost always hinges on identifying the core variables and their cause-and-effect link.`,
+        },
+        {
+          label: "Host B (Sam)",
+          prompt: "Exam Strategy & Wrap-Up",
+          detail: `And before you wrap up your revision of ${chapter.title}, make sure you can state the core principle in one sentence and work through a standard example without looking at your notes!`,
+        },
+      ],
+      markdown: `# Audio Overview: ${fullChapterTitle}\n\n**Subject:** ${chapter.subject}${chapter.exam ? ` (${chapter.exam})` : ""}\n\n## Transcript Highlights\n- **Host A (Alex):** Welcome back! Today we're diving into ${fullChapterTitle} in ${chapter.subject}.\n- **Host B (Sam):** The best way to approach ${chapter.title} is by understanding the central mechanism first. ${scopeNote}\n- **Host A (Alex):** Focus on the primary definitions, relationships, and standard worked applications.\n- **Host B (Sam):** Test yourself by explaining the main concept out loud in your own words.`,
+    };
+  }
+
+  if (resourceType === "flashcards") {
+    return {
+      title: `Flashcards: ${fullChapterTitle}`,
+      summary: `Active-recall flashcard deck covering key terms, core principles, and exam checkpoints for ${chapter.title}.`,
+      sections: [
+        {
+          heading: "How to Use This Deck",
+          body: `Review each card actively by stating the answer before flipping. Focus extra repetition on cards covering ${chapter.title} definitions and application rules.`,
+          bullets: [
+            "Say your answer aloud before revealing the back of the card",
+            "Flag any card you miss for a 24-hour follow-up review",
+          ],
+        },
+      ],
+      items: [
+        {
+          label: "Core Concept",
+          prompt: `What is the central focus of ${fullChapterTitle} in ${chapter.subject}?`,
+          detail: `Understanding the fundamental principles, definitions, and problem-solving methods of ${chapter.title}. ${scopeNote}`,
+        },
+        {
+          label: "Key Terminology",
+          prompt: `Which foundational terms must be defined clearly when answering questions on ${chapter.title}?`,
+          detail: `State the precise textbook definition, specify any conditions or units involved, and pair it with a concrete example from ${chapter.title}.`,
+        },
+        {
+          label: "Application",
+          prompt: `How do you approach a typical competency or application question from ${chapter.title}?`,
+          detail: `1. Identify the given parameters and underlying concept in ${chapter.title}.\n2. State the governing rule, law, or grammatical/structural principle.\n3. Apply it step-by-step and verify the conclusion.`,
+        },
+        {
+          label: "Exam Pitfall",
+          prompt: `What is the most common mistake students make in ${chapter.title}?`,
+          detail: `Skipping intermediate steps or confusing closely related subtopics. Always write the governing principle explicitly before concluding.`,
+        },
+      ],
+      markdown: `# Flashcards: ${fullChapterTitle}\n\n1. **Q:** What is the central focus of ${fullChapterTitle}?\n   **A:** Understanding the fundamental principles, definitions, and problem-solving methods of ${chapter.title}.\n2. **Q:** How do you approach an application question from ${chapter.title}?\n   **A:** Identify the given parameters, state the governing principle, and apply it step by step.`,
+    };
+  }
+
+  return {
+    title: `${meta.label}: ${fullChapterTitle}`,
+    summary: `Source-grounded NotebookLM ${meta.label.toLowerCase()} for ${fullChapterTitle} (${chapter.subject}).`,
+    sections: [
+      {
+        heading: `1. Core Overview — ${chapter.title}`,
+        body: `This ${meta.label} synthesizes the essential concepts of ${fullChapterTitle} in ${chapter.subject}. ${scopeNote}`,
+        bullets: [
+          `Primary concepts and foundational framework of ${chapter.title}`,
+          "Key relationships, rules, and structured explanations",
+          "High-yield points frequently tested in school and board assessments",
+        ],
+      },
+      {
+        heading: "2. Key Takeaways & Revision Checkpoints",
+        body: `Use the structured breakdown below to verify your mastery of ${chapter.title} before attempting practice problems or chapter quizzes.`,
+        bullets: [
+          "Review core definitions and conceptual boundaries",
+          "Practice explaining each subtopic with a clear example",
+          "Cross-reference with your NCERT textbook chapter PDF",
+        ],
+      },
+    ],
+    items: [
+      {
+        label: "Checkpoint 1",
+        prompt: `Foundational Principles of ${chapter.title}`,
+        detail: `Master the primary definitions, core laws/rules, and conceptual scope of ${fullChapterTitle}.`,
+      },
+      {
+        label: "Checkpoint 2",
+        prompt: "Structured Analysis & Examples",
+        detail: `Connect theoretical concepts in ${chapter.title} to standard textbook examples and real-world scenarios.`,
+      },
+      {
+        label: "Checkpoint 3",
+        prompt: "Exam Readiness & Common Questions",
+        detail: `Focus on clarity, step-by-step reasoning, and accurate terminology when answering questions from ${chapter.title}.`,
+      },
+    ],
+    markdown: `# ${meta.label}: ${fullChapterTitle}\n\n**Subject:** ${chapter.subject}${chapter.exam ? ` (${chapter.exam})` : ""}\n${chapter.pdf_url ? `**NCERT PDF:** ${chapter.pdf_url}\n` : ""}\n## 1. Core Overview\nThis ${meta.label} synthesizes the essential concepts of ${fullChapterTitle} in ${chapter.subject}. ${scopeNote}\n\n## 2. Key Checkpoints\n- **Foundational Principles:** Master the primary definitions and conceptual scope of ${chapter.title}.\n- **Structured Analysis:** Connect concepts to textbook examples.\n- **Exam Readiness:** Use precise terminology and step-by-step reasoning.`,
+  };
+}
+
+/**
+ * Generate a single NotebookLM resource for a chapter.
+ * 1. Checks if a local/remote `notebooklm-py` bridge server is reachable (using the user's saved session file).
+ * 2. Otherwise generates the NotebookLM artifact using the user's Gemini API keys (or fallback synthesis),
+ *    preserving any quota/rate-limit errors so the caller can surface "Limit Reached! try again after {time}".
+ */
+async function generateSingleNotebookLMResource({ telegramUserId, chapter, resourceType, apiKeys, backendUrl }) {
+  // Simulate quota trigger for testing if requested via special header/query or env
+  if (process.env.FORCE_NOTEBOOKLM_QUOTA_LIMIT) {
+    const err = new Error(`Limit Reached! try again after ${process.env.FORCE_NOTEBOOKLM_QUOTA_LIMIT}`);
+    err.status = 429;
+    err.retryAfter = process.env.FORCE_NOTEBOOKLM_QUOTA_LIMIT;
+    throw err;
+  }
+
+  // Export saved NotebookLM storage_state.json if the user has one stored
+  let sessionFile = null;
+  try {
+    sessionFile = await exportStorageStateFile(telegramUserId);
+  } catch {}
+
+  // 1. Optional external notebooklm-py HTTP bridge (if configured and running)
+  const bridgeBase = (backendUrl || process.env.NOTEBOOKLM_BACKEND_URL || "").trim().replace(/\/+$/, "");
+  if (bridgeBase && /^https?:\/\//i.test(bridgeBase)) {
+    try {
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 8000);
+      const res = await fetch(`${bridgeBase}/api/notebooklm/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: ctl.signal,
+        body: JSON.stringify({
+          telegram_user_id: telegramUserId,
+          storage_state_path: sessionFile,
+          resource_type: resourceType,
+          chapter: {
+            id: chapter.id,
+            subject: chapter.subject,
+            exam: chapter.exam,
+            class: chapter.class,
+            number: chapter.number,
+            title: chapter.title,
+            note: chapter.note,
+            pdf_url: chapter.pdf_url,
+          },
+        }),
+      }).finally(() => clearTimeout(timer));
+
+      if (res.status === 429) {
+        const errBody = await res.json().catch(() => ({}));
+        const retryHeader = res.headers.get("retry-after");
+        const retryAfter =
+          errBody.retry_after ||
+          errBody.retryAfter ||
+          (retryHeader ? (/^\d+$/.test(retryHeader) ? formatWaitDuration(Number(retryHeader) * 1000) : retryHeader) : null) ||
+          extractQuotaRetryTime(errBody.error) ||
+          "15 minutes";
+        const err = new Error(`Limit Reached! try again after ${retryAfter}`);
+        err.status = 429;
+        err.retryAfter = retryAfter;
+        throw err;
+      }
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data && (data.content || data.sections || data.markdown)) {
+          return {
+            title: data.title || `${RESOURCE_META_BY_ID.get(resourceType)?.label || resourceType}: ${chapter.title}`,
+            summary: data.summary || "",
+            content: data.content || data,
+            resourceUrl: data.resource_url || data.notebook_url || chapter.pdf_url || null,
+          };
+        }
+      }
+    } catch (e) {
+      if (e.status === 429 || e.retryAfter) throw e;
+      // Bridge not running on localhost:8000 -> fall through to built-in Gemini NotebookLM synthesizer
+    }
+  }
+
+  // 2. Built-in NotebookLM artifact synthesis via Gemini API keys
+  const keys = [...new Set([].concat(apiKeys || [], GEMINI_API_KEY).filter(Boolean))];
+  if (keys.length) {
+    const prompt = buildResourcePrompt(chapter, resourceType);
+    let lastQuotaErr = null;
+    for (const key of keys) {
+      try {
+        const res = await getGenClient(key).models.generateContent({
+          model: GEMINI_MODEL,
+          contents: prompt,
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: RESOURCE_RESPONSE_SCHEMA,
+            temperature: 0.5,
+          },
+        });
+        const parsed = JSON.parse(res.text);
+        if (parsed && parsed.title && Array.isArray(parsed.sections)) {
+          return {
+            title: parsed.title,
+            summary: parsed.summary || "",
+            content: parsed,
+            resourceUrl: chapter.pdf_url || null,
+          };
+        }
+      } catch (e) {
+        const retryTime = extractQuotaRetryTime(e);
+        if (retryTime) {
+          lastQuotaErr = new Error(`Limit Reached! try again after ${retryTime}`);
+          lastQuotaErr.status = 429;
+          lastQuotaErr.retryAfter = retryTime;
+          continue; // try next fallback key if available
+        }
+        console.log(`Resource gen (${resourceType}): key ...${key.slice(-4)} failed (${e.message}); trying next`);
+      }
+    }
+    // If all keys failed due to quota/rate-limit, surface the quota error
+    if (lastQuotaErr) throw lastQuotaErr;
+  }
+
+  // 3. Deterministic structured fallback (when running offline or without live external API access)
+  const built = buildFallbackResourceContent(chapter, resourceType);
+  return {
+    title: built.title,
+    summary: built.summary,
+    content: built,
+    resourceUrl: chapter.pdf_url || null,
+  };
+}
+
+// GET /api/resources/chapters?telegramUserId=...
+export const resourcesChapters = safe(async (query = {}, ctx = {}) => {
+  const id = quizUserId(query.telegramUserId, ctx);
+  if (Number.isNaN(id)) return fail(400, "Missing or invalid Telegram user id");
+
+  const [rows, keys, profile] = await Promise.all([
+    getChaptersWithResources(id),
+    getUserKeys(id),
+    getUserProfile(id),
+  ]);
+
+  const hasNotebookLM =
+    Boolean(profile?.has_session) ||
+    ctx?.cookies?.sa_notebooklm_auth === "connected";
+
+  return ok({
+    telegram_user_id: id,
+    has_syllabus: rows.length > 0,
+    has_gemini_key: keys.length > 0 || Boolean(ctx?.cookies?.sa_gemini_key) || Boolean(GEMINI_API_KEY),
+    has_notebooklm_session: hasNotebookLM,
+    google_email: profile?.google_email || null,
+    resource_types: NOTEBOOKLM_RESOURCE_TYPES,
+    chapters: rows.map((c) => ({
+      id: c.id,
+      class: c.class,
+      subject: c.subject,
+      exam: c.exam,
+      number: c.number,
+      title: c.title,
+      note: c.note,
+      pdf_url: c.pdf_url,
+      matched: isMatched(c),
+      generated_resources: c.generated_resources || {},
+    })),
+  });
+});
+
+// GET /api/resources/item?telegramUserId=...&chapterId=...&resourceType=...
+export const resourceGet = safe(async (query = {}, ctx = {}) => {
+  const id = quizUserId(query.telegramUserId, ctx);
+  const chapterId = parseId(query.chapterId);
+  const resourceType = String(query.resourceType || "").trim().toLowerCase();
+  if (Number.isNaN(id) || Number.isNaN(chapterId) || !resourceType) {
+    return fail(400, "Missing telegramUserId, chapterId, or resourceType");
+  }
+  const item = await getChapterResource(id, chapterId, resourceType);
+  if (!item) return fail(404, "Resource not found or not yet generated");
+  return ok({ ok: true, resource: item });
+});
+
+// POST /api/resources/generate
+// Body: { telegramUserId, selections: [{ chapterId, resourceTypes: ["study_guide", ...] }], geminiKey?, notebooklmBackendUrl?, simulateQuotaAfter? }
+export const resourcesGenerate = safe(async (body = {}, ctx = {}) => {
+  const id = quizUserId(body.telegramUserId, ctx);
+  if (Number.isNaN(id)) return fail(400, "Missing or invalid Telegram user id");
+
+  const selections = Array.isArray(body.selections) ? body.selections : [];
+  if (!selections.length) return fail(400, "Select at least one chapter resource to generate.");
+
+  // Flatten and validate requested (chapterId, resourceType) pairs
+  const tasks = [];
+  for (const sel of selections) {
+    const chapterId = parseId(sel?.chapterId);
+    if (Number.isNaN(chapterId)) continue;
+    const types = Array.isArray(sel?.resourceTypes) ? sel.resourceTypes : [];
+    for (const rawType of types) {
+      const t = String(rawType || "").trim().toLowerCase();
+      if (EXCLUDED_RESOURCE_TYPES.has(t)) {
+        return fail(400, `Resource type "${rawType}" is not supported (Infographics and Report are excluded).`);
+      }
+      if (!VALID_RESOURCE_IDS.has(t)) {
+        return fail(400, `Unknown NotebookLM resource type: "${rawType}"`);
+      }
+      tasks.push({ chapterId, resourceType: t });
+    }
+  }
+
+  if (!tasks.length) {
+    return fail(400, "No valid NotebookLM resource types selected.");
+  }
+
+  const savedKeys = await getUserKeys(id);
+  const extraKeys = [body.geminiKey, ctx?.cookies?.sa_gemini_key].filter(
+    (k) => typeof k === "string" && k.length >= 20
+  );
+  const apiKeys = [...new Set([...savedKeys, ...extraKeys])];
+
+  const generated = [];
+  const skipped = [];
+
+  // Process sequentially and persist each resource immediately so partial completions are saved if quota expires mid-run
+  for (let i = 0; i < tasks.length; i++) {
+    const { chapterId, resourceType } = tasks[i];
+    const chapter = await getChapterForUser(id, chapterId);
+    if (!chapter) continue;
+
+    // Strict No-Regeneration Check: never regenerate an already-generated resource
+    const alreadyExists = await hasChapterResource(
+      id,
+      chapter.subject,
+      chapter.exam,
+      chapter.title,
+      resourceType
+    );
+    if (alreadyExists) {
+      const existing = await getChapterResource(id, chapterId, resourceType);
+      if (existing) skipped.push(existing);
+      continue;
+    }
+
+    // Optional test hook or rate-limit check
+    if (
+      typeof body.simulateQuotaAfter === "number" &&
+      generated.length >= body.simulateQuotaAfter
+    ) {
+      const retryTime = String(body.simulateRetryAfter || "15 minutes");
+      const msg = `Limit Reached! try again after ${retryTime}`;
+      return {
+        status: 429,
+        body: {
+          ok: false,
+          quota_exceeded: true,
+          retry_after: retryTime,
+          error: msg,
+          generated,
+          skipped,
+        },
+      };
+    }
+
+    const quotaCheck = checkUserNotebookLMQuota(id);
+    if (!quotaCheck.allowed) {
+      const msg = `Limit Reached! try again after ${quotaCheck.retryAfter}`;
+      return {
+        status: 429,
+        body: {
+          ok: false,
+          quota_exceeded: true,
+          retry_after: quotaCheck.retryAfter,
+          error: msg,
+          generated,
+          skipped,
+        },
+      };
+    }
+
+    try {
+      const built = await generateSingleNotebookLMResource({
+        telegramUserId: id,
+        chapter,
+        resourceType,
+        apiKeys,
+        backendUrl: body.notebooklmBackendUrl,
+      });
+
+      quotaCheck.recordHit();
+
+      const savedRow = await saveChapterResource({
+        telegramUserId: id,
+        chapterId: chapter.id,
+        subject: chapter.subject,
+        exam: chapter.exam,
+        chapterTitle: chapter.title,
+        resourceType,
+        title: built.title,
+        summary: built.summary,
+        content: built.content,
+        resourceUrl: built.resourceUrl,
+      });
+
+      generated.push({
+        id: savedRow.id,
+        chapter_id: chapter.id,
+        subject: chapter.subject,
+        exam: chapter.exam,
+        chapter_title: chapter.title,
+        resource_type: resourceType,
+        title: savedRow.title,
+        summary: savedRow.summary,
+        content: savedRow.content,
+        resource_url: savedRow.resource_url || null,
+        created_at: savedRow.created_at,
+      });
+    } catch (err) {
+      const retryTime = extractQuotaRetryTime(err);
+      if (retryTime) {
+        const msg = `Limit Reached! try again after ${retryTime}`;
+        return {
+          status: 429,
+          body: {
+            ok: false,
+            quota_exceeded: true,
+            retry_after: retryTime,
+            error: msg,
+            generated,
+            skipped,
+          },
+        };
+      }
+      return fail(502, `Failed to generate ${resourceType} for "${chapter.title}": ${err.message}`, {
+        generated,
+        skipped,
+      });
+    }
+  }
+
+  return ok({
+    ok: true,
+     quota_exceeded: false,
+    generated,
+    skipped,
+  });
 });

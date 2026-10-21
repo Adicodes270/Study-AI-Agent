@@ -5,7 +5,18 @@ import path from "node:path";
 import { ROOT } from "./config.js";
 import { cancelLogin, confirmLogin, getLoginStatus, remoteLoginEnabled, startLogin, startRemoteLogin, takeLoginEmail, takeLoginSession } from "./notebooklmLogin.js";
 import { initDb, withDb } from "./db.js";
-import { getPairing, quizChapters, quizGenerate, quizSubmit, sendWelcome, syllabusUpload, telegramBotInfo } from "./api.js";
+import {
+  getPairing,
+  quizChapters,
+  quizGenerate,
+  quizSubmit,
+  resourceGet,
+  resourcesChapters,
+  resourcesGenerate,
+  sendWelcome,
+  syllabusUpload,
+  telegramBotInfo,
+} from "./api.js";
 import { deleteUserKey, getUserKeys, getUserProfile, inspectStorageState, saveUserConfig } from "./intake/userKeys.js";
 
 const MIME_TYPES = {
@@ -29,6 +40,18 @@ function tgRateLimited(ip, max) {
   if (!rec || rec.minute !== minute) { tgHits.set(ip, { minute, n: 1 }); return false; }
   if (tgHits.size > 5000) tgHits.clear();
   return ++rec.n > max;
+}
+
+function parseCookies(req) {
+  const cookies = {};
+  for (const part of String(req.headers.cookie || "").split(";")) {
+    const i = part.indexOf("=");
+    if (i < 1) continue;
+    try {
+      cookies[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+    } catch {}
+  }
+  return cookies;
 }
 
 export function startWebServer(port = 3000) {
@@ -169,13 +192,7 @@ export function startWebServer(port = 3000) {
         res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
         res.end(JSON.stringify(body));
       };
-      const cookies = {};
-      for (const part of String(req.headers.cookie || "").split(";")) {
-        const i = part.indexOf("=");
-        if (i < 1) continue;
-        try { cookies[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim()); } catch {}
-      }
-      const ctx = { cookies };
+      const ctx = { cookies: parseCookies(req) };
       const route = url.pathname.replace(/\/+$/, "");
       if (req.method === "GET" && route === "/api/quizzes/chapters") {
         return quizChapters(Object.fromEntries(url.searchParams), ctx).then(send);
@@ -199,6 +216,42 @@ export function startWebServer(port = 3000) {
       return send({ status: 404, body: { error: "Not found" } });
     }
 
+    // NotebookLM Resources: GET /api/resources/chapters, GET /api/resources/item, POST /api/resources/generate
+    if (url.pathname.startsWith("/api/resources/")) {
+      const send = ({ status, body }) => {
+        res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.end(JSON.stringify(body));
+      };
+      const ctx = { cookies: parseCookies(req) };
+      const route = url.pathname.replace(/\/+$/, "");
+      if (req.method === "GET" && route === "/api/resources/chapters") {
+        return resourcesChapters(Object.fromEntries(url.searchParams), ctx).then(send);
+      }
+      if (req.method === "GET" && route === "/api/resources/item") {
+        return resourceGet(Object.fromEntries(url.searchParams), ctx).then(send);
+      }
+      if (req.method === "POST" && route === "/api/resources/generate") {
+        let raw = "";
+        let tooBig = false;
+        req.on("data", (c) => {
+          raw += c;
+          if (raw.length > 500_000) { tooBig = true; req.destroy(); }
+        });
+        req.on("end", () => {
+          if (tooBig) return send({ status: 413, body: { error: "Request payload too large" } });
+          let body;
+          try {
+            body = JSON.parse(raw || "{}");
+          } catch {
+            return send({ status: 400, body: { error: "Invalid JSON" } });
+          }
+          resourcesGenerate(body, ctx).then(send);
+        });
+        return;
+      }
+      return send({ status: 404, body: { error: "Not found" } });
+    }
+
     // POST /api/syllabus/upload: syllabus PDF (base64) or pasted text from the browser. Must come before the
     // GET /api/syllabus/:chatId handler below, which matches every path under /api/syllabus/.
     if (req.method === "POST" && url.pathname.replace(/\/+$/, "") === "/api/syllabus/upload") {
@@ -207,12 +260,7 @@ export function startWebServer(port = 3000) {
         res.end(JSON.stringify(body));
       };
       if (tgRateLimited(clientIp + "|su", 6)) return send({ status: 429, body: { error: "Too many uploads. Wait a minute." } });
-      const cookies = {};
-      for (const part of String(req.headers.cookie || "").split(";")) {
-        const i = part.indexOf("=");
-        if (i < 1) continue;
-        try { cookies[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim()); } catch {}
-      }
+      const cookies = parseCookies(req);
       const LIMIT = 28 * 1024 * 1024; // a 20 MB PDF is about 27 MB as base64
       const chunks = [];
       let size = 0;
