@@ -95,7 +95,7 @@ CREATE TABLE IF NOT EXISTS quiz_sessions (
     questions_json   TEXT NOT NULL,
     answers_json     TEXT NOT NULL DEFAULT '[]',
     current_index    INTEGER NOT NULL DEFAULT 0,
-    is_pending       BOOLEAN NOT NULL DEFAULT false,
+    is_pending       BOOLEAN NOT NULL DEFAULT true,
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -105,7 +105,7 @@ ALTER TABLE quiz_sessions
 ALTER TABLE quiz_sessions
     ADD COLUMN IF NOT EXISTS current_index INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE quiz_sessions
-    ADD COLUMN IF NOT EXISTS is_pending BOOLEAN NOT NULL DEFAULT false;
+    ADD COLUMN IF NOT EXISTS is_pending BOOLEAN NOT NULL DEFAULT true;
 ALTER TABLE quiz_sessions
     ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 
@@ -290,18 +290,21 @@ export async function getChaptersWithResults(telegramUserId) {
   // Retroactively split any "Social Science" or "Science" chapters into History/Civics/Geography/Economics & Physics/Chemistry/Biology
   await migrateUserChaptersToGranularSubjects(p, telegramUserId, chapters, results);
 
-  // Also load any saved Pending quiz sessions for this user
+  // Load ALL active, unsubmitted quiz sessions for this user (every unsubmitted session is pending)
   const { rows: pendingRows } = await p
     .query(
       `SELECT id, chapter_json, questions_json, answers_json, current_index, is_pending, updated_at
          FROM quiz_sessions
-        WHERE telegram_user_id = $1 AND is_pending = true
+        WHERE telegram_user_id = $1
         ORDER BY updated_at DESC`,
       [telegramUserId]
     )
     .catch(() => ({ rows: [] }));
 
   const pendingByKey = new Map();
+  const pendingById = new Map();
+  const pendingByTitle = new Map();
+
   for (const row of pendingRows) {
     try {
       const ch = JSON.parse(row.chapter_json || "{}");
@@ -309,21 +312,24 @@ export async function getChaptersWithResults(telegramUserId) {
       const answers = JSON.parse(row.answers_json || "[]");
       if (!ch?.title || !Array.isArray(questions) || !questions.length) continue;
       const k = JSON.stringify(chapterKey(ch));
-      if (!pendingByKey.has(k)) {
-        const normalizedAnswers = questions.map((_, idx) =>
-          typeof answers[idx] === "string" ? answers[idx] : ""
-        );
-        const answeredCount = normalizedAnswers.filter((a) => a.trim().length > 0).length;
-        pendingByKey.set(k, {
-          quizId: row.id,
-          currentIndex: Math.max(0, Math.min(questions.length - 1, Number(row.current_index) || 0)),
-          answers: normalizedAnswers,
-          answeredCount,
-          totalQuestions: questions.length,
-          questions: questions.map(({ subtopic, question }) => ({ subtopic, question })),
-          updatedAt: row.updated_at,
-        });
-      }
+      const normalizedAnswers = questions.map((_, idx) =>
+        typeof answers[idx] === "string" ? answers[idx] : ""
+      );
+      const answeredCount = normalizedAnswers.filter((a) => a.trim().length > 0).length;
+      const pendingObj = {
+        quizId: row.id,
+        currentIndex: Math.max(0, Math.min(questions.length - 1, Number(row.current_index) || 0)),
+        answers: normalizedAnswers,
+        answeredCount,
+        totalQuestions: questions.length,
+        questions: questions.map(({ subtopic, question }) => ({ subtopic, question })),
+        updatedAt: row.updated_at,
+      };
+
+      if (!pendingByKey.has(k)) pendingByKey.set(k, pendingObj);
+      if (ch.id != null && !pendingById.has(String(ch.id))) pendingById.set(String(ch.id), pendingObj);
+      const cleanTitle = String(ch.title).toLowerCase().trim();
+      if (!pendingByTitle.has(cleanTitle)) pendingByTitle.set(cleanTitle, pendingObj);
     } catch {}
   }
 
@@ -334,7 +340,13 @@ export async function getChaptersWithResults(telegramUserId) {
     const k = JSON.stringify(chapterKey(c));
     matchedKeys.add(k);
     const r = byKey.get(k);
-    const pendingQuiz = pendingByKey.get(k) || null;
+    const cleanTitle = String(c.title).toLowerCase().trim();
+    const pendingQuiz =
+      (c.id != null ? pendingById.get(String(c.id)) : null) ||
+      pendingByKey.get(k) ||
+      pendingByTitle.get(cleanTitle) ||
+      null;
+
     let weak = [];
     let review = [];
     try { weak = r ? JSON.parse(r.weak_subtopics_json) : []; } catch {}
@@ -366,6 +378,8 @@ export async function getChaptersWithResults(telegramUserId) {
     let review = [];
     try { weak = JSON.parse(r.weak_subtopics_json); } catch {}
     try { review = r.review_json ? JSON.parse(r.review_json) : []; } catch {}
+    const cleanTitle = String(r.chapter_title).toLowerCase().trim();
+    const pendingQuiz = pendingByKey.get(k) || pendingByTitle.get(cleanTitle) || null;
     syllabusList.push({
       id: `custom-${r.id}`,
       class: null,
@@ -377,7 +391,7 @@ export async function getChaptersWithResults(telegramUserId) {
       pdf_url: null,
       match_status: "custom",
       is_custom: true,
-      pending_quiz: pendingByKey.get(k) || null,
+      pending_quiz: pendingQuiz,
       result: {
         score: r.score,
         total: r.total,
@@ -516,10 +530,11 @@ export async function createQuizSession(id, telegramUserId, chapter, questions) 
     } catch {}
   }
 
+  // Set is_pending = true from the start so any unfinished quiz is recognized as Pending immediately
   await p.query(
     `INSERT INTO quiz_sessions
        (id, telegram_user_id, chapter_json, questions_json, answers_json, current_index, is_pending, updated_at)
-     VALUES ($1, $2, $3, $4, $5, 0, false, now())`,
+     VALUES ($1, $2, $3, $4, $5, 0, true, now())`,
     [
       id,
       telegramUserId,

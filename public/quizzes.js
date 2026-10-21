@@ -254,7 +254,10 @@
     if (!chapter) return null;
     try {
       const map = JSON.parse(localStorage.getItem(PENDING_QUIZZES_KEY) || '{}');
-      const entry = map[chapterStorageKey(chapter)] || null;
+      const chId = chapter.id != null ? String(chapter.id) : null;
+      const k = chapterStorageKey(chapter);
+      const rawTitle = String(chapter.title || '').toLowerCase().trim();
+      const entry = (chId && map[chId]) || map[k] || (rawTitle && map[rawTitle]) || null;
       if (entry && Array.isArray(entry.questions) && entry.questions.length > 0) {
         return entry;
       }
@@ -267,6 +270,8 @@
     try {
       const map = JSON.parse(localStorage.getItem(PENDING_QUIZZES_KEY) || '{}');
       const k = chapterStorageKey(quizState.chapter);
+      const chId = quizState.chapter.id != null ? String(quizState.chapter.id) : null;
+      const rawTitle = String(quizState.chapter.title || '').toLowerCase().trim();
       const normalizedAnswers = quizState.questions.map((_, i) =>
         typeof quizState.answers?.[i] === 'string' ? quizState.answers[i] : ''
       );
@@ -282,12 +287,17 @@
         totalQuestions: quizState.questions.length,
         updatedAt: new Date().toISOString(),
       };
-      map[k] = savedObj;
+      if (k) map[k] = savedObj;
+      if (chId) map[chId] = savedObj;
+      if (rawTitle) map[rawTitle] = savedObj;
       localStorage.setItem(PENDING_QUIZZES_KEY, JSON.stringify(map));
 
       // Also update in-memory chapter card immediately
       const chInList = chapters.find(
-        (c) => String(c.id) === String(quizState.chapter.id) || chapterStorageKey(c) === k
+        (c) =>
+          (chId && String(c.id) === chId) ||
+          chapterStorageKey(c) === k ||
+          String(c.title || '').toLowerCase().trim() === rawTitle
       );
       if (chInList) {
         chInList.pending_quiz = savedObj;
@@ -300,10 +310,17 @@
     try {
       const map = JSON.parse(localStorage.getItem(PENDING_QUIZZES_KEY) || '{}');
       const k = chapterStorageKey(chapter);
-      delete map[k];
+      const chId = chapter.id != null ? String(chapter.id) : null;
+      const rawTitle = String(chapter.title || '').toLowerCase().trim();
+      if (k) delete map[k];
+      if (chId) delete map[chId];
+      if (rawTitle) delete map[rawTitle];
       localStorage.setItem(PENDING_QUIZZES_KEY, JSON.stringify(map));
       const chInList = chapters.find(
-        (c) => String(c.id) === String(chapter.id) || chapterStorageKey(c) === k
+        (c) =>
+          (chId && String(c.id) === chId) ||
+          chapterStorageKey(c) === k ||
+          String(c.title || '').toLowerCase().trim() === rawTitle
       );
       if (chInList) {
         chInList.pending_quiz = null;
@@ -1100,7 +1117,7 @@
     let actionsHtml = '';
     if (pending) {
       actionsHtml = `
-        <button type="button" class="qz-ch-btn pending" data-action="pending" title="Resume your pending quiz from Question ${resumeIdx + 1} with all ${answeredCount} previous answer(s) saved in order">
+        <button type="button" class="qz-ch-btn pending" data-action="pending" style="display:inline-flex !important; visibility:visible !important; opacity:1 !important;" title="Resume your pending quiz from Question ${resumeIdx + 1} with all ${answeredCount} previous answer(s) saved in order">
           <i class="fa-solid fa-clock" aria-hidden="true"></i> Pending · Resume (Q${resumeIdx + 1}/${totalPendingQs})
         </button>
         ${
@@ -1533,6 +1550,23 @@
     }${ch.title}${quiz.attempt > 1 ? ` (Attempt #${quiz.attempt})` : ''}`;
     $('quiz-meta').textContent = `${quiz.questions.length} questions`;
     if (aiThinkingEl) aiThinkingEl.hidden = true;
+
+    // Explicitly guarantee Mark as Pending buttons are visible and active
+    const topPendingBtn = $('pending-quiz-btn');
+    const navPendingBtn = $('nav-pending-quiz-btn');
+    if (topPendingBtn) {
+      topPendingBtn.hidden = false;
+      topPendingBtn.style.display = 'inline-flex';
+      topPendingBtn.style.visibility = 'visible';
+      topPendingBtn.style.opacity = '1';
+    }
+    if (navPendingBtn) {
+      navPendingBtn.hidden = false;
+      navPendingBtn.style.display = 'inline-flex';
+      navPendingBtn.style.visibility = 'visible';
+      navPendingBtn.style.opacity = '1';
+    }
+
     show('view-quiz');
     scrollTo({ top: 0 });
     renderQuestion();
@@ -1705,17 +1739,19 @@
     }
   });
 
-  function pauseAndMarkQuizAsPending() {
+  async function pauseAndMarkQuizAsPending() {
     stopVoiceInput();
     if (quiz) {
       if (answerInput) quiz.answers[quiz.index] = answerInput.value;
+      saveLocalPendingQuiz(quiz);
       syncQuizProgressToServer(quiz, { immediate: true });
       quiz = null;
     }
-    backToChapters({ scroll: true });
+    await backToChapters({ scroll: true });
   }
 
   $('pending-quiz-btn')?.addEventListener('click', pauseAndMarkQuizAsPending);
+  $('nav-pending-quiz-btn')?.addEventListener('click', pauseAndMarkQuizAsPending);
   $('quit-btn')?.addEventListener('click', pauseAndMarkQuizAsPending);
 
   addEventListener('beforeunload', () => {
