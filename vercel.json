@@ -1,6 +1,6 @@
 {
   "cleanUrls": true,
   "rewrites": [
-    { "source": "/api/:path*", "destination": "https://study-ai-agent-production-4722.up.railway.app/api/:path*" }
+    { "source": "/api/:path*", "destination": "https://study-ai-agent.up.railway.app/api/:path*" }
   ]
 }
