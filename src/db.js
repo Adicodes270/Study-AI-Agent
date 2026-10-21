@@ -80,6 +80,17 @@ CREATE TABLE IF NOT EXISTS pairings (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- A quiz that has been generated but not yet submitted. Kept in the database (not in server memory)
+-- so it survives restarts, redeploys and running more than one server instance. The answer key
+-- lives in questions_json and never leaves the server until the quiz is submitted.
+CREATE TABLE IF NOT EXISTS quiz_sessions (
+    id               TEXT PRIMARY KEY,
+    telegram_user_id BIGINT NOT NULL,
+    chapter_json     TEXT NOT NULL,
+    questions_json   TEXT NOT NULL,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Latest quiz result per student per chapter.
 -- Not a foreign key to syllabus_chapters on purpose: saveSyllabus() deletes and re-inserts a
 -- subject's rows whenever the syllabus changes, which would orphan (or cascade-delete) results.
@@ -202,24 +213,69 @@ export async function getChapterForUser(telegramUserId, chapterId) {
   return rows[0] || null;
 }
 
-/** Insert or overwrite this student's latest result for a chapter; attempts counts every submit. */
-export async function upsertQuizResult(r) {
+/**
+ * Save this student's latest result for a chapter; `attempts` counts every submit.
+ * UPDATE-then-INSERT (not ON CONFLICT <columns>) so it also works on a database where the table was
+ * created without its unique constraint. `db` may be a transaction client from withDb().
+ */
+export async function upsertQuizResult(r, db = null) {
   await initDb();
-  const { rows } = await getPool().query(
-    `INSERT INTO chapter_quiz_results
-       (telegram_user_id, chapter_id, subject, exam, chapter_title, score, total, percentage,
-        revision_tier, revision_message, weak_subtopics_json)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-     ON CONFLICT (telegram_user_id, subject, exam, chapter_title) DO UPDATE SET
-        chapter_id = EXCLUDED.chapter_id, score = EXCLUDED.score, total = EXCLUDED.total,
-        percentage = EXCLUDED.percentage, revision_tier = EXCLUDED.revision_tier,
-        revision_message = EXCLUDED.revision_message, weak_subtopics_json = EXCLUDED.weak_subtopics_json,
-        attempts = chapter_quiz_results.attempts + 1, updated_at = now()
-     RETURNING attempts, updated_at`,
-    [r.telegramUserId, r.chapterId, r.subject, r.exam || "", r.title, r.score, r.total, r.percentage,
-     r.tier, r.message, JSON.stringify(r.weakSubtopics || [])]
-  );
+  const q = db || getPool();
+  const key = [r.telegramUserId, r.subject, r.exam || "", r.title];
+  const vals = [r.chapterId, r.score, r.total, r.percentage, r.tier, r.message, JSON.stringify(r.weakSubtopics || [])];
+  const update = () =>
+    q.query(
+      `UPDATE chapter_quiz_results SET chapter_id=$5, score=$6, total=$7, percentage=$8, revision_tier=$9,
+              revision_message=$10, weak_subtopics_json=$11, attempts = attempts + 1, updated_at = now()
+        WHERE telegram_user_id=$1 AND subject=$2 AND exam=$3 AND chapter_title=$4
+        RETURNING attempts, updated_at`,
+      [...key, ...vals]
+    );
+  let { rows } = await update();
+  if (!rows.length) {
+    // DO NOTHING (no conflict target) swallows a race with a parallel submit without aborting a transaction
+    ({ rows } = await q.query(
+      `INSERT INTO chapter_quiz_results
+         (telegram_user_id, subject, exam, chapter_title, chapter_id, score, total, percentage,
+          revision_tier, revision_message, weak_subtopics_json)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       ON CONFLICT DO NOTHING
+       RETURNING attempts, updated_at`,
+      [...key, ...vals]
+    ));
+    if (!rows.length) ({ rows } = await update());
+  }
   return rows[0];
+}
+
+const QUIZ_SESSION_TTL = "3 hours";
+
+/** Store a generated quiz (with its answer key) and return its id. */
+export async function createQuizSession(id, telegramUserId, chapter, questions) {
+  await initDb();
+  const p = getPool();
+  await p.query(
+    "INSERT INTO quiz_sessions (id, telegram_user_id, chapter_json, questions_json) VALUES ($1,$2,$3,$4)",
+    [id, telegramUserId, JSON.stringify(chapter), JSON.stringify(questions)]
+  );
+  // keep the table tidy: forget quizzes nobody finished
+  await p.query(`DELETE FROM quiz_sessions WHERE created_at < now() - interval '${QUIZ_SESSION_TTL}'`).catch(() => {});
+}
+
+/**
+ * Take a quiz session inside a transaction: deleting it makes a second submit of the same quiz
+ * fail, and if saving the result later throws, the rollback puts the session back so the student can retry.
+ * Returns { chapter, questions } or null (unknown, someone else's, or older than 3 hours).
+ */
+export async function takeQuizSession(db, id, telegramUserId) {
+  const { rows } = await db.query(
+    `DELETE FROM quiz_sessions WHERE id = $1 AND telegram_user_id = $2
+        AND created_at > now() - interval '${QUIZ_SESSION_TTL}'
+     RETURNING chapter_json, questions_json`,
+    [id, telegramUserId]
+  );
+  if (!rows.length) return null;
+  return { chapter: JSON.parse(rows[0].chapter_json), questions: JSON.parse(rows[0].questions_json) };
 }
 
 /** Remember who sent "/start <code>" so the setup page can pick it up (see GET /api/telegram/pairing/:code). */

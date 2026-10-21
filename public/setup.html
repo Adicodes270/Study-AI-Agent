@@ -288,13 +288,13 @@
                     <!-- Detected / Manual Fallback Input Row -->
                     <div class="field-group compact">
                         <label for="telegram-chat-id" class="field-label">
-                            <span>Your Telegram Chat ID <small>(auto-filled when you message the bot, or enter manually)</small></span>
+                            <span>Your Telegram Chat ID <small>(filled in automatically when you send the pairing code to the bot)</small></span>
                         </label>
                         <div class="input-action-row">
                             <div class="input-wrapper">
                                 <i class="fa-solid fa-hashtag input-prefix-icon"></i>
                                 <input type="text" id="telegram-chat-id" class="setup-input mono"
-                                    placeholder="Auto-detected when you message our bot..." inputmode="numeric">
+                                    placeholder="Auto-detected when you message our bot..." inputmode="numeric" readonly aria-readonly="true">
                             </div>
                             <button type="button" class="btn btn-ghost btn-sm" id="send-telegram-test-btn">
                                 <i class="fa-regular fa-paper-plane"></i>

@@ -53,8 +53,17 @@
   const tone = (pct) => (pct >= 80 ? 'good' : pct >= 50 ? 'mid' : 'bad');
   const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
-  async function api(path, opts) {
-    const res = await fetch(path, { credentials: 'same-origin', ...opts });
+  async function api(path, opts, timeoutMs = 60000) {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), timeoutMs);
+    let res;
+    try {
+      res = await fetch(path, { credentials: 'same-origin', signal: ctl.signal, ...opts });
+    } catch (e) {
+      throw new Error(e.name === 'AbortError' ? 'The server took too long to answer. Please try again.' : `Couldn't reach the server (${e.message}). Check your connection and try again.`);
+    } finally {
+      clearTimeout(timer);
+    }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       const e = new Error(data.error || `Request failed (${res.status})`);
@@ -289,6 +298,7 @@
     const { questions, index, answers } = quiz;
     const q = questions[index];
     const last = index === questions.length - 1;
+    quizError('');
     $('quiz-qcount').textContent = `Question ${index + 1} of ${questions.length}`;
     $('quiz-progress-bar').style.width = `${(index / questions.length) * 100}%`;
     $('quiz-subtopic').textContent = q.subtopic;
@@ -336,20 +346,47 @@
     if (i >= 0 && e.key.length === 1) $('quiz-options').children[i]?.click();
   });
 
+  function quizError(msg) {
+    const el = $('quiz-error');
+    el.textContent = msg || '';
+    el.hidden = !msg;
+    if (msg) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
+  let submitting = false;
   async function submitQuiz() {
-    $('next-btn').disabled = true;
-    $('loading-text').textContent = 'Saving your result…';
-    show('view-loading');
+    if (submitting || !quiz) return;
+    submitting = true;
+    quizError('');
+    const next = $('next-btn');
+    next.disabled = true;
+    next.textContent = 'Saving…';
+    let result;
     try {
-      const r = await postJson('/api/quizzes/submit', { telegramUserId: userId, quizId: quiz.quizId, answers: quiz.answers });
-      quiz = null;
-      showDone(r);
+      result = await postJson('/api/quizzes/submit', { telegramUserId: userId, quizId: quiz.quizId, answers: quiz.answers }, 30000);
     } catch (e) {
-      // The quiz is still in memory: let the student retry the submit unless the server says it expired
-      show('view-quiz');
-      $('next-btn').disabled = false;
-      if (e.status === 410) { quiz = null; backToChapters({ scroll: false }); }
-      banner(e.message);
+      submitting = false;
+      // Stay on the last question with the answers intact so Finish can simply be pressed again
+      next.disabled = false;
+      next.innerHTML = 'Try again <i class="fa-solid fa-rotate-right" aria-hidden="true"></i>';
+      if (e.status === 410) {
+        quiz = null;
+        backToChapters({ scroll: false });
+        banner(e.message);
+        return;
+      }
+      quizError(`Couldn't save your result: ${e.message}`);
+      return;
+    }
+    submitting = false;
+    quiz = null;
+    try {
+      showDone(result);
+    } catch (e) {
+      // The result IS saved; if drawing the summary fails, don't leave the student stuck
+      console.error(e);
+      banner(`Saved: ${result.score}/${result.total} (${result.percentage}%).`);
+      backToChapters({ scroll: true });
     }
   }
 

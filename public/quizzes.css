@@ -232,3 +232,9 @@ html.light {
 @media (prefers-reduced-motion: reduce) {
   .qz-chapter, .qz-opt, .qz-pop, .qz-pulse, .qz-spinner, .qz-chapter.flash { animation: none; transition: none; }
 }
+
+.qz-inline-error {
+  margin-top: 1.2rem; padding: 0.75rem 1rem; border-radius: 12px; font-size: 0.9rem; line-height: 1.45;
+  background: var(--accent-danger-soft); border: 1px solid var(--accent-danger); color: var(--text-primary);
+}
+.qz-inline-error button { all: unset; cursor: pointer; text-decoration: underline; margin-left: 0.4rem; font-weight: 700; }

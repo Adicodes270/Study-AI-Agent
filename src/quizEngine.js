@@ -1,5 +1,5 @@
 // src/quizEngine.js
-// Question-count heuristic, Gemini quiz generation, grading rules and in-memory quiz sessions.
+// Question-count heuristic, Gemini quiz generation and grading rules. (Quiz sessions are stored in the database, see db.js.)
 import crypto from "node:crypto";
 import { GoogleGenAI, Type } from "@google/genai";
 import { GEMINI_API_KEY, GEMINI_MODEL } from "./config.js";
@@ -172,37 +172,6 @@ export async function generateQuiz(chapter, apiKeys) {
   err.status = 502;
   throw err;
 }
-
-// ---------------------------------------------------------------------------
-// Quiz sessions. The answer key stays on the server so the score can't be faked from the
-// browser: the client sends back only the option index picked for each question.
-// In-memory is fine for the single long-running server (Railway / localhost); a restart simply
-// makes an unfinished quiz expire ("start it again").
-// ---------------------------------------------------------------------------
-const SESSION_TTL_MS = 3 * 60 * 60 * 1000;
-const MAX_SESSIONS = 2000;
-const sessions = new Map();
-
-function sweep() {
-  const now = Date.now();
-  for (const [id, s] of sessions) if (s.expires < now) sessions.delete(id);
-  while (sessions.size > MAX_SESSIONS) sessions.delete(sessions.keys().next().value);
-}
-
-export function createSession(telegramUserId, chapter, questions) {
-  sweep();
-  const id = crypto.randomUUID();
-  sessions.set(id, { telegramUserId, chapter, questions, expires: Date.now() + SESSION_TTL_MS });
-  return id;
-}
-
-export function takeSession(id, telegramUserId) {
-  const s = sessions.get(id);
-  if (!s || s.expires < Date.now() || s.telegramUserId !== telegramUserId) return null;
-  return s;
-}
-
-export const endSession = (id) => sessions.delete(id);
 
 /** Grade answers (array of option indexes, null/-1 for skipped). */
 export function grade(questions, answers) {

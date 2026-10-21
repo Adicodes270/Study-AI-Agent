@@ -443,14 +443,7 @@
     copyText(`/start ${state.telegram.pairingCode}`, 'Copied pairing command!');
   });
 
-  chatIdInput?.addEventListener('input', (e) => {
-    state.telegram.chatId = e.target.value.trim();
-    state.telegram.userId = state.telegram.chatId;
-    state.telegram.verified = Boolean(state.telegram.chatId);
-    state.telegram.updatedAt = new Date().toISOString();
-    saveState(true);
-    syncTelegramInputsFromState();
-  });
+  // The Chat ID field is read-only: it is only ever filled in by the pairing flow below
 
   function stopTelegramPolling() {
     if (telegramPollTimer) {
@@ -542,7 +535,7 @@
   $id('send-telegram-test-btn')?.addEventListener('click', async () => {
     const chatId = (state.telegram.chatId || '').trim();
     if (!chatId) {
-      showToast('Click "Auto-Detect My Chat ID" or enter your Chat ID first', 'fa-solid fa-triangle-exclamation');
+      showToast('Click "Auto-Detect My Chat ID" and send the pairing code to the bot first', 'fa-solid fa-triangle-exclamation');
       return;
     }
     const btn = $id('send-telegram-test-btn');

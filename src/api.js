@@ -3,8 +3,9 @@
 // Used by the Vercel functions in /api and by the local server (src/webServer.js).
 import { Api } from "grammy";
 import { TELEGRAM_BOT_TOKEN } from "./config.js";
-import { getChapterForUser, getChaptersWithResults, initDb, upsertQuizResult, withDb } from "./db.js";
-import { createSession, endSession, generateQuiz, grade, takeSession } from "./quizEngine.js";
+import { createQuizSession, getChapterForUser, getChaptersWithResults, initDb, takeQuizSession, upsertQuizResult, withDb } from "./db.js";
+import { generateQuiz, grade } from "./quizEngine.js";
+import crypto from "node:crypto";
 import { deleteUserKey, getUserKeys, getUserProfile, saveUserConfig } from "./intake/userKeys.js";
 
 const parseId = (v) => (/^\d+$/.test(String(v ?? "")) ? Number(v) : NaN);
@@ -18,7 +19,7 @@ export function safe(fn) {
       await initDb();
       return await fn(...args);
     } catch (e) {
-      console.log(`API error: ${e.message}`);
+      console.log(`API error: ${e.message}${e.code ? ` [${e.code}]` : ""}`);
       return fail(500, e.message);
     }
   };
@@ -188,7 +189,8 @@ export const quizGenerate = safe(async (body = {}, ctx = {}) => {
   } catch (e) {
     return fail(e.status || 502, e.message);
   }
-  const quizId = createSession(id, chapter, quiz.questions);
+  const quizId = crypto.randomUUID();
+  await createQuizSession(quizId, id, chapter, quiz.questions);
   return ok({
     quizId,
     chapter: { id: chapter.id, subject: chapter.subject, exam: chapter.exam, number: chapter.number, title: chapter.title },
@@ -201,18 +203,24 @@ export const quizGenerate = safe(async (body = {}, ctx = {}) => {
 export const quizSubmit = safe(async (body = {}, ctx = {}) => {
   const id = quizUserId(body.telegramUserId, ctx);
   if (Number.isNaN(id)) return fail(400, "Missing or invalid Telegram user id");
-  const session = takeSession(String(body.quizId || ""), id);
-  if (!session) return fail(410, "This quiz expired or was already submitted. Start it again from your chapters.");
   if (!Array.isArray(body.answers)) return fail(400, "answers must be an array");
 
-  const g = grade(session.questions, body.answers);
-  const ch = session.chapter;
-  endSession(String(body.quizId));
-  const saved = await upsertQuizResult({
-    telegramUserId: id, chapterId: ch.id, subject: ch.subject, exam: ch.exam, title: ch.title,
-    score: g.score, total: g.total, percentage: g.percentage, tier: g.tier, message: g.message,
-    weakSubtopics: g.weakSubtopics,
+  // One transaction: take the quiz out of the table, grade it and save the result. If saving throws,
+  // the rollback restores the quiz, so the student can press Finish again.
+  const out = await withDb(async (db) => {
+    const session = await takeQuizSession(db, String(body.quizId || ""), id);
+    if (!session) return null;
+    const g = grade(session.questions, body.answers);
+    const ch = session.chapter;
+    const saved = await upsertQuizResult({
+      telegramUserId: id, chapterId: ch.id, subject: ch.subject, exam: ch.exam, title: ch.title,
+      score: g.score, total: g.total, percentage: g.percentage, tier: g.tier, message: g.message,
+      weakSubtopics: g.weakSubtopics,
+    }, db);
+    return { g, ch, saved };
   });
+  if (!out) return fail(410, "This quiz expired or was already submitted. Start it again from your chapters.");
+  const { g, ch, saved } = out;
   return ok({
     score: g.score, total: g.total, percentage: g.percentage,
     revision_tier: g.tier, revision_message: g.message, weak_subtopics: g.weakSubtopics,
