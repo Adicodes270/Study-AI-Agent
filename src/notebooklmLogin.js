@@ -11,16 +11,26 @@ import net from "node:net";
 import { spawn } from "node:child_process";
 import { inspectStorageState } from "./intake/userKeys.js";
 import {
-  BROWSERBASE_API_KEY, BROWSERBASE_PROJECT_ID, BROWSERBASE_PROXIES, BROWSERBASE_REGION, BROWSERBASE_MAX_SESSIONS,
+  BROWSERBASE_API_KEY, BROWSERBASE_PROJECT_ID, BROWSERBASE_API_KEY_BACKUP, BROWSERBASE_PROJECT_ID_BACKUP, BROWSERBASE_PROXIES, BROWSERBASE_REGION, BROWSERBASE_MAX_SESSIONS,
 } from "./config.js";
 
 const NOTEBOOKLM_URL = "https://notebooklm.google.com/";
-const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
+const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;            // Chrome on the user's own computer: no cost, be patient
+const REMOTE_LOGIN_TIMEOUT_MS = 2 * 60 * 1000;      // Browserbase cloud session: billed by the minute, so expire fast
+const AUTH_SETTLE_MS = 10_000;                      // signed-in cookies this long = done, even if Google sits on a prompt page
+const expiredMessage = (ms) => `Session expired. Sign-in took longer than ${Math.round(ms / 60000)} minute${ms >= 120000 ? "s" : ""}. Press Sign in to start again.`;
 const sessions = new Map(); // loginId -> { status, state, error, at }
 
 export function getLoginStatus(loginId) {
   const s = sessions.get(loginId);
   return s ? { status: s.status, error: s.error || null, email: s.status === "done" ? s.email || null : null } : { status: "none" };
+}
+
+/** The user left the page / pressed cancel: stop waiting so the (billed) cloud session is released now. */
+export function cancelLogin(loginId) {
+  const s = sessions.get(loginId);
+  if (s && s.status === "waiting") { Object.assign(s, { status: "error", error: "Sign-in cancelled" }); return true; }
+  return false;
 }
 
 /** User pressed "I've signed in - Confirm": capture as soon as a Google sign-in cookie exists. */
@@ -176,7 +186,7 @@ async function loadPlaywright() {
  * Watches a browser (local Chrome or a Browserbase cloud Chrome) until the user is signed in to Google,
  * then stores the captured session in `entry` and closes the browser through close().
  */
-function watchLogin({ entry, browser, close, proc = null, hostIs, url, cookieDomain, cookieNames }) {
+function watchLogin({ entry, browser, close, proc = null, hostIs, url, cookieDomain, cookieNames, timeoutMs = LOGIN_TIMEOUT_MS }) {
   (async () => {
     let closedByUs = false;
     const windowClosed = () => {
@@ -194,8 +204,9 @@ function watchLogin({ entry, browser, close, proc = null, hostIs, url, cookieDom
         try { return context.pages().map((p) => { try { return new URL(p.url()).hostname; } catch { return ""; } }); }
         catch { return null; }
       };
-      const deadline = Date.now() + LOGIN_TIMEOUT_MS;
+      const deadline = Date.now() + timeoutMs;
       let tick = 0;
+      let authSince = 0; // when we first saw signed-in cookies
       while (entry.status === "waiting" && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 1000));
         const hosts = hostsOf();
@@ -208,13 +219,16 @@ function watchLogin({ entry, browser, close, proc = null, hostIs, url, cookieDom
         const onApp = hosts.includes(hostIs);
         const stillSigningIn = hosts.includes("accounts.google.com");
         // Done when signed in AND (we reached the app, OR the sign-in pages are gone, OR the user pressed Confirm)
+        if (!hasAuth) authSince = 0;
+        else if (!authSince) authSince = Date.now();
         if (!hasAuth) {
           if (entry.confirm) {
             Object.assign(entry, { status: "error", error: "No Google sign-in found in that window yet. Finish signing in, then press Confirm again" });
           }
           continue;
         }
-        if (!(onApp || !stillSigningIn || entry.confirm)) continue;
+        const settled = authSince && Date.now() - authSince >= AUTH_SETTLE_MS;
+        if (!(onApp || !stillSigningIn || entry.confirm || settled)) continue;
         await new Promise((r) => setTimeout(r, 2500)); // let Google finish setting cookies
         let email = null;
         try { email = await detectAccountEmail(context, hostIs, url); } catch {}
@@ -223,7 +237,10 @@ function watchLogin({ entry, browser, close, proc = null, hostIs, url, cookieDom
         inspectStorageState(state, cookieDomain);
         Object.assign(entry, { status: "done", state, email, at: Date.now() });
       }
-      if (entry.status === "waiting") Object.assign(entry, { status: "error", error: "Login timed out" });
+      if (entry.status === "waiting") {
+        const expired = Date.now() >= deadline;
+        Object.assign(entry, { status: "error", expired, error: expired ? expiredMessage(timeoutMs) : "The sign-in window closed before sign-in finished" });
+      }
     } catch (e) {
       if (entry.status === "waiting") Object.assign(entry, { status: "error", error: e.message });
     } finally {
@@ -279,12 +296,19 @@ export async function startLogin(opts = {}) {
 const BB_API = "https://api.browserbase.com/v1";
 let activeRemote = 0;
 
-export const remoteLoginEnabled = () => Boolean(BROWSERBASE_API_KEY && BROWSERBASE_PROJECT_ID);
+// Primary account first, backup second. An account needs both its key and its project id.
+const bbAccounts = () => [
+  { name: "primary", key: BROWSERBASE_API_KEY, project: BROWSERBASE_PROJECT_ID },
+  { name: "backup", key: BROWSERBASE_API_KEY_BACKUP, project: BROWSERBASE_PROJECT_ID_BACKUP },
+].filter((a) => a.key && a.project);
 
-async function bb(pathname, body) {
+export const remoteLoginEnabled = () => bbAccounts().length > 0;
+
+// Every call for a session must use the account that created it
+async function bb(acct, pathname, body) {
   const r = await fetch(BB_API + pathname, {
     method: body ? "POST" : "GET",
-    headers: { "Content-Type": "application/json", "X-BB-API-Key": BROWSERBASE_API_KEY },
+    headers: { "Content-Type": "application/json", "X-BB-API-Key": acct.key },
     body: body ? JSON.stringify(body) : undefined,
   });
   const text = await r.text();
@@ -298,70 +322,83 @@ async function bb(pathname, body) {
   return data;
 }
 
-const createBbSession = (proxies) =>
-  bb("/sessions", {
-    projectId: BROWSERBASE_PROJECT_ID,
-    timeout: Math.ceil(LOGIN_TIMEOUT_MS / 1000) + 60, // seconds; the cloud browser dies on its own if we crash
+const createBbSession = (acct, proxies) =>
+  bb(acct, "/sessions", {
+    projectId: acct.project,
+    timeout: Math.ceil(REMOTE_LOGIN_TIMEOUT_MS / 1000) + 30, // seconds; backstop so the cloud browser dies on its own if we crash
     // Small viewport so the live view is scaled UP inside the page frame (bigger, readable text)
     browserSettings: { viewport: { width: 800, height: 600 } },
     ...(proxies ? { proxies: true } : {}),
     ...(BROWSERBASE_REGION ? { region: BROWSERBASE_REGION } : {}),
   });
 
-const releaseBbSession = (id) =>
-  bb(`/sessions/${id}`, { projectId: BROWSERBASE_PROJECT_ID, status: "REQUEST_RELEASE" }).catch(() => {});
+const releaseBbSession = (acct, id) =>
+  bb(acct, `/sessions/${id}`, { projectId: acct.project, status: "REQUEST_RELEASE" })
+    .then(() => console.log(`[notebooklm login] released Browserbase session ${id} (${acct.name} account)`))
+    .catch((e) => console.log(`[notebooklm login] FAILED to release Browserbase session ${id} (${acct.name} account): ${e.message} (it will stop at its own timeout)`));
 
 /**
  * Start a login in a Browserbase cloud Chrome. Returns { loginId, liveViewUrl }:
  * show liveViewUrl in an iframe, then poll getLoginStatus(loginId) like the local flow.
  */
 export async function startRemoteLogin(opts = {}) {
-  if (!remoteLoginEnabled()) throw new Error("Cloud sign-in is not configured (BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID)");
+  if (!remoteLoginEnabled()) throw new Error("Cloud sign-in is not configured (BROWSERBASE_API_KEY and BROWSERBASE_PROJECT_ID)");
   if (activeRemote >= BROWSERBASE_MAX_SESSIONS) throw new Error("Sign-in is busy right now. Please try again in a few minutes");
   const { url, hostIs, cookieDomain, cookieNames } = { ...LOGIN_DEFAULTS, ...opts };
   const chromium = await loadPlaywright();
 
   activeRemote++;
-  let session = null, browser = null, liveViewUrl = null;
-  try {
+  let session = null, browser = null, liveViewUrl = null, acct = null, lastErr = null;
+  // Try the primary account, then the backup account if the primary can't give us a working cloud browser
+  for (const candidate of bbAccounts()) {
+    session = null; browser = null;
     try {
-      session = await createBbSession(BROWSERBASE_PROXIES);
+      try {
+        session = await createBbSession(candidate, BROWSERBASE_PROXIES);
+      } catch (e) {
+        // Proxies need a paid plan: fall back to a plain session instead of failing
+        if (BROWSERBASE_PROXIES && [400, 402, 403].includes(e.status)) {
+          console.log(`[notebooklm login] Browserbase (${candidate.name}) refused proxies (${e.message}); retrying without`);
+          session = await createBbSession(candidate, false);
+        } else throw e;
+      }
+      const dbg = await bb(candidate, `/sessions/${session.id}/debug`);
+      const live = new URL(dbg.debuggerFullscreenUrl || dbg.debuggerUrl);
+      live.searchParams.set("navbar", "false");
+      liveViewUrl = live.toString();
+      browser = await chromium.connectOverCDP(session.connectUrl);
+      const context = browser.contexts()[0] || (await browser.newContext());
+      // Enlarge page text on every page of the cloud browser so the login form is easy to read
+      await context.addInitScript(() => {
+        const zoom = () => { if (document.documentElement) document.documentElement.style.zoom = "1.25"; };
+        zoom(); document.addEventListener("DOMContentLoaded", zoom);
+      }).catch(() => {});
+      const page = context.pages()[0] || (await context.newPage());
+      page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
+      acct = candidate;
+      break;
     } catch (e) {
-      // Proxies need a paid plan: fall back to a plain session instead of failing
-      if (BROWSERBASE_PROXIES && [400, 402, 403].includes(e.status)) {
-        console.log(`[notebooklm login] Browserbase refused proxies (${e.message}); retrying without`);
-        session = await createBbSession(false);
-      } else throw e;
+      lastErr = e;
+      console.log(`[notebooklm login] Browserbase ${candidate.name} account failed: ${e.message}`);
+      try { await browser?.close(); } catch {}
+      if (session) await releaseBbSession(candidate, session.id);
     }
-    const dbg = await bb(`/sessions/${session.id}/debug`);
-    const live = new URL(dbg.debuggerFullscreenUrl || dbg.debuggerUrl);
-    live.searchParams.set("navbar", "false");
-    liveViewUrl = live.toString();
-    browser = await chromium.connectOverCDP(session.connectUrl);
-    const context = browser.contexts()[0] || (await browser.newContext());
-    // Enlarge page text on every page of the cloud browser so the login form is easy to read
-    await context.addInitScript(() => {
-      const zoom = () => { if (document.documentElement) document.documentElement.style.zoom = "1.25"; };
-      zoom(); document.addEventListener("DOMContentLoaded", zoom);
-    }).catch(() => {});
-    const page = context.pages()[0] || (await context.newPage());
-    page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
-  } catch (e) {
-    try { await browser?.close(); } catch {}
-    if (session) await releaseBbSession(session.id);
-    activeRemote--;
-    throw new Error(`Could not start the cloud browser: ${e.message}`);
   }
+  if (!acct) {
+    activeRemote--;
+    throw new Error(`Could not start the cloud browser: ${lastErr?.message || "no Browserbase account worked"}`);
+  }
+  if (acct.name === "backup") console.log("[notebooklm login] using the BACKUP Browserbase account");
 
   const loginId = crypto.randomBytes(18).toString("base64url");
   const entry = { status: "waiting", at: Date.now() };
   sessions.set(loginId, entry);
 
   watchLogin({
-    entry, browser, hostIs, url, cookieDomain, cookieNames,
+    entry, browser, hostIs, url, cookieDomain, cookieNames, timeoutMs: REMOTE_LOGIN_TIMEOUT_MS,
     close: async () => {
       try { await browser.close(); } catch {}
-      await releaseBbSession(session.id);
+      await releaseBbSession(acct, session.id);
       activeRemote--;
       setTimeout(() => sessions.delete(loginId), 60 * 60 * 1000).unref();
     },

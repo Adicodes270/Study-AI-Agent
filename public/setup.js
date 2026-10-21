@@ -149,6 +149,7 @@
   let state = loadState();
   let telegramPollTimer = null;
   let nlmPollTimer = null;
+  let activeLoginId = null; // cloud sign-in in progress; cancelled if the page is closed so it stops billing
   let nlmPopupWin = null;
   let nlmPopupMonitor = null;
   let currentInspectorFormat = 'json';
@@ -694,6 +695,7 @@
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
       loginId = data.login_id;
+      activeLoginId = loginId;
       showLiveView(data.live_view_url || null);
     } catch (e) {
       showToast(e.message.startsWith('Failed') ? 'Could not reach the Study Agent server' : e.message, 'fa-solid fa-circle-exclamation');
@@ -722,6 +724,7 @@
         if (finished) return;
         if (r.status === 'done') {
           finished = true;
+          activeLoginId = null;
           showLiveView(null);
           pendingLoginId = loginId;
           // Use the email of the Google account that just signed in; ask for it only if it couldn't be read
@@ -733,6 +736,7 @@
         }
         if (r.status === 'error' || r.status === 'none') {
           finished = true;
+          activeLoginId = null;
           showLiveView(null);
           if (nlmMode === 'remote') $id('nlm-upload-panel')?.removeAttribute('hidden'); // offer the file upload as a way out
           stopNlmTimers();
@@ -753,6 +757,11 @@
         syncNotebookLMUI();
       }
     }, 1000);
+  });
+
+  // Leaving the page mid sign-in: tell the server so the cloud browser is released right away
+  addEventListener('pagehide', () => {
+    if (activeLoginId) navigator.sendBeacon(`/api/notebooklm/login/${activeLoginId}/cancel`);
   });
 
   // Show the right sign-in UI for this server (cloud browser / local Chrome / file upload)

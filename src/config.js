@@ -21,6 +21,10 @@ export const DEFAULT_CLASS_LEVEL = /^\d+$/.test(_class) ? parseInt(_class, 10) :
 // Leave the key empty to keep the old "open Chrome on this computer" sign-in for localhost.
 export const BROWSERBASE_API_KEY = (process.env.BROWSERBASE_API_KEY ?? "").trim();
 export const BROWSERBASE_PROJECT_ID = (process.env.BROWSERBASE_PROJECT_ID ?? "").trim();
+// Optional second Browserbase account, used automatically when the first one can't start a session
+// (out of free minutes, rate limited, key revoked, ...). Both values must be set for it to count.
+export const BROWSERBASE_API_KEY_BACKUP = (process.env.BROWSERBASE_API_KEY_BACKUP ?? "").trim();
+export const BROWSERBASE_PROJECT_ID_BACKUP = (process.env.BROWSERBASE_PROJECT_ID_BACKUP ?? "").trim();
 // Residential proxies make Google far less likely to block the sign-in. They need a paid Browserbase plan;
 // if the plan refuses them we automatically retry without. Set BROWSERBASE_PROXIES=false to skip them.
 export const BROWSERBASE_PROXIES = (process.env.BROWSERBASE_PROXIES ?? "true").trim().toLowerCase() !== "false";

@@ -3,7 +3,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { ROOT } from "./config.js";
-import { confirmLogin, getLoginStatus, remoteLoginEnabled, startLogin, startRemoteLogin, takeLoginEmail, takeLoginSession } from "./notebooklmLogin.js";
+import { cancelLogin, confirmLogin, getLoginStatus, remoteLoginEnabled, startLogin, startRemoteLogin, takeLoginEmail, takeLoginSession } from "./notebooklmLogin.js";
 import { initDb, withDb } from "./db.js";
 import { getPairing, quizChapters, quizGenerate, quizSubmit, sendWelcome, telegramBotInfo } from "./api.js";
 import { deleteUserKey, getUserKeys, getUserProfile, inspectStorageState, saveUserConfig } from "./intake/userKeys.js";
@@ -74,6 +74,7 @@ export function startWebServer(port = 3000) {
       }
       const parts = url.pathname.split("/");
       if (req.method === "POST" && parts[5] === "confirm") return json(200, { ok: confirmLogin(parts[4] || "") });
+      if (req.method === "POST" && parts[5] === "cancel") return json(200, { ok: cancelLogin(parts[4] || "") });
       return json(200, getLoginStatus(parts[4] || ""));
     }
 
