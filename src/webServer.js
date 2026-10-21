@@ -6,6 +6,7 @@ import { ROOT } from "./config.js";
 import { cancelLogin, confirmLogin, getLoginStatus, remoteLoginEnabled, startLogin, startRemoteLogin, takeLoginEmail, takeLoginSession } from "./notebooklmLogin.js";
 import { initDb, withDb } from "./db.js";
 import {
+  generationStatus,
   getPairing,
   quizChapters,
   quizGenerate,
@@ -14,6 +15,8 @@ import {
   quizSubmit,
   quizTranscribe,
   resourceGet,
+  resourcesList,
+  resourcesStart,
   resourcesChapters,
   resourcesGenerate,
   sendWelcome,
@@ -21,6 +24,7 @@ import {
   telegramBotInfo,
 } from "./api.js";
 import { deleteUserKey, getUserKeys, getUserProfile, inspectStorageState, saveUserConfig } from "./intake/userKeys.js";
+import { resumePendingGenerations } from "./generationQueue.js";
 import { classifyGranularSubject } from "./intake/syllabusParser.js";
 
 const MIME_TYPES = {
@@ -59,7 +63,9 @@ function parseCookies(req) {
 }
 
 export function startWebServer(port = 3000) {
-  initDb().catch((e) => console.log(`Database init failed: ${e.message}`));
+  initDb()
+    .then(() => resumePendingGenerations())
+    .catch((e) => console.log(`Database init failed: ${e.message}`));
   const publicDir = path.join(ROOT, "public");
 
   const server = http.createServer(async (req, res) => {
@@ -256,6 +262,16 @@ export function startWebServer(port = 3000) {
       if (req.method === "GET" && route === "/api/resources/item") {
         return resourceGet(Object.fromEntries(url.searchParams), ctx).then(send);
       }
+      if (req.method === "POST" && route === "/api/resources/start") {
+        let raw = "";
+        req.on("data", (c) => { raw += c; if (raw.length > 100_000) req.destroy(); });
+        req.on("end", () => {
+          let body;
+          try { body = JSON.parse(raw || "{}"); } catch { return send({ status: 400, body: { error: "Invalid JSON" } }); }
+          resourcesStart(body, ctx).then(send);
+        });
+        return;
+      }
       if (req.method === "POST" && route === "/api/resources/generate") {
         let raw = "";
         let tooBig = false;
@@ -276,6 +292,22 @@ export function startWebServer(port = 3000) {
         return;
       }
       return send({ status: 404, body: { error: "Not found" } });
+    }
+
+    // GET /api/resources?telegramUserId=...
+    if (req.method === "GET" && url.pathname.replace(/\/+$/, "") === "/api/resources") {
+      return resourcesList(Object.fromEntries(url.searchParams), { cookies: parseCookies(req) }).then(({ status, body }) => {
+        res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.end(JSON.stringify(body));
+      });
+    }
+
+    // GET /api/generation/status?telegramUserId=...
+    if (req.method === "GET" && url.pathname.replace(/\/+$/, "") === "/api/generation/status") {
+      return generationStatus(Object.fromEntries(url.searchParams), { cookies: parseCookies(req) }).then(({ status, body }) => {
+        res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.end(JSON.stringify(body));
+      });
     }
 
     // POST /api/syllabus/upload

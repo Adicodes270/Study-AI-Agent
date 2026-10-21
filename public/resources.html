@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Study Agent</title>
+    <title>Resources · Study Agent</title>
 
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -19,10 +19,69 @@
 
     <link rel="stylesheet" href="./theme.css">
     <link rel="stylesheet" href="./style.css">
+
+    <style>
+        /* Resources page: built only from the theme.css tokens */
+        .rs-bg {
+            position: fixed; inset: 0; z-index: 0; pointer-events: none;
+            background:
+                radial-gradient(ellipse 60% 40% at 15% 0%, var(--orb-primary), transparent 70%),
+                radial-gradient(ellipse 50% 40% at 90% 10%, var(--orb-secondary), transparent 70%),
+                linear-gradient(var(--grid-line) 1px, transparent 1px) 0 0 / 56px 56px,
+                linear-gradient(90deg, var(--grid-line) 1px, transparent 1px) 0 0 / 56px 56px;
+            -webkit-mask-image: linear-gradient(to bottom, #000 30%, transparent 95%);
+            mask-image: linear-gradient(to bottom, #000 30%, transparent 95%);
+        }
+        .rs-main { position: relative; z-index: 1; max-width: 1100px; margin: 0 auto; padding: 7.5rem 1.25rem 4rem; min-height: 80vh; }
+        .rs-head h1 { font-size: clamp(1.7rem, 3.4vw, 2.5rem); font-weight: 800; letter-spacing: -0.03em; line-height: 1.15; color: var(--text-primary); }
+        .rs-head p { color: var(--text-secondary); margin-top: 0.4rem; max-width: 60ch; }
+
+        .rs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 1rem; margin-top: 1.75rem; }
+        .rs-card {
+            display: flex; flex-direction: column; gap: 0.75rem; padding: 1.25rem;
+            background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-card);
+            transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        .rs-card:hover { border-color: var(--border-highlight); transform: translateY(-2px); box-shadow: var(--shadow-window); }
+        .rs-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; }
+        .rs-title { font-size: 1.05rem; font-weight: 700; line-height: 1.3; color: var(--text-primary); overflow-wrap: anywhere; }
+        .rs-subject { font-size: 0.75rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
+        .rs-desc { color: var(--text-secondary); font-size: 0.9rem; line-height: 1.5; flex: 1; overflow-wrap: anywhere; }
+
+        .rs-badge {
+            flex: none; display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.3rem 0.7rem;
+            border-radius: 999px; font-size: 0.75rem; font-weight: 700; white-space: nowrap; border: 1px solid transparent;
+        }
+        .rs-badge-ready { --c: hsl(152, 68%, 48%); color: var(--c); background: hsla(152, 68%, 48%, 0.14); border-color: hsla(152, 68%, 48%, 0.4); }
+        .rs-badge-generating { color: var(--accent-warning); background: var(--accent-warning-soft); border-color: hsla(38, 92%, 50%, 0.45); }
+        .rs-badge-failed { color: var(--accent-danger); background: var(--accent-danger-soft); border-color: hsla(0, 84%, 60%, 0.45); }
+        .rs-badge-pending { color: var(--text-secondary); background: var(--bg-elevated); border-color: var(--border-subtle); }
+        html.light .rs-badge-ready { color: hsl(152, 62%, 28%); background: hsla(152, 62%, 34%, 0.12); }
+
+        .rs-main [hidden] { display: none !important; }
+        .rs-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.9rem; margin-top: 1.5rem; }
+        .rs-toolbar .rs-live { margin: 0; }
+        .rs-open { align-self: flex-start; margin-top: 0.35rem; cursor: pointer; font-family: inherit; }
+
+        /* Loading, empty and error states */
+        .rs-state { margin-top: 1.75rem; display: flex; flex-direction: column; align-items: center; gap: 0.9rem; text-align: center;
+            padding: 2.5rem 1.25rem; background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-card); }
+        .rs-state p { color: var(--text-secondary); max-width: 52ch; }
+        .rs-state-icon { font-size: 1.8rem; color: var(--accent-primary); }
+        .rs-state.is-error .rs-state-icon { color: var(--accent-danger); }
+        .rs-spinner { width: 34px; height: 34px; border-radius: 50%; border: 3px solid var(--border-subtle); border-top-color: var(--accent-primary); animation: rs-spin 0.8s linear infinite; }
+        .rs-skeleton { height: 150px; border-radius: var(--radius-card); background: linear-gradient(90deg, var(--bg-surface), var(--bg-elevated), var(--bg-surface)); background-size: 200% 100%; animation: rs-shimmer 1.4s ease-in-out infinite; border: 1px solid var(--border-subtle); }
+        @keyframes rs-spin { to { transform: rotate(360deg); } }
+        @keyframes rs-shimmer { to { background-position: -200% 0; } }
+        .rs-live { margin-top: 1rem; font-size: 0.8rem; color: var(--text-muted); }
+        @media (prefers-reduced-motion: reduce) { .rs-spinner, .rs-skeleton { animation: none; } .rs-card { transition: none; } }
+        @media (max-width: 480px) { .rs-main { padding-top: 6.5rem; } .rs-card-top { flex-direction: column-reverse; align-items: flex-start; } .rs-open { align-self: stretch; justify-content: center; } }
+    </style>
 </head>
 
 
 <body>
+    <div class="rs-bg" aria-hidden="true"></div>
 
 
     <header class="header">
@@ -33,9 +92,9 @@
 
             <ul class="nav-links" id="nav-menu">
                 <li><a href="index.html" >Home</a></li>
-                <li><a href="setup.html" class="active">Setup</a></li>
+                <li><a href="setup.html">Setup</a></li>
                 <li><a href="quizzes.html">Quizzes</a></li>
-                <li><a href="resources.html">Resources</a></li>
+                <li><a href="resources.html" class="active">Resources</a></li>
                 <li class="nav-cta-mobile"><a href="https://web.telegram.org/a/#8996972210" target="_blank" rel="noopener noreferrer">Start</a></li>
             </ul>
 
@@ -50,6 +109,214 @@
         </nav>
     </header>
 
+
+    <main class="rs-main">
+        <div class="rs-head">
+            <h1>Your NotebookLM resources</h1>
+            <p>Study guides, audio overviews, flashcards and more, generated chapter by chapter from your syllabus.</p>
+        </div>
+
+        <!-- Loading indicator -->
+        <div id="rs-loading" role="status" aria-live="polite">
+            <div class="rs-state"><div class="rs-spinner" aria-hidden="true"></div><p>Loading your chapters…</p></div>
+            <div class="rs-grid" aria-hidden="true"><div class="rs-skeleton"></div><div class="rs-skeleton"></div><div class="rs-skeleton"></div></div>
+        </div>
+
+        <!-- Empty / error messages -->
+        <div id="rs-message" class="rs-state" role="alert" hidden></div>
+
+        <!-- Chapter cards -->
+        <div id="rs-toolbar" class="rs-toolbar" hidden>
+            <button type="button" class="btn btn-solid" id="rs-start-all"><span>Generate all missing</span></button>
+            <span id="rs-toast" class="rs-live" role="status" aria-live="polite"></span>
+        </div>
+        <ul id="rs-list" class="rs-grid" style="list-style:none;padding:0" hidden></ul>
+        <p id="rs-live" class="rs-live" role="status" aria-live="polite" hidden></p>
+    </main>
+
+    <script>
+    document.addEventListener('DOMContentLoaded', () => {
+        const $ = (id) => document.getElementById(id);
+        const loadingEl = $('rs-loading'), msgEl = $('rs-message'), listEl = $('rs-list'), liveEl = $('rs-live');
+        const POLL_MS = 8000;
+        let pollTimer = null;
+
+        const getCookie = (name) => {
+            const m = document.cookie.split('; ').find((c) => c.startsWith(name + '='));
+            if (!m) return '';
+            try { return decodeURIComponent(m.slice(name.length + 1)); } catch { return ''; }
+        };
+        // Same as quizzes.js: reuse the Telegram id saved by the setup page
+        function userIdFromSetup() {
+            let id = getCookie('sa_telegram_id');
+            if (!id) {
+                try {
+                    const st = JSON.parse(localStorage.getItem('study_agent_config') || 'null');
+                    const v = String(st?.telegram?.userId || st?.telegram?.chatId || '');
+                    if (/^\d+$/.test(v)) {
+                        id = v;
+                        document.cookie = `sa_telegram_id=${encodeURIComponent(v)}; max-age=31536000; path=/; SameSite=Lax${location.protocol === 'https:' ? '; Secure' : ''}`;
+                    }
+                } catch { /* ignore */ }
+            }
+            return id;
+        }
+
+        const BADGES = {
+            Ready: ['rs-badge-ready', 'fa-circle-check', 'Ready'],
+            Generating: ['rs-badge-generating', 'fa-spinner fa-spin', 'Generating'],
+            Failed: ['rs-badge-failed', 'fa-circle-xmark', 'Failed'],
+        };
+
+        function el(tag, cls, text) {
+            const n = document.createElement(tag);
+            if (cls) n.className = cls;
+            if (text != null) n.textContent = text;
+            return n;
+        }
+        const safeUrl = (u) => { try { const p = new URL(u); return p.protocol === 'https:' ? p.href : ''; } catch { return ''; } };
+
+        function showOnly(which) {
+            loadingEl.hidden = which !== 'loading';
+            msgEl.hidden = which !== 'message';
+            listEl.hidden = which !== 'list';
+            if (which !== 'list') $('rs-toolbar').hidden = true;
+        }
+
+        function showMessage({ icon, text, error = false, actions = [] }) {
+            msgEl.className = 'rs-state' + (error ? ' is-error' : '');
+            msgEl.replaceChildren();
+            const i = el('i', 'rs-state-icon fa-solid ' + icon); i.setAttribute('aria-hidden', 'true');
+            msgEl.append(i, el('p', null, text));
+            actions.forEach((a) => msgEl.append(a));
+            showOnly('message');
+        }
+
+        function button(label, icon, handler, href) {
+            const b = el(href ? 'a' : 'button', 'btn btn-solid');
+            if (href) b.href = href; else { b.type = 'button'; b.addEventListener('click', handler); }
+            const i = el('i', 'fa-solid ' + icon); i.setAttribute('aria-hidden', 'true');
+            b.append(i, document.createTextNode(' ' + label));
+            return b;
+        }
+
+        function renderCard(ch) {
+            const status = BADGES[ch.status] ? ch.status : 'Pending';
+            const li = el('li', 'rs-card');
+
+            const top = el('div', 'rs-card-top');
+            const titleWrap = el('div');
+            if (ch.subject) titleWrap.append(el('div', 'rs-subject', ch.subject));
+            titleWrap.append(el('h2', 'rs-title', ch.chapterName || 'Untitled chapter'));
+            const [cls, icon, label] = BADGES[status] || ['rs-badge-pending', 'fa-clock', 'Pending'];
+            const badge = el('span', 'rs-badge ' + cls);
+            const bi = el('i', 'fa-solid ' + icon); bi.setAttribute('aria-hidden', 'true');
+            badge.append(bi, document.createTextNode(label));
+            top.append(titleWrap, badge);
+
+            li.append(top, el('p', 'rs-desc', ch.description || ''));
+
+            const url = status === 'Ready' ? safeUrl(ch.notebookUrl) : '';
+            if (url) {
+                const a = el('a', 'btn btn-solid rs-open');
+                a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+                const ai = el('i', 'fa-solid fa-arrow-up-right-from-square'); ai.setAttribute('aria-hidden', 'true');
+                a.append(ai, document.createTextNode(' Open in NotebookLM'));
+                li.append(a);
+            }
+            if (status === 'Pending' || status === 'Failed') {
+                const b = el('button', 'btn btn-solid rs-open', status === 'Failed' ? 'Retry' : 'Generate');
+                b.type = 'button';
+                b.addEventListener('click', () => start([ch.chapterId], b));
+                li.append(b);
+            }
+            return li;
+        }
+
+        async function start(ids, btn) {
+            const toast = $('rs-toast');
+            if (btn) btn.disabled = true;
+            toast.textContent = 'Starting…';
+            try {
+                const id = userIdFromSetup();
+                const res = await fetch('/api/resources/start', {
+                    method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ telegramUserId: id || undefined, chapterIds: ids }),
+                });
+                const data = await res.json().catch(() => null);
+                if (!res.ok) throw new Error(data?.error || `Server responded with ${res.status}`);
+                toast.textContent = data?.message || 'Started.';
+                await load({ silent: true });
+            } catch (err) {
+                toast.textContent = 'Could not start generation. Please try again.';
+                if (btn) btn.disabled = false;
+            }
+        }
+        $('rs-start-all').addEventListener('click', (e) => start([], e.currentTarget));
+
+        function render(data) {
+            const chapters = Array.isArray(data?.chapters) ? data.chapters : [];
+            if (!chapters.length) {
+                showMessage({
+                    icon: 'fa-book-open',
+                    text: data?.message || 'No syllabus has been processed yet. Upload your syllabus to get started.',
+                    actions: [button('Add your syllabus', 'fa-upload', null, 'quizzes.html')],
+                });
+                liveEl.hidden = true; $('rs-toolbar').hidden = true;
+                return false;
+            }
+            listEl.replaceChildren(...chapters.map(renderCard));
+            const missing = chapters.some((c) => c.status !== 'Ready' && c.status !== 'Generating');
+            $('rs-toolbar').hidden = !missing;
+            $('rs-start-all').disabled = false;
+            showOnly('list');
+            const busy = chapters.some((c) => c.status === 'Generating');
+            liveEl.hidden = !busy;
+            liveEl.textContent = busy ? 'Some chapters are still generating. This page updates automatically.' : '';
+            return busy;
+        }
+
+        async function load({ silent = false } = {}) {
+            clearTimeout(pollTimer);
+            if (!silent) showOnly('loading');
+            try {
+                const id = userIdFromSetup();
+                const res = await fetch('/api/resources' + (id ? `?telegramUserId=${encodeURIComponent(id)}` : ''), {
+                    credentials: 'same-origin', headers: { Accept: 'application/json' }, cache: 'no-store',
+                });
+                let data = null;
+                try { data = await res.json(); } catch { /* not JSON */ }
+                if (res.status === 400) {
+                    showMessage({
+                        icon: 'fa-key',
+                        text: 'We couldn\'t tell who you are. Finish the setup (Telegram ID) first, then come back here.',
+                        actions: [button('Go to Setup', 'fa-gear', null, 'setup.html')],
+                    });
+                    return;
+                }
+                if (!res.ok || !data) throw new Error(data?.error || `Server responded with ${res.status}`);
+                const busy = render(data);
+                if (busy && !document.hidden) pollTimer = setTimeout(() => load({ silent: true }), POLL_MS);
+            } catch (err) {
+                if (silent && !listEl.hidden) return; // keep showing the last good list if a background refresh fails
+                const offline = !navigator.onLine || err instanceof TypeError;
+                showMessage({
+                    error: true,
+                    icon: 'fa-triangle-exclamation',
+                    text: offline
+                        ? 'We couldn\'t reach the server. Check your internet connection and try again.'
+                        : 'Something went wrong while loading your resources. Please try again in a moment.',
+                    actions: [button('Try again', 'fa-rotate-right', () => load())],
+                });
+            }
+        }
+
+        // Pause background refreshes while the tab is hidden, refresh when it comes back
+        document.addEventListener('visibilitychange', () => { if (!document.hidden && !liveEl.hidden) load({ silent: true }); });
+
+        load();
+    });
+    </script>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>

@@ -362,3 +362,32 @@ export function getAllNcertCatalogRows() {
   }
   return rows;
 }
+
+const normTitle = (t) => String(t || "").toLowerCase().replace(/^\s*(chapter|ch\.?)\s*\d+\s*[:.\-–—]?\s*/i, "").replace(/[^a-z0-9]+/g, " ").trim();
+
+/**
+ * Find the NCERT chapter that matches a syllabus chapter. Matches by title (and class/subject when known).
+ * Returns { classLevel, subject, book, code, number, title, pdf_url } or null.
+ */
+export function findNcertChapter({ classLevel = null, subject = "", title = "" } = {}) {
+  const want = normTitle(title);
+  if (!want) return null;
+  const subj = String(subject || "").toLowerCase();
+  const classes = Object.keys(NCERT_BOOKS).map(Number);
+  const ordered = classLevel && NCERT_BOOKS[classLevel] ? [classLevel, ...classes.filter((c) => c !== classLevel)] : classes;
+  let loose = null;
+  for (const cls of ordered) {
+    for (const [subjName, books] of Object.entries(NCERT_BOOKS[cls])) {
+      const subjectOk = !subj || subjName.toLowerCase().includes(subj) || subj.includes(subjName.toLowerCase());
+      for (const b of books) {
+        const idx = b.chapters.findIndex((c) => normTitle(c) === want);
+        if (idx < 0) continue;
+        const hit = { classLevel: cls, subject: subjName, book: b.book, code: b.code, number: idx + 1, title: b.chapters[idx], pdf_url: buildNcertPdfUrl(b.code, idx + 1) };
+        if (cls === classLevel && subjectOk) return hit;
+        if (!loose && subjectOk) loose = hit;
+        if (!loose && cls === classLevel) loose = hit;
+      }
+    }
+  }
+  return loose;
+}

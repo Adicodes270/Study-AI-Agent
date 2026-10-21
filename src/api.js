@@ -32,6 +32,7 @@ import {
   saveUserConfig,
 } from "./intake/userKeys.js";
 import { saveSyllabus } from "./intake/storage.js";
+import { enqueueExisting, enqueueSyllabus, getGenerationStatus } from "./generationQueue.js";
 import {
   classifyGranularSubject,
   parseSyllabus,
@@ -602,6 +603,14 @@ export const syllabusUpload = safe(async (body = {}, ctx = {}) => {
 
   const results = await saveSyllabus(id, syllabus, { questionCount: body.questionCount });
 
+  // Queue every chapter for sequential background generation (status 'Generating'); does not wait for it.
+  let generation = null;
+  try {
+    generation = await enqueueSyllabus(id, syllabus);
+  } catch (e) {
+    console.log(`Could not queue chapter generation: ${e.message}`);
+  }
+
   // Find the newly saved chapter in the DB so the New Quiz UI can offer an instant "Start Quiz" action
   const allChapters = await getChaptersWithResults(id);
   const matchingCh =
@@ -618,6 +627,7 @@ export const syllabusUpload = safe(async (body = {}, ctx = {}) => {
     ok: true,
     subjects: results,
     ai_recommended_questions: aiRecommended,
+    generation,
     latest_chapter: matchingCh
       ? {
           id: matchingCh.id,
@@ -628,6 +638,77 @@ export const syllabusUpload = safe(async (body = {}, ctx = {}) => {
           recommended_questions: questionCountFor(matchingCh),
         }
       : null,
+  });
+});
+
+// GET /api/resources?telegramUserId=...  (falls back to the sa_telegram_id cookie)
+// -> { chapters: [{ chapterName, status, description, notebookUrl, subject }], message? }
+// status: 'Ready' | 'Generating' | 'Failed' | 'Pending' (syllabus chapter that has not been queued yet)
+const RESOURCE_STATUS_TEXT = {
+  Ready: "Notebook resources generated successfully.",
+  Generating: "Notebook resources are being generated. This can take a few minutes.",
+  Pending: "Waiting to start generating notebook resources.",
+};
+export const resourcesList = safe(async (query = {}, ctx = {}) => {
+  const id = quizUserId(query.telegramUserId, ctx);
+  if (Number.isNaN(id)) return fail(400, "Missing or invalid Telegram user id", { chapters: [] });
+
+  const { rows } = await withDb((db) =>
+    db.query(
+      `SELECT sc.id, sc.subject, sc.number, sc.title, g.status, g.error, g.notebook_url
+         FROM syllabus_chapters sc
+         LEFT JOIN chapter_generation g
+           ON g.telegram_user_id = sc.chat_id AND g.subject = sc.subject AND g.exam = sc.exam
+          AND lower(g.chapter_title) = lower(sc.title)
+        WHERE sc.chat_id = $1
+        ORDER BY sc.id`,
+      [id]
+    )
+  );
+
+  if (!rows.length) {
+    return ok({ chapters: [], message: "No syllabus has been processed yet. Upload your syllabus to get started." });
+  }
+
+  const chapters = rows.map((r) => {
+    const status = r.status === "Ready" || r.status === "Generating" || r.status === "Failed" ? r.status : r.status === "Completed" ? "Ready" : "Pending";
+    const description =
+      status === "Failed"
+        ? `Generation failed${r.error ? `: ${String(r.error).slice(0, 200).replace(/[.\s]+$/, "")}` : ""}. Please try again.`
+        : RESOURCE_STATUS_TEXT[status];
+    return {
+      chapterId: r.id,
+      chapterName: r.number != null ? `Chapter ${r.number}: ${r.title}` : r.title,
+      subject: r.subject,
+      status,
+      description,
+      notebookUrl: status === "Ready" ? r.notebook_url || null : null,
+    };
+  });
+  return ok({ chapters });
+});
+
+// POST /api/resources/start { telegramUserId?, chapterIds?: number[] }
+// Queue every saved chapter that isn't Ready yet (or just the given ones). Used by the "Generate" / "Retry" buttons.
+export const resourcesStart = safe(async (body = {}, ctx = {}) => {
+  const id = quizUserId(body.telegramUserId, ctx);
+  if (Number.isNaN(id)) return fail(400, "Missing or invalid Telegram user id");
+  const ids = (Array.isArray(body.chapterIds) ? body.chapterIds : []).map(Number).filter(Number.isInteger);
+  const out = await enqueueExisting(id, ids);
+  return ok({ ok: true, queued: out.queued, message: out.queued ? `Started generating ${out.queued} chapter(s).` : "Nothing to generate: every chapter is already Ready or none were found." });
+});
+
+// GET /api/generation/status?telegramUserId=...  -> per-chapter 'Generating' | 'Ready' | 'Failed'
+export const generationStatus = safe(async (query = {}, ctx = {}) => {
+  const id = quizUserId(query.telegramUserId, ctx);
+  if (Number.isNaN(id)) return fail(400, "Missing or invalid Telegram user id");
+  const rows = await getGenerationStatus(id);
+  return ok({
+    telegram_user_id: id,
+    chapters: rows.map((r) => ({
+      id: r.id, chapter_id: r.chapter_id, subject: r.subject, exam: r.exam, number: r.chapter_number,
+      title: r.chapter_title, status: r.status, notebook_url: r.notebook_url, error: r.error, updated_at: r.updated_at,
+    })),
   });
 });
 

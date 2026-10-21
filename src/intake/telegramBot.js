@@ -4,6 +4,8 @@ import { Bot, HttpError } from "grammy";
 import { DEFAULT_CLASS_LEVEL, GEMINI_API_KEY, GEMINI_MODEL, TELEGRAM_BOT_TOKEN } from "../config.js";
 import { initDb, savePairing } from "../db.js";
 import { saveSyllabus } from "./storage.js";
+import { enqueueSyllabus } from "../generationQueue.js";
+import { splitSyllabusIntoGranularSubjects } from "./syllabusParser.js";
 import { deleteUserKey, getUserKeys, isValidKey, saveUserKey } from "./userKeys.js";
 import { inferNcertFromFilename, parseSyllabus, parseSyllabusPdf } from "./syllabusParser.js";
 
@@ -137,6 +139,8 @@ async function processSyllabus(ctx, parseFn, payload, hintText, fileName = "") {
   }
 
   const results = await saveSyllabus(ctx.chat.id, syllabus);
+  // Start the background NotebookLM generation for these chapters (same as the website upload)
+  await enqueueSyllabus(ctx.chat.id, splitSyllabusIntoGranularSubjects(syllabus)).catch((e) => console.log(`Could not queue chapter generation: ${e.message}`));
 
   const labels = {
     added: "added",
