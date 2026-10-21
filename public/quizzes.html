@@ -4,8 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Study Agent</title>
-
+    <title>Quizzes — Study Agent</title>
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -13,47 +12,129 @@
         href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
         rel="stylesheet">
 
-
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/7.3.1/css/all.min.css">
-
 
     <link rel="stylesheet" href="./theme.css">
     <link rel="stylesheet" href="./style.css">
+    <link rel="stylesheet" href="./quizzes.css">
 </head>
 
-
-<body>
-
+<body class="perf-lite">
+    <div class="qz-bg" aria-hidden="true"></div>
 
     <header class="header">
         <nav class="nav" aria-label="Main Navigation">
-
             <a href="index.html" class="brand-logo">Study Agent</a>
 
-
             <ul class="nav-links" id="nav-menu">
-                <li><a href="index.html" >Home</a></li>
-                <li><a href="setup.html" >Setup</a></li>
+                <li><a href="index.html">Home</a></li>
+                <li><a href="setup.html">Setup</a></li>
                 <li><a href="quizzes.html" class="active">Quizzes</a></li>
                 <li><a href="resources.html">Resources</a></li>
-                <li class="nav-cta-mobile"><a href="https://web.telegram.org/a/#8996972210" target="_blank" rel="noopener noreferrer">Start</a></li>
+                <li class="nav-cta-mobile"><a href="https://web.telegram.org/k/#@SylllabusBot" target="_blank" rel="noopener noreferrer">Start</a></li>
             </ul>
-
 
             <button class="nav-toggle" type="button" aria-label="Open menu" aria-expanded="false"
                 aria-controls="nav-menu"><i class="fa-solid fa-bars" aria-hidden="true"></i></button>
 
             <div class="nav-actions">
                 <a href="setup.html" class="nav-btn nav-btn-text">Setup Telegram</a>
-                <a href="https://web.telegram.org/a/#8996972210" class="nav-btn nav-btn-primary" target="_blank" rel="noopener noreferrer">Start</a>
+                <a href="https://web.telegram.org/k/#@SylllabusBot" class="nav-btn nav-btn-primary" target="_blank" rel="noopener noreferrer">Start</a>
             </div>
         </nav>
     </header>
 
+    <main class="qz-main" id="qz-root">
+        <div class="qz-banner" id="qz-banner" role="alert" hidden></div>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/lenis@1.1.20/dist/lenis.min.js"></script>
-    <script src="./script.js"></script>
+        <!-- Step A: credentials missing -->
+        <section class="qz-card qz-gate" id="view-setup" hidden>
+            <div class="qz-gate-icon"><i class="fa-solid fa-key" aria-hidden="true"></i></div>
+            <h1>Finish setup to unlock quizzes</h1>
+            <p id="setup-missing-text">Quizzes need your Telegram ID and your Gemini API key.</p>
+            <a class="btn btn-solid" href="setup.html"><i class="fa-solid fa-gear" aria-hidden="true"></i> Go to Setup</a>
+        </section>
 
+        <!-- Step B: no syllabus uploaded yet -->
+        <section class="qz-card qz-gate" id="view-gate" hidden>
+            <div class="qz-gate-icon"><i class="fa-brands fa-telegram" aria-hidden="true"></i></div>
+            <h1>Send your syllabus to the bot first</h1>
+            <p>Open the Study Agent bot on Telegram and send your syllabus as a PDF or paste the portion as text.
+                This page picks it up automatically as soon as the bot has read it.</p>
+            <ol class="qz-steps">
+                <li>Open the bot on Telegram</li>
+                <li>Send the syllabus PDF (or paste the text)</li>
+                <li>Wait for the bot's “Done!” reply</li>
+            </ol>
+            <div class="qz-cta-row">
+                <a class="btn btn-solid" href="https://web.telegram.org/k/#@SylllabusBot" target="_blank" rel="noopener noreferrer">
+                    <i class="fa-brands fa-telegram" aria-hidden="true"></i> Open @SylllabusBot</a>
+                <button class="btn btn-ghost" type="button" id="refresh-btn">
+                    <i class="fa-solid fa-rotate" aria-hidden="true"></i> Refresh Syllabus</button>
+            </div>
+            <p class="qz-poll"><span class="qz-pulse" aria-hidden="true"></span> Checking for your syllabus every 5 seconds…</p>
+        </section>
+
+        <section class="qz-card qz-center" id="view-loading" aria-live="polite">
+            <div class="qz-spinner" aria-hidden="true"></div>
+            <p id="loading-text">Loading your chapters…</p>
+        </section>
+
+        <!-- Subject-divided chapters dashboard -->
+        <section id="view-chapters" hidden>
+            <div class="qz-head">
+                <div>
+                    <h1>Your Chapters</h1>
+                    <p class="qz-sub">Pick a matched chapter to take a quiz. Hover a chapter you've attempted to see what to revise.</p>
+                </div>
+                <button class="btn btn-ghost qz-small" type="button" id="refresh-chapters-btn">
+                    <i class="fa-solid fa-rotate" aria-hidden="true"></i> Refresh</button>
+            </div>
+            <div class="qz-tabs" id="subject-tabs" role="tablist" aria-label="Filter by subject"></div>
+            <div id="subject-sections"></div>
+        </section>
+
+        <!-- Quiz runner -->
+        <section class="qz-card qz-quiz" id="view-quiz" hidden>
+            <div class="qz-quiz-top">
+                <button class="qz-link" type="button" id="quit-btn"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Back to chapters</button>
+                <span class="qz-quiz-meta" id="quiz-meta"></span>
+            </div>
+            <h2 class="qz-quiz-title" id="quiz-title"></h2>
+            <div class="qz-progress" aria-hidden="true"><div id="quiz-progress-bar"></div></div>
+            <p class="qz-qcount" id="quiz-qcount" aria-live="polite"></p>
+            <span class="qz-subtopic" id="quiz-subtopic"></span>
+            <h3 class="qz-question" id="quiz-question" tabindex="-1"></h3>
+            <div class="qz-options" id="quiz-options" role="radiogroup" aria-labelledby="quiz-question"></div>
+            <div class="qz-quiz-nav">
+                <button class="btn btn-ghost" type="button" id="prev-btn"><i class="fa-solid fa-arrow-left" aria-hidden="true"></i> Previous</button>
+                <button class="btn btn-solid" type="button" id="next-btn" disabled>Next <i class="fa-solid fa-arrow-right" aria-hidden="true"></i></button>
+            </div>
+        </section>
+
+        <!-- Completion -->
+        <section class="qz-card qz-done" id="view-done" hidden aria-live="polite">
+            <div class="qz-ring-wrap"><div class="qz-ring" id="done-ring"></div><span class="qz-ring-label" id="done-pct"></span></div>
+            <h2 id="done-title">Quiz complete</h2>
+            <p class="qz-done-score" id="done-score"></p>
+            <p class="qz-tier" id="done-tier"></p>
+            <p class="qz-weak" id="done-weak" hidden></p>
+            <p class="qz-poll" id="done-redirect"></p>
+            <div class="qz-cta-row">
+                <button class="btn btn-solid" type="button" id="done-back-btn"><i class="fa-solid fa-list" aria-hidden="true"></i> Back to chapters</button>
+                <button class="btn btn-ghost" type="button" id="done-review-btn"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i> Review answers</button>
+            </div>
+            <div class="qz-review" id="done-review" hidden></div>
+        </section>
+    </main>
+
+    <!-- Hover diagnostic popover (one shared element, positioned next to the hovered chapter) -->
+    <div class="qz-pop" id="result-pop" role="tooltip" hidden></div>
+
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
+    <script defer src="./script.js"></script>
+    <script defer src="./quizzes.js"></script>
 </body>
+
+</html>

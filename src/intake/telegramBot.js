@@ -2,7 +2,7 @@
 import { Bot, HttpError } from "grammy";
 
 import { GEMINI_API_KEY, GEMINI_MODEL, TELEGRAM_BOT_TOKEN } from "../config.js";
-import { initDb } from "../db.js";
+import { initDb, savePairing } from "../db.js";
 import { saveSyllabus } from "./storage.js";
 import { deleteUserKey, getUserKeys, isValidKey, saveUserKey } from "./userKeys.js";
 import { parseSyllabus, parseSyllabusPdf } from "./syllabusParser.js";
@@ -20,7 +20,26 @@ const SYLLABUS_HINTS = new RegExp(
 
 const inGroup = (ctx) => ["group", "supergroup"].includes(ctx.chat.type);
 
+const PAIR_CODE = /^SA-\d{4}$/i;
+
 async function start(ctx) {
+  // The setup page shows "/start SA-1234"; Telegram delivers that as the command's argument.
+  const code = (ctx.match || "").trim().toUpperCase();
+  if (PAIR_CODE.test(code)) {
+    await savePairing({
+      code,
+      chatId: ctx.chat.id,
+      userId: ctx.from.id,
+      firstName: ctx.from.first_name || null,
+      username: ctx.from.username || null,
+    });
+    await ctx.reply(
+      `🎉 Hey ${ctx.from.first_name || "there"}! Study Agent is linked!\n\n` +
+        `Your Telegram ID (${ctx.from.id}) is now paired with the setup page. Go back to it and press Save Configuration, ` +
+        `then send me your syllabus as text or a PDF.`
+    );
+    return;
+  }
   await ctx.reply(
     `Hi! First add your Gemini API key on the setup page (or send it here in private: /setkey YOUR_KEY).\n\n` +
       `Then send your syllabus as text or as a PDF and I'll read it.\n(Using model: ${GEMINI_MODEL})\n\n` +

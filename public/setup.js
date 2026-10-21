@@ -3,13 +3,10 @@
 // Built-in Telegram Bot + Gemini Multi-Key Fallback + NotebookLM Popup/Bridge Auth
 // ==========================================================================
 
-import dotenv from "dotenv";
-
 (() => {
   const STORAGE_KEY = 'study_agent_config';
 
-  // Official Study Agent Telegram Bot Token (pre-configured so users never touch @BotFather)
-  const STUDY_AGENT_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ;
+  // The bot token lives only on the server (.env). This page talks to /api/telegram/* instead of Telegram.
   const STUDY_AGENT_WEB_LINK = 'https://web.telegram.org/a/#8996972210';
 
   const defaultState = () => ({
@@ -19,7 +16,6 @@ import dotenv from "dotenv";
       { id: cryptoId(), label: 'Primary Key', key: '', verified: false, lastChecked: null }
     ],
     telegram: {
-      botToken: STUDY_AGENT_BOT_TOKEN,
       botUsername: '',
       botName: 'Study Agent Bot',
       pairingCode: 'SA-' + Math.floor(1000 + Math.random() * 9000),
@@ -59,7 +55,6 @@ import dotenv from "dotenv";
         telegram: {
           ...def.telegram,
           ...(parsed.telegram || {}),
-          botToken: STUDY_AGENT_BOT_TOKEN,
           pairingCode: parsed.telegram?.pairingCode || def.telegram.pairingCode
         },
         notebooklm: { ...def.notebooklm, ...(parsed.notebooklm || {}) }
@@ -93,6 +88,23 @@ import dotenv from "dotenv";
   // computer) or 'upload' (paste storage_state.json). The server tells us; see applyNlmMode().
   let nlmMode = IS_LOCAL_HOST ? 'local' : 'upload';
 
+  // Mirror the saved settings into browser cookies so quizzes.html can tell who the student is.
+  //   sa_telegram_id      numeric Telegram user id
+  //   sa_gemini_key       primary Gemini API key (the server prefers the keys saved in the database)
+  //   sa_notebooklm_auth  'connected' | 'none'
+  function setCookie(name, value) {
+    const secure = location.protocol === 'https:' ? '; Secure' : '';
+    document.cookie = `${name}=${encodeURIComponent(value)}; max-age=31536000; path=/; SameSite=Lax${secure}`;
+  }
+  function syncCookies(userId, keys, sessionSaved) {
+    try {
+      setCookie('sa_telegram_id', userId);
+      if (keys.length) setCookie('sa_gemini_key', keys[0]);
+      const nlm = sessionSaved || state.notebooklm.status === 'connected' || state.notebooklm.sessionStored;
+      setCookie('sa_notebooklm_auth', nlm ? 'connected' : 'none');
+    } catch (e) { /* cookies blocked: quizzes.html falls back to the saved setup state */ }
+  }
+
   // Save Telegram id + Gemini keys + Google account to the database (Save Configuration button)
   async function saveConfigToDb() {
     const userId = String(state.telegram.userId || state.telegram.chatId || '').trim();
@@ -125,6 +137,7 @@ import dotenv from "dotenv";
       if (data.email_saved) parts.push('Google email');
       if (data.session_saved) parts.push('NotebookLM Google session');
       if (data.session_saved) { pendingLoginId = null; pendingStorageState = null; }
+      syncCookies(userId, keys, Boolean(data.session_saved));
       showToast('Saved Successfully!', 'fa-solid fa-circle-check');
       return true;
     } catch (e) {
@@ -389,7 +402,7 @@ import dotenv from "dotenv";
       pairingCodeEl.textContent = `/start ${state.telegram.pairingCode}`;
     }
     try {
-      const res = await fetch(`https://api.telegram.org/bot${STUDY_AGENT_BOT_TOKEN}/getMe`);
+      const res = await fetch('/api/telegram/bot');
       const data = await res.json();
       if (data && data.ok && data.result) {
         state.telegram.botUsername = data.result.username || '';
@@ -451,55 +464,26 @@ import dotenv from "dotenv";
     showToast('Stopped listening for Telegram messages');
   });
 
+  // Ask our server whether the bot has received "/start <pairing code>" yet.
   async function pollTelegramUpdatesOnce() {
     try {
-      const res = await fetch(`https://api.telegram.org/bot${STUDY_AGENT_BOT_TOKEN}/getUpdates?limit=25&allowed_updates=["message"]`);
+      const res = await fetch(`/api/telegram/pairing/${encodeURIComponent(state.telegram.pairingCode)}`);
       const data = await res.json();
-      if (data && data.ok && Array.isArray(data.result) && data.result.length > 0) {
-        // First pass: check if any message contains the user's session pairing code
-        const code = state.telegram.pairingCode;
-        let matchedMsg = null;
+      if (data && data.found) {
+        const firstName = data.first_name || 'Student';
+        state.telegram.chatId = String(data.chat_id);
+        state.telegram.userId = String(data.user_id || data.chat_id);
+        state.telegram.chatFirstName = firstName;
+        state.telegram.chatUsername = data.username || '';
+        state.telegram.verified = true;
+        state.telegram.updatedAt = new Date().toISOString();
 
-        for (let i = data.result.length - 1; i >= 0; i--) {
-          const m = data.result[i].message || data.result[i].edited_message;
-          if (m && m.chat && m.chat.id && typeof m.text === 'string' && m.text.includes(code)) {
-            matchedMsg = m;
-            break;
-          }
-        }
-
-        // Second pass: fall back to the most recent message sent to the bot
-        if (!matchedMsg) {
-          for (let i = data.result.length - 1; i >= 0; i--) {
-            const m = data.result[i].message || data.result[i].edited_message || data.result[i].my_chat_member;
-            if (m && m.chat && m.chat.id) {
-              matchedMsg = m;
-              break;
-            }
-          }
-        }
-
-        if (matchedMsg) {
-          const newChatId = String(matchedMsg.chat.id);
-          const firstName = matchedMsg.chat.first_name || matchedMsg.from?.first_name || 'Student';
-          const username = matchedMsg.chat.username || matchedMsg.from?.username || '';
-
-          state.telegram.chatId = newChatId;
-          state.telegram.userId = String(matchedMsg.from?.id || newChatId);
-          state.telegram.chatFirstName = firstName;
-          state.telegram.chatUsername = username;
-          state.telegram.verified = true;
-          state.telegram.updatedAt = new Date().toISOString();
-
-          stopTelegramPolling();
-          saveState(true);
-          syncTelegramInputsFromState();
-          showToast(`Detected ${firstName} (Chat ID: ${newChatId})!`, 'fa-brands fa-telegram');
-
-          // Automatically send a confirmation welcome message to their Telegram
-          sendWelcomeTelegramPing(newChatId, firstName, true);
-          return true;
-        }
+        stopTelegramPolling();
+        saveState(true);
+        syncTelegramInputsFromState();
+        showToast(`Detected ${firstName} (Telegram ID: ${state.telegram.userId})!`, 'fa-brands fa-telegram');
+        // The bot itself already replied "Study Agent is linked!" in Telegram
+        return true;
       }
     } catch (e) {}
     return false;
@@ -534,26 +518,22 @@ import dotenv from "dotenv";
     startTelegramAutoDetection();
   });
 
-  async function sendWelcomeTelegramPing(chatId, firstName = 'there', silentError = false) {
+  // "Send test message": asks the server to message the chat that paired with our code
+  async function sendWelcomeTelegramPing(silentError = false) {
     try {
-      const res = await fetch(`https://api.telegram.org/bot${STUDY_AGENT_BOT_TOKEN}/sendMessage`, {
+      const res = await fetch('/api/telegram/welcome', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text: `🎉 *Hey ${firstName}! Study Agent is linked!*\n\nYour Chat ID (\`${chatId}\`) is now paired with your browser workspace. Send me any PDF, lecture topic, or quiz request anytime!`,
-          parse_mode: 'Markdown'
-        })
+        body: JSON.stringify({ code: state.telegram.pairingCode })
       });
-      const data = await res.json();
-      if (data && data.ok) {
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
         if (!silentError) showToast('Sent test message to your Telegram!', 'fa-regular fa-paper-plane');
         return true;
-      } else if (!silentError) {
-        showToast(data?.description || 'Press Start inside the Study Agent bot first!', 'fa-solid fa-circle-exclamation');
       }
+      if (!silentError) showToast(data.error || 'Press Start inside the Study Agent bot first!', 'fa-solid fa-circle-exclamation');
     } catch (e) {
-      if (!silentError) showToast('Could not reach Telegram API—check your internet connection', 'fa-solid fa-circle-exclamation');
+      if (!silentError) showToast('Could not reach the server. Check your connection', 'fa-solid fa-circle-exclamation');
     }
     return false;
   }
@@ -568,7 +548,7 @@ import dotenv from "dotenv";
     const orig = btn.innerHTML;
     btn.disabled = true;
     btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> <span>Sending...</span>`;
-    await sendWelcomeTelegramPing(chatId, state.telegram.chatFirstName || 'there', false);
+    await sendWelcomeTelegramPing(false);
     btn.disabled = false;
     btn.innerHTML = orig;
   });
@@ -922,7 +902,6 @@ import dotenv from "dotenv";
       saved_at: state.updatedAt || new Date().toISOString(),
       gemini_api_keys: validKeys,
       telegram_config: {
-        bot_token: STUDY_AGENT_BOT_TOKEN,
         bot_username: state.telegram.botUsername || null,
         chat_id: state.telegram.chatId.trim(),
         chat_user: state.telegram.chatUsername || state.telegram.chatFirstName || null,
@@ -947,7 +926,6 @@ import dotenv from "dotenv";
       '# Study Agent Configuration (.env)',
       `GEMINI_API_KEY="${primaryKey}"`,
       `GEMINI_FALLBACK_KEYS="${keysCsv}"`,
-      `TELEGRAM_BOT_TOKEN="${STUDY_AGENT_BOT_TOKEN}"`,
       `TELEGRAM_CHAT_ID="${payload.telegram_config.chat_id}"`,
       `NOTEBOOKLM_ACCOUNT_EMAIL="${payload.notebooklm_auth.account_email || ''}"`,
       `NOTEBOOKLM_SESSION_READY="${payload.notebooklm_auth.session_ready}"`

@@ -5,6 +5,7 @@ import path from "node:path";
 import { ROOT } from "./config.js";
 import { confirmLogin, getLoginStatus, remoteLoginEnabled, startLogin, startRemoteLogin, takeLoginEmail, takeLoginSession } from "./notebooklmLogin.js";
 import { initDb, withDb } from "./db.js";
+import { getPairing, quizChapters, quizGenerate, quizSubmit, sendWelcome, telegramBotInfo } from "./api.js";
 import { deleteUserKey, getUserKeys, getUserProfile, inspectStorageState, saveUserConfig } from "./intake/userKeys.js";
 
 const MIME_TYPES = {
@@ -19,6 +20,16 @@ const MIME_TYPES = {
 };
 
 const loginStartedAt = new Map(); // client ip -> last time a cloud sign-in was started
+
+// Pairing codes are only 4 digits, so cap how fast one address can try them (per minute)
+const tgHits = new Map();
+function tgRateLimited(ip, max) {
+  const minute = Math.floor(Date.now() / 60_000);
+  const rec = tgHits.get(ip);
+  if (!rec || rec.minute !== minute) { tgHits.set(ip, { minute, n: 1 }); return false; }
+  if (tgHits.size > 5000) tgHits.clear();
+  return ++rec.n > max;
+}
 
 export function startWebServer(port = 3000) {
   initDb().catch((e) => console.log(`Database init failed: ${e.message}`));
@@ -123,6 +134,68 @@ export function startWebServer(port = 3000) {
       } catch (err) {
         return json(500, { error: err.message });
       }
+    }
+
+    // Telegram helpers for the setup page. The bot token stays here on the server (from .env).
+    if (url.pathname.startsWith("/api/telegram/")) {
+      const send = ({ status, body }) => {
+        res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.end(JSON.stringify(body));
+      };
+      const parts = url.pathname.replace(/\/+$/, "").split("/"); // ["", "api", "telegram", ...]
+      if (req.method === "GET" && parts[3] === "bot" && parts.length === 4) return telegramBotInfo().then(send);
+      if (req.method === "GET" && parts[3] === "pairing" && parts.length === 5) {
+        if (tgRateLimited(clientIp, 90)) return send({ status: 429, body: { error: "Too many requests. Wait a minute." } });
+        return getPairing(parts[4]).then(send);
+      }
+      if (req.method === "POST" && parts[3] === "welcome" && parts.length === 4) {
+        if (tgRateLimited(clientIp + "|w", 6)) return send({ status: 429, body: { error: "Too many requests. Wait a minute." } });
+        let raw = "";
+        req.on("data", (c) => { raw += c; if (raw.length > 10_000) req.destroy(); });
+        req.on("end", () => {
+          let body;
+          try { body = JSON.parse(raw || "{}"); } catch { return send({ status: 400, body: { error: "Invalid JSON" } }); }
+          sendWelcome(body).then(send);
+        });
+        return;
+      }
+      return send({ status: 404, body: { error: "Not found" } });
+    }
+
+    // Quizzes: GET /api/quizzes/chapters, POST /api/quizzes/generate, POST /api/quizzes/submit
+    if (url.pathname.startsWith("/api/quizzes/")) {
+      const send = ({ status, body }) => {
+        res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        res.end(JSON.stringify(body));
+      };
+      const cookies = {};
+      for (const part of String(req.headers.cookie || "").split(";")) {
+        const i = part.indexOf("=");
+        if (i < 1) continue;
+        try { cookies[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim()); } catch {}
+      }
+      const ctx = { cookies };
+      const route = url.pathname.replace(/\/+$/, "");
+      if (req.method === "GET" && route === "/api/quizzes/chapters") {
+        return quizChapters(Object.fromEntries(url.searchParams), ctx).then(send);
+      }
+      if (req.method === "POST" && (route === "/api/quizzes/generate" || route === "/api/quizzes/submit")) {
+        let raw = "";
+        let tooBig = false;
+        req.on("data", (c) => {
+          raw += c;
+          if (raw.length > 200_000) { tooBig = true; req.destroy(); }
+        });
+        req.on("end", () => {
+          if (tooBig) return;
+          let body;
+          try { body = JSON.parse(raw || "{}"); } catch { return send({ status: 400, body: { error: "Invalid JSON" } }); }
+          const handler = route.endsWith("generate") ? quizGenerate : quizSubmit;
+          handler(body, ctx).then(send);
+        });
+        return;
+      }
+      return send({ status: 404, body: { error: "Not found" } });
     }
 
     // 1. API Route: GET /api/syllabus/:chatId

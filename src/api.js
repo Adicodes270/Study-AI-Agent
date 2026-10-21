@@ -3,7 +3,8 @@
 // Used by the Vercel functions in /api and by the local server (src/webServer.js).
 import { Api } from "grammy";
 import { TELEGRAM_BOT_TOKEN } from "./config.js";
-import { initDb, withDb } from "./db.js";
+import { getChapterForUser, getChaptersWithResults, initDb, upsertQuizResult, withDb } from "./db.js";
+import { createSession, endSession, generateQuiz, grade, takeSession } from "./quizEngine.js";
 import { deleteUserKey, getUserKeys, getUserProfile, saveUserConfig } from "./intake/userKeys.js";
 
 const parseId = (v) => (/^\d+$/.test(String(v ?? "")) ? Number(v) : NaN);
@@ -77,14 +78,14 @@ export const removeKeys = safe(async (idRaw) => {
 export const getSyllabus = safe(async (chatIdRaw) => {
   const chatId = parseInt(chatIdRaw, 10);
   if (Number.isNaN(chatId)) return fail(400, "Invalid chat ID");
-  const chapters = await withDb((db) =>
-    db.all(
+  const chapters = await withDb(async (db) =>
+    (await db.query(
       `SELECT subject, exam, number, title, match_status, pdf_url
        FROM syllabus_chapters
        WHERE chat_id = $1
        ORDER BY subject, number`,
       [chatId]
-    )
+    )).rows
   );
   return ok({ chatId, chapters });
 });
@@ -109,11 +110,11 @@ export const telegramBotInfo = safe(async () => {
 export const getPairing = safe(async (codeRaw) => {
   const code = String(codeRaw || "").toUpperCase();
   if (!/^SA-\d{4}$/.test(code)) return fail(400, "Invalid pairing code");
-  const row = await withDb((db) =>
-    db.get(
+  const row = await withDb(async (db) =>
+    (await db.query(
       "SELECT chat_id, user_id, first_name, username FROM pairings WHERE code = $1 AND created_at > now() - interval '1 hour'",
       [code]
-    )
+    )).rows[0]
   );
   if (!row) return ok({ found: false });
   return ok({ found: true, chat_id: row.chat_id, user_id: row.user_id, first_name: row.first_name, username: row.username });
@@ -123,8 +124,8 @@ export const getPairing = safe(async (codeRaw) => {
 export const sendWelcome = safe(async (body = {}) => {
   const code = String(body.code || "").toUpperCase();
   if (!/^SA-\d{4}$/.test(code)) return fail(400, "Invalid pairing code");
-  const row = await withDb((db) =>
-    db.get("SELECT chat_id, first_name FROM pairings WHERE code = $1 AND created_at > now() - interval '1 hour'", [code])
+  const row = await withDb(async (db) =>
+    (await db.query("SELECT chat_id, first_name FROM pairings WHERE code = $1 AND created_at > now() - interval '1 hour'", [code])).rows[0]
   );
   if (!row) return fail(404, "Press Start inside the Study Agent bot first!");
   const name = row.first_name || "there";
@@ -137,4 +138,85 @@ export const sendWelcome = safe(async (body = {}) => {
     return fail(502, e.message || "Could not message you on Telegram");
   }
   return ok({ ok: true });
+});
+
+
+// ---------------------------------------------------------------------------
+// Quizzes
+// The web app identifies the student by Telegram user id (cookie sa_telegram_id, or a query/body field).
+// ctx = { cookies } parsed from the request by the server.
+// Note: like /api/user-keys, this trusts the id the browser sends; there is no login session yet.
+// ---------------------------------------------------------------------------
+const quizUserId = (given, ctx) => parseId(given ?? ctx?.cookies?.sa_telegram_id);
+
+// Matched = linked to an NCERT chapter (has a PDF link, or the intake marked it matched)
+const isMatched = (c) => c.match_status === "matched" || Boolean(c.pdf_url);
+
+// GET /api/quizzes/chapters?telegramUserId=...
+export const quizChapters = safe(async (query = {}, ctx = {}) => {
+  const id = quizUserId(query.telegramUserId, ctx);
+  if (Number.isNaN(id)) return fail(400, "Missing or invalid Telegram user id");
+  const rows = await getChaptersWithResults(id);
+  const keys = await getUserKeys(id);
+  return ok({
+    telegram_user_id: id,
+    has_syllabus: rows.length > 0,
+    has_gemini_key: keys.length > 0 || Boolean(ctx?.cookies?.sa_gemini_key),
+    chapters: rows.map((c) => ({
+      id: c.id, subject: c.subject, exam: c.exam, number: c.number, title: c.title,
+      matched: isMatched(c), result: c.result,
+    })),
+  });
+});
+
+// POST /api/quizzes/generate { telegramUserId, chapterId, geminiKey? }
+export const quizGenerate = safe(async (body = {}, ctx = {}) => {
+  const id = quizUserId(body.telegramUserId, ctx);
+  const chapterId = parseId(body.chapterId);
+  if (Number.isNaN(id) || Number.isNaN(chapterId)) return fail(400, "Missing Telegram user id or chapter id");
+
+  const chapter = await getChapterForUser(id, chapterId);
+  if (!chapter) return fail(404, "Chapter not found in your syllabus");
+  if (!isMatched(chapter)) return fail(409, "This chapter isn't matched to an NCERT chapter yet, so a quiz can't be built for it");
+
+  // Keys saved in the database win; the cookie / body key is a fallback for users with none saved
+  const saved = await getUserKeys(id);
+  const extra = [body.geminiKey, ctx?.cookies?.sa_gemini_key].filter((k) => typeof k === "string" && k.length >= 20);
+  let quiz;
+  try {
+    quiz = await generateQuiz(chapter, [...saved, ...extra]);
+  } catch (e) {
+    return fail(e.status || 502, e.message);
+  }
+  const quizId = createSession(id, chapter, quiz.questions);
+  return ok({
+    quizId,
+    chapter: { id: chapter.id, subject: chapter.subject, exam: chapter.exam, number: chapter.number, title: chapter.title },
+    // The answer key is withheld; it is only revealed in the submit response
+    questions: quiz.questions.map(({ subtopic, question, options }) => ({ subtopic, question, options })),
+  });
+});
+
+// POST /api/quizzes/submit { telegramUserId, quizId, answers: [optionIndex | null, ...] }
+export const quizSubmit = safe(async (body = {}, ctx = {}) => {
+  const id = quizUserId(body.telegramUserId, ctx);
+  if (Number.isNaN(id)) return fail(400, "Missing or invalid Telegram user id");
+  const session = takeSession(String(body.quizId || ""), id);
+  if (!session) return fail(410, "This quiz expired or was already submitted. Start it again from your chapters.");
+  if (!Array.isArray(body.answers)) return fail(400, "answers must be an array");
+
+  const g = grade(session.questions, body.answers);
+  const ch = session.chapter;
+  endSession(String(body.quizId));
+  const saved = await upsertQuizResult({
+    telegramUserId: id, chapterId: ch.id, subject: ch.subject, exam: ch.exam, title: ch.title,
+    score: g.score, total: g.total, percentage: g.percentage, tier: g.tier, message: g.message,
+    weakSubtopics: g.weakSubtopics,
+  });
+  return ok({
+    score: g.score, total: g.total, percentage: g.percentage,
+    revision_tier: g.tier, revision_message: g.message, weak_subtopics: g.weakSubtopics,
+    attempts: saved.attempts, review: g.review,
+    chapter: { id: ch.id, subject: ch.subject, exam: ch.exam, title: ch.title },
+  });
 });
