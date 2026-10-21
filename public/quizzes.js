@@ -212,25 +212,26 @@
     btn.className = 'qz-chapter';
     btn.dataset.chapterId = c.id;
     const label = `${c.number != null ? `Chapter ${c.number}: ` : ''}${c.title}`;
-    if (c.matched) {
-      btn.setAttribute('aria-label', label + (c.result ? `, last score ${c.result.percentage} percent` : ''));
+    if (c.result) {
+      // Already attempted: one attempt per chapter. aria-disabled (not disabled) so hover/focus still show the result.
+      btn.classList.add('done');
+      btn.setAttribute('aria-disabled', 'true');
+      btn.setAttribute('aria-label', `${label}, completed, score ${c.result.percentage} percent`);
     } else {
-      btn.disabled = true;
-      btn.setAttribute('aria-label', label + ', match pending, quiz not available yet');
-      btn.title = 'This chapter has not been matched to an NCERT chapter yet';
+      btn.setAttribute('aria-label', label);
     }
     btn.innerHTML = `
       <div class="qz-ch-top">
         <span class="qz-ch-num">${c.number != null ? 'CH ' + String(c.number).padStart(2, '0') : 'CH —'}</span>
-        <span class="chip ${c.matched ? 'ok' : 'wait'}">${c.matched ? 'Matched' : 'Match Pending'}</span>
+        <span class="chip ${c.matched ? 'ok' : 'wait'}">${c.matched ? 'NCERT' : 'By topic'}</span>
       </div>
       <div class="qz-ch-title">${esc(c.title)}</div>
       <div class="qz-ch-foot">
         ${c.result
-          ? `<span class="qz-badge ${tone(c.result.percentage)}">${c.result.percentage}%</span><span>Last: ${c.result.score}/${c.result.total}</span>`
-          : `<span>${c.matched ? 'Not attempted yet' : 'Waiting for NCERT match'}</span><span></span>`}
+          ? `<span class="qz-badge ${tone(c.result.percentage)}">${c.result.percentage}%</span><span>Completed · ${c.result.score}/${c.result.total}</span>`
+          : `<span>Not attempted yet</span><span></span>`}
       </div>`;
-    if (c.matched) btn.addEventListener('click', () => startQuiz(c));
+    if (!c.result) btn.addEventListener('click', () => startQuiz(c));
     if (c.result) {
       btn.addEventListener('mouseenter', () => showPop(btn, c));
       btn.addEventListener('mouseleave', hidePop);
@@ -259,10 +260,10 @@
     const r = c.result;
     const t = tone(r.percentage);
     pop.innerHTML = `
-      <div><span class="qz-pop-pct ${t}">${r.percentage}%</span><span class="qz-pop-score">${r.score}/${r.total} correct${r.attempts > 1 ? ` · attempt ${r.attempts}` : ''}</span></div>
+      <div><span class="qz-pop-pct ${t}">${r.percentage}%</span><span class="qz-pop-score">${r.score}/${r.total} correct</span></div>
       <p class="qz-pop-msg">${esc(r.revision_message)}</p>
       ${r.weak_subtopics?.length ? `<div class="qz-pop-weak"><b>Weak subtopics</b>${r.weak_subtopics.map((w) => `<span>${esc(w)}</span>`).join('')}</div>` : ''}
-      <div class="qz-pop-cta">Click chapter to retake quiz</div>`;
+      <div class="qz-pop-cta">Quiz completed. Each chapter can only be attempted once.</div>`;
     popAnchor = anchor;
     pop.hidden = false;
     placePop();
@@ -288,6 +289,8 @@
       scrollTo({ top: 0 });
       renderQuestion();
     } catch (e) {
+      // 409 = already taken (e.g. in another tab): refresh so the card shows its result
+      if (e.status === 409) await loadChapters({ silent: true }).catch(() => {});
       show('view-chapters');
       banner(e.message);
       scrollTo({ top: 0, behavior: 'smooth' });
@@ -369,9 +372,9 @@
       // Stay on the last question with the answers intact so Finish can simply be pressed again
       next.disabled = false;
       next.innerHTML = 'Try again <i class="fa-solid fa-rotate-right" aria-hidden="true"></i>';
-      if (e.status === 410) {
+      if (e.status === 410 || e.status === 409) {
         quiz = null;
-        backToChapters({ scroll: false });
+        await backToChapters({ scroll: false });
         banner(e.message);
         return;
       }

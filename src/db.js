@@ -206,8 +206,10 @@ export async function getChaptersWithResults(telegramUserId) {
 export async function getChapterForUser(telegramUserId, chapterId) {
   await initDb();
   const { rows } = await getPool().query(
-    `SELECT id, class, subject, exam, number, title, note, pdf_url, match_status
-       FROM syllabus_chapters WHERE id = $1 AND chat_id = $2`,
+    // class: the chapter's own class, else the class saved for this chat (so unmatched chapters still get the right level)
+    `SELECT sc.id, COALESCE(sc.class, ch.class) AS class, sc.subject, sc.exam, sc.number, sc.title, sc.note, sc.pdf_url, sc.match_status
+       FROM syllabus_chapters sc LEFT JOIN chats ch ON ch.chat_id = sc.chat_id
+      WHERE sc.id = $1 AND sc.chat_id = $2`,
     [chapterId, telegramUserId]
   );
   return rows[0] || null;
@@ -290,4 +292,14 @@ export async function savePairing({ code, chatId, userId, firstName = null, user
   );
   // Codes are only useful for an hour; keep the table tidy
   await getPool().query("DELETE FROM pairings WHERE created_at < now() - interval '1 day'");
+}
+
+/** Has this student already taken the quiz for this chapter? (one attempt per chapter) */
+export async function hasQuizResult(telegramUserId, subject, exam, title, db = null) {
+  await initDb();
+  const { rows } = await (db || getPool()).query(
+    "SELECT 1 FROM chapter_quiz_results WHERE telegram_user_id=$1 AND subject=$2 AND exam=$3 AND chapter_title=$4 LIMIT 1",
+    [telegramUserId, subject, exam || "", title]
+  );
+  return rows.length > 0;
 }

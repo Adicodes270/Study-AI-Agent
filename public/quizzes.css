@@ -238,3 +238,7 @@ html.light {
   background: var(--accent-danger-soft); border: 1px solid var(--accent-danger); color: var(--text-primary);
 }
 .qz-inline-error button { all: unset; cursor: pointer; text-decoration: underline; margin-left: 0.4rem; font-weight: 700; }
+
+/* Completed chapters: one attempt only */
+.qz-chapter.done { cursor: default; }
+.qz-chapter.done:hover, .qz-chapter.done:focus-visible { transform: none; }

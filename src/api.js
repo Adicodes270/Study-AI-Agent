@@ -3,7 +3,7 @@
 // Used by the Vercel functions in /api and by the local server (src/webServer.js).
 import { Api } from "grammy";
 import { TELEGRAM_BOT_TOKEN } from "./config.js";
-import { createQuizSession, getChapterForUser, getChaptersWithResults, initDb, takeQuizSession, upsertQuizResult, withDb } from "./db.js";
+import { createQuizSession, getChapterForUser, getChaptersWithResults, hasQuizResult, initDb, takeQuizSession, upsertQuizResult, withDb } from "./db.js";
 import { generateQuiz, grade } from "./quizEngine.js";
 import crypto from "node:crypto";
 import { deleteUserKey, getUserKeys, getUserProfile, saveUserConfig } from "./intake/userKeys.js";
@@ -178,7 +178,12 @@ export const quizGenerate = safe(async (body = {}, ctx = {}) => {
 
   const chapter = await getChapterForUser(id, chapterId);
   if (!chapter) return fail(404, "Chapter not found in your syllabus");
-  if (!isMatched(chapter)) return fail(409, "This chapter isn't matched to an NCERT chapter yet, so a quiz can't be built for it");
+  // Unmatched chapters (e.g. grammar topics, which have no NCERT chapter) are quizzed by topic at the student's class level.
+
+  // One attempt per chapter
+  if (await hasQuizResult(id, chapter.subject, chapter.exam, chapter.title)) {
+    return fail(409, "You've already taken this chapter's quiz. Each chapter can only be attempted once.");
+  }
 
   // Keys saved in the database win; the cookie / body key is a fallback for users with none saved
   const saved = await getUserKeys(id);
@@ -210,6 +215,8 @@ export const quizSubmit = safe(async (body = {}, ctx = {}) => {
   const out = await withDb(async (db) => {
     const session = await takeQuizSession(db, String(body.quizId || ""), id);
     if (!session) return null;
+    // Two quizzes for one chapter can be open at once (two tabs): only the first to finish counts
+    if (await hasQuizResult(id, session.chapter.subject, session.chapter.exam, session.chapter.title, db)) return "taken";
     const g = grade(session.questions, body.answers);
     const ch = session.chapter;
     const saved = await upsertQuizResult({
@@ -219,6 +226,7 @@ export const quizSubmit = safe(async (body = {}, ctx = {}) => {
     }, db);
     return { g, ch, saved };
   });
+  if (out === "taken") return fail(409, "You've already taken this chapter's quiz. Each chapter can only be attempted once.");
   if (!out) return fail(410, "This quiz expired or was already submitted. Start it again from your chapters.");
   const { g, ch, saved } = out;
   return ok({

@@ -2,7 +2,7 @@
 // Question-count heuristic, Gemini quiz generation and grading rules. (Quiz sessions are stored in the database, see db.js.)
 import crypto from "node:crypto";
 import { GoogleGenAI, Type } from "@google/genai";
-import { GEMINI_API_KEY, GEMINI_MODEL } from "./config.js";
+import { DEFAULT_CLASS_LEVEL, GEMINI_API_KEY, GEMINI_MODEL } from "./config.js";
 
 export const MIN_QUESTIONS = 5;
 export const MAX_QUESTIONS = 15;
@@ -84,24 +84,52 @@ function bookCode(pdfUrl) {
   return m ? m[1] : null;
 }
 
+// Grammar / language-skill chapters (Tenses, Modals, Determiners, Letter writing...) are not NCERT textbook
+// chapters, so they have no NCERT match. They are quizzed by topic at the student's class level instead.
+const GRAMMAR = /grammar|tense|modal|determiner|preposition|conjunction|article|voice|narration|speech|clause|punctuation|sentence|gap.?fill|editing|omission|reordering|error|synonym|antonym|vocabulary|idiom|prefix|suffix|word formation/i;
+
+export const isGrammarChapter = (ch) => /english|hindi|sanskrit/i.test(String(ch.subject ?? "")) && GRAMMAR.test(`${ch.title ?? ""} ${ch.note ?? ""}`);
+
 export function buildPrompt(ch, count) {
+  const cls = ch.class ?? DEFAULT_CLASS_LEVEL;
+  const level = cls ? `Class ${cls}` : "school (class not known: keep it at an average middle/secondary-school level)";
   const code = bookCode(ch.pdf_url);
-  return `You are a CBSE exam-setter writing a chapter quiz for a Class ${ch.class || "9/10"} student.
+  const matched = ch.match_status === "matched" || Boolean(ch.pdf_url);
+  const grammar = isGrammarChapter(ch);
+
+  const head = `You are a CBSE exam-setter writing a chapter quiz for a ${level} student.
 
 Chapter: ${ch.number != null ? `Chapter ${ch.number} — ` : ""}${ch.title}
 Subject: ${ch.subject}${ch.exam ? `\nExam this is for: ${ch.exam}` : ""}${code ? `\nNCERT book code: ${code}` : ""}${ch.note ? `\nSchool syllabus note (treat as the scope boundary): ${ch.note}` : ""}
+`;
 
-Write exactly ${count} multiple-choice questions that stay inside this chapter's NCERT module and the school's scope.
+  const scope = matched
+    ? `Write exactly ${count} multiple-choice questions that stay inside this chapter's NCERT module and the school's scope. All questions must suit a ${level} student.`
+    : grammar
+      ? `This is a grammar / language-skills topic, not a textbook story or poem, so it has no NCERT chapter. Write exactly ${count} multiple-choice questions on the topic "${ch.title}" only.
+- Pitch every question at ${level} CBSE English grammar: the rules, sentence length and vocabulary a ${level} student actually studies. Do not use rules or sentence patterns from a much higher or lower class.
+- Use the question types CBSE sets for this topic: fill in the blank, choose the correct form, spot the error, rewrite or transform the sentence, match the usage. Give each question its own short sentence(s); do not refer to any story, poem or textbook chapter.
+- Do not quiz literature content (characters, plots, poems) and do not drift into other grammar topics.`
+      : `This chapter is not linked to an NCERT chapter, so rely on the title and the school note for scope. Write exactly ${count} multiple-choice questions on "${ch.title}" at the level of a ${level} student. Do not assume any particular textbook, and do not ask about topics from other chapters or other classes.`;
 
-The questions must test understanding, not recall of the textbook's wording:
+  return `${head}
+${scope}
+
+Difficulty: keep it easy to moderate, at the level of an average student who has read the chapter once or twice.
+- About half the questions easy (one idea, answerable directly if you understood the concept), about 40% medium, and at most one or two slightly harder ones.
+- Keep question stems short and in plain, simple language: one or two sentences, no long paragraphs and no trick wording.
+- Avoid multi-step reasoning. Numerical questions use small, friendly numbers and a single step. Do not combine two concepts in one question.
+- Distractors should be wrong in a clear way for someone who understands the concept; do not make options so close that only a very careful student could tell them apart.
+
+The questions must still test understanding, not recall of the textbook's wording:
 - Do NOT copy or lightly paraphrase sentences from the textbook. Do not ask "which of these is defined in the book as...".
-- Prefer: real-world application, cause-and-effect reasoning, interpreting a short data/diagram-in-words/case scenario, comparing two ideas, spotting the error in a statement, or a short numerical/analytical step (for maths and science), in the style of CBSE competency-based questions.
-- Spread the questions across the chapter's different subtopics instead of repeating one idea; mix easy, medium and a few harder questions.
+- Prefer: simple real-world application, basic cause-and-effect, a short everyday scenario, comparing two ideas, or a simple one-step calculation (for maths and science), in the style of easier CBSE competency-based questions.
+- Spread the questions across the chapter's different subtopics instead of repeating one idea; start with easier questions and build up gently.
 - Each question has exactly 4 options. Exactly one is correct; the distractors must be plausible misconceptions, not obvious nonsense. Never use "all of the above" or "none of the above".
 - "subtopic" is a short label (2-5 words) for the concept the question tests, so a student can see which concepts are weak. Reuse the same label when two questions test the same concept.
 - "correctIndex" is the 0-based index of the correct option.
 - "explanation" is 1-3 sentences saying why the answer is right and what the common wrong idea is.
-- Be factually correct. If the chapter title is ambiguous, stick to the most standard NCERT interpretation.`;
+- Be factually correct. If the chapter title is ambiguous, stick to the most standard ${level} CBSE interpretation.`;
 }
 
 /** Validate and tidy what the model returned; returns only well-formed questions. */
@@ -153,7 +181,7 @@ export async function generateQuiz(chapter, apiKeys) {
   const request = {
     model: GEMINI_MODEL,
     contents: buildPrompt(chapter, count),
-    config: { responseMimeType: "application/json", responseSchema: QUIZ_SCHEMA, temperature: 0.8 },
+    config: { responseMimeType: "application/json", responseSchema: QUIZ_SCHEMA, temperature: 0.6 },
   };
   let lastErr;
   for (const key of keys) {
