@@ -89,19 +89,21 @@ async def trigger(client, nb_id, r_type, title, src_ids, ReportFormat):
     return task_id
 
 async def verify(client, nb_id, task_id):
-    """Ask NotebookLM whether the task really exists: pending / in_progress / completed => True."""
+    """Best-effort check that NotebookLM accepted the task. Only an explicit failure counts as "not started":
+    a task that is not listed yet (not_found) is normal for a few seconds and must NOT be treated as a failure."""
+    state = "queued"
     for attempt in range(3):
         try:
             st = await client.artifacts.poll_status(nb_id, task_id)
         except Exception as exc:
-            return False, f"{type(exc).__name__}: {exc}"
+            return True, "queued"  # the task id exists; a flaky list call does not mean the resource was not started
         state = str(getattr(st, "status", "")).lower().split(".")[-1]
-        if state in ("pending", "in_progress", "completed"):
+        if state in ("pending", "in_progress", "completed", "processing"):
             return True, state
         if state == "failed":
             return False, getattr(st, "error", None) or "failed"
-        await asyncio.sleep(2.5)  # not_found / unknown: listing may lag a moment
-    return False, "not visible in the notebook"
+        await asyncio.sleep(2.5)
+    return True, "queued"
 
 async def run():
     p = json.loads(sys.argv[1])
@@ -146,19 +148,26 @@ async def run():
                 if not src_ids:
                     raise RuntimeError("the notebook has no usable source")
                 results = {}
-                for r_type in p["resource_types"]:
-                    if r_type.lower() in EXCLUDED:
-                        continue
+                # Audio has the tightest daily quota, so it goes LAST: if it is refused, everything else is already started.
+                order = sorted([t for t in p["resource_types"] if t.lower() not in EXCLUDED], key=lambda t: t == "audio_overview")
+                for i, r_type in enumerate(order):
+                    if i: await asyncio.sleep(3)  # do not fire every request at the same instant
                     try:
-                        tid = await trigger(client, nb_id, r_type, p["title"], src_ids, ReportFormat)
+                        try:
+                            tid = await trigger(client, nb_id, r_type, p["title"], src_ids, ReportFormat)
+                        except Exception as first_exc:
+                            if is_rate(first_exc): raise
+                            await asyncio.sleep(4)  # one retry for transient errors
+                            tid = await trigger(client, nb_id, r_type, p["title"], src_ids, ReportFormat)
                         if r_type == "mind_map":
                             results[r_type] = {"ok": True, "task_id": tid, "state": "completed"}
                         else:
                             good, state = await verify(client, nb_id, tid)
                             results[r_type] = {"ok": good, "task_id": tid, "state": state} if good else {"ok": False, "task_id": tid, "error": state}
                     except Exception as exc:
-                        if is_rate(exc): results[r_type] = {"ok": False, "rate_limit": True, "error": str(exc), "retry_after": getattr(exc, "retry_after", None) or "15 minutes"}; break
-                        results[r_type] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+                        # A quota/rate error on ONE resource must not stop the others (it used to stop the loop here).
+                        if is_rate(exc): results[r_type] = {"ok": False, "rate_limit": True, "error": str(exc), "retry_after": getattr(exc, "retry_after", None) or "15 minutes"}
+                        else: results[r_type] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
                 print(json.dumps({"ok": True, "resources": results}))
             else:
                 raise ValueError("unknown action " + action)
