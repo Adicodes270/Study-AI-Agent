@@ -15,7 +15,7 @@ import { NOTEBOOKLM_RESOURCE_TYPES, EXCLUDED_RESOURCE_TYPES } from "./api.js";
 import { DEFAULT_CLASS_LEVEL } from "./config.js";
 import { getChapterForUser } from "./db.js";
 import { buildNcertPdfUrl, findNcertChapter } from "./intake/ncertCatalog.js";
-import { registerChapterGenerator } from "./generationQueue.js";
+import { registerChapterGenerator, setChapterStep } from "./generationQueue.js";
 
 const MAX_PDF_BYTES = 40 * 1024 * 1024;
 
@@ -35,8 +35,16 @@ def is_rate(exc):
     return "ratelimit" in type(exc).__name__.lower() or "429" in msg or "quota" in msg or "rate limit" in msg
 
 def bad_status(src):
-    st = str(getattr(src, "status", "") or "").lower()
-    return any(w in st for w in ("error", "fail", "unsupported", "rejected"))
+    st = getattr(src, "status", None)
+    if st is None:
+        return False
+    name = str(getattr(st, "name", "") or "").lower()
+    try:
+        val = int(getattr(st, "value", st))
+    except Exception:
+        val = None
+    text = str(st).lower()
+    return val == 3 or name == "error" or any(w in text for w in ("error", "fail", "unsupported", "rejected"))
 
 async def trigger(client, nb_id, r_type, title, src_ids, ReportFormat):
     ids = src_ids or None
@@ -59,15 +67,41 @@ async def trigger(client, nb_id, r_type, title, src_ids, ReportFormat):
     elif r_type == "flashcards":
         st = await a.generate_flashcards(nb_id, source_ids=ids)
     elif r_type == "mind_map":
-        if hasattr(client, "mind_maps"):
-            st = await client.mind_maps.generate(nb_id)
-        else:
-            st = await a.generate_mind_map(nb_id, source_ids=ids)
+        st = await a.generate_mind_map(nb_id, source_ids=ids)
+        note_id = getattr(st, "note_id", None)
+        if not note_id:
+            raise RuntimeError("NotebookLM did not save the mind map")
+        return note_id
     elif r_type == "slide_deck":
         st = await a.generate_slide_deck(nb_id, source_ids=ids)
     else:
         raise ValueError("unsupported resource type " + r_type)
-    return getattr(st, "task_id", None) or getattr(st, "note_id", None) or getattr(st, "id", None)
+    # Older versions return status="failed" instead of raising when NotebookLM refuses the request
+    if getattr(st, "is_failed", False) or str(getattr(st, "status", "")).lower().endswith("failed"):
+        err = RuntimeError(getattr(st, "error", None) or "NotebookLM refused to start this resource")
+        if getattr(st, "error_code", None) == "USER_DISPLAYABLE_ERROR":
+            err.retry_after = "15 minutes"
+            err.args = ("rate limit: " + str(err),)
+        raise err
+    task_id = getattr(st, "task_id", None) or getattr(st, "id", None)
+    if not task_id:
+        raise RuntimeError("NotebookLM returned no task id, so the resource was not started")
+    return task_id
+
+async def verify(client, nb_id, task_id):
+    """Ask NotebookLM whether the task really exists: pending / in_progress / completed => True."""
+    for attempt in range(3):
+        try:
+            st = await client.artifacts.poll_status(nb_id, task_id)
+        except Exception as exc:
+            return False, f"{type(exc).__name__}: {exc}"
+        state = str(getattr(st, "status", "")).lower().split(".")[-1]
+        if state in ("pending", "in_progress", "completed"):
+            return True, state
+        if state == "failed":
+            return False, getattr(st, "error", None) or "failed"
+        await asyncio.sleep(2.5)  # not_found / unknown: listing may lag a moment
+    return False, "not visible in the notebook"
 
 async def run():
     p = json.loads(sys.argv[1])
@@ -116,7 +150,12 @@ async def run():
                     if r_type.lower() in EXCLUDED:
                         continue
                     try:
-                        results[r_type] = {"ok": True, "task_id": await trigger(client, nb_id, r_type, p["title"], src_ids, ReportFormat)}
+                        tid = await trigger(client, nb_id, r_type, p["title"], src_ids, ReportFormat)
+                        if r_type == "mind_map":
+                            results[r_type] = {"ok": True, "task_id": tid, "state": "completed"}
+                        else:
+                            good, state = await verify(client, nb_id, tid)
+                            results[r_type] = {"ok": good, "task_id": tid, "state": state} if good else {"ok": False, "task_id": tid, "error": state}
                     except Exception as exc:
                         if is_rate(exc): results[r_type] = {"ok": False, "rate_limit": True, "error": str(exc), "retry_after": getattr(exc, "retry_after", None) or "15 minutes"}; break
                         results[r_type] = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
@@ -201,7 +240,8 @@ export async function downloadNcertPdf(urls, { fetchImpl = fetch, timeoutMs = 60
  * (the queue then marks the chapter 'Failed'; errors with `.retryAfter` also pause that user's queue).
  * `sourceUrl` defaults to the chapter's saved pdf_url. `deps` is for tests.
  */
-export async function createChapterNotebook({ userId, chapter, sessionFile, sourceUrl }, deps = {}) {
+export async function createChapterNotebook({ jobId, userId, chapter, sessionFile, sourceUrl }, deps = {}) {
+  const step = deps.onStep || ((t) => setChapterStep(jobId, t));
   const py = deps.runPython || runPython;
   const download = deps.downloadNcertPdf || downloadNcertPdf;
 
@@ -215,7 +255,8 @@ export async function createChapterNotebook({ userId, chapter, sessionFile, sour
   const title = `Study Agent — ${full.subject}: ${full.title}`;
 
   // 1 + 2. Notebook, then the user's source URL
-  const first = await py({ action: "create_and_add_url", storage_path: sessionFile, title, url });
+  await step(url ? "Creating notebook and adding your source link" : "Creating notebook");
+  const first = await py({ action: "create_and_add_url", storage_path: sessionFile, title, url }, 240_000);
   if (!first?.ok || !first.notebook_id) throw pyError(first || {}, "Could not create the NotebookLM notebook");
   const notebookId = first.notebook_id;
   let sourceKind = first.reused ? "existing" : "url";
@@ -227,8 +268,10 @@ export async function createChapterNotebook({ userId, chapter, sessionFile, sour
     fallbackReason = urlError || (url ? "URL was not accepted" : "no source URL provided");
     let tmp = null;
     try {
+      await step("Source link failed, downloading the NCERT chapter instead");
       tmp = await download(resolveNcertPdfUrls(full));
-      const up = await py({ action: "add_file", storage_path: sessionFile, notebook_id: notebookId, file_path: tmp.file });
+      await step("Uploading the NCERT chapter to NotebookLM");
+      const up = await py({ action: "add_file", storage_path: sessionFile, notebook_id: notebookId, file_path: tmp.file }, 240_000);
       if (!up?.ok) throw pyError(up || {}, "NotebookLM rejected the NCERT file");
       sourceKind = "ncert_pdf";
     } catch (e) {
@@ -241,7 +284,8 @@ export async function createChapterNotebook({ userId, chapter, sessionFile, sour
 
   // 4. Study resources (infographics / reports are never requested)
   const types = GENERATABLE_RESOURCE_TYPES;
-  const gen = await py({ action: "generate", storage_path: sessionFile, notebook_id: notebookId, title: full.title, resource_types: types });
+  await step("Starting study resources in NotebookLM");
+  const gen = await py({ action: "generate", storage_path: sessionFile, notebook_id: notebookId, title: full.title, resource_types: types }, 420_000);
   if (!gen?.ok) throw pyError(gen || {}, "Resource generation failed");
   const resources = gen.resources || {};
   const started = Object.values(resources).filter((r) => r.ok).length;

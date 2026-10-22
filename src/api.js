@@ -655,7 +655,7 @@ export const resourcesList = safe(async (query = {}, ctx = {}) => {
 
   const { rows } = await withDb((db) =>
     db.query(
-      `SELECT sc.id, sc.subject, sc.number, sc.title, g.status, g.error, g.notebook_url
+      `SELECT sc.id, sc.subject, sc.number, sc.title, g.status, g.error, g.notebook_url, g.step, g.result_json
          FROM syllabus_chapters sc
          LEFT JOIN chapter_generation g
            ON g.telegram_user_id = sc.chat_id AND g.subject = sc.subject AND g.exam = sc.exam
@@ -672,8 +672,25 @@ export const resourcesList = safe(async (query = {}, ctx = {}) => {
 
   const chapters = rows.map((r) => {
     const status = r.status === "Ready" || r.status === "Generating" || r.status === "Failed" ? r.status : r.status === "Completed" ? "Ready" : "Pending";
+    let startedNote = "";
+    try {
+      const res = r.result_json ? JSON.parse(r.result_json).resources : null;
+      if (res) {
+        const entries = Object.entries(res);
+        const missed = entries.filter(([, x]) => !x.ok);
+        startedNote = ` ${entries.length - missed.length} of ${entries.length} study resources were started in NotebookLM; the longer ones can take a few minutes to finish.`;
+        if (missed.length) {
+          const why = missed.map(([k, x]) => `${k.replace(/_/g, " ")} (${String(x.error || "not started").slice(0, 90)})`).join("; ");
+          startedNote += ` Not started: ${why}.`;
+        }
+      }
+    } catch {}
     const description =
-      status === "Failed"
+      status === "Ready" && startedNote
+        ? `Notebook created.${startedNote}`
+        : status === "Generating" && r.step
+        ? `${r.step}…`
+        : status === "Failed"
         ? `Generation failed${r.error ? `: ${String(r.error).slice(0, 200).replace(/[.\s]+$/, "")}` : ""}. Please try again.`
         : RESOURCE_STATUS_TEXT[status];
     return {

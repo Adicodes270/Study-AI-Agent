@@ -169,6 +169,7 @@ CREATE TABLE IF NOT EXISTS chapter_generation (
     error            TEXT,
     result_json      TEXT,
     notebook_url     TEXT,
+    step             TEXT,
     attempts         INTEGER NOT NULL DEFAULT 0,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -176,6 +177,7 @@ CREATE TABLE IF NOT EXISTS chapter_generation (
 );
 
 ALTER TABLE chapter_generation ADD COLUMN IF NOT EXISTS notebook_url TEXT;
+ALTER TABLE chapter_generation ADD COLUMN IF NOT EXISTS step TEXT;
 UPDATE chapter_generation SET status = 'Ready' WHERE status = 'Completed';
 
 CREATE INDEX IF NOT EXISTS idx_chapter_resources_user

@@ -73,7 +73,7 @@ export function orderedChaptersFromSyllabus(syllabus) {
 // ---------------------------------------------------------------------------
 
 const ROW_COLS = `id, telegram_user_id, chapter_id, subject, exam, chapter_title, chapter_number,
-                  position, status, error, notebook_url, attempts, created_at, updated_at`;
+                  position, status, error, notebook_url, step, attempts, created_at, updated_at`;
 
 /**
  * Save every chapter as 'Generating'. Chapters already 'Ready' are left alone (generated content is
@@ -100,6 +100,7 @@ async function saveInitialStatuses(userId, chapters) {
                position = EXCLUDED.position,
                status = CASE WHEN chapter_generation.status = 'Ready'
                              THEN chapter_generation.status ELSE 'Generating' END,
+               step = CASE WHEN chapter_generation.status = 'Ready' THEN chapter_generation.step ELSE 'Waiting in queue' END,
                error = CASE WHEN chapter_generation.status = 'Ready'
                             THEN chapter_generation.error ELSE NULL END,
                updated_at = now()
@@ -121,13 +122,20 @@ async function writeResult(id, status, { error = null, result = null } = {}) {
   const { rows } = await withDb((db) =>
     db.query(
       `UPDATE chapter_generation
-          SET status = $2, error = $3, result_json = $4, notebook_url = COALESCE($5, notebook_url), updated_at = now()
+          SET status = $2, error = $3, result_json = $4, notebook_url = COALESCE($5, notebook_url), step = NULL, updated_at = now()
         WHERE id = $1 AND status = 'Generating'
         RETURNING ${ROW_COLS}`,
       [id, status, error, result == null ? null : JSON.stringify(result), status === GENERATION_STATUS.READY ? result?.notebookUrl || null : null]
     )
   );
   return rows[0] || null; // null => already finished (duplicate report), ignore
+}
+
+/** Record what a running chapter is doing right now (shown on the Resources page, logged on the server). Never throws. */
+export async function setChapterStep(jobId, step) {
+  if (jobId == null) return;
+  console.log("[generation] job " + jobId + ": " + step);
+  await withDb((db) => db.query("UPDATE chapter_generation SET step = $2, updated_at = now() WHERE id = $1 AND status = 'Generating'", [jobId, step])).catch(() => {});
 }
 
 /** Statuses for the UI: [{ chapter_id, subject, title, status, error, ... }] in syllabus order. */
@@ -301,6 +309,7 @@ async function commit(row, outcome) {
 }
 
 function emitFor(saved, outcome) {
+  console.log("[generation] job " + saved.id + " '" + saved.chapter_title + "': " + saved.status + (saved.error ? " (" + saved.error + ")" : ""));
   const payload = { jobId: saved.id, userId: saved.telegram_user_id, chapterId: saved.chapter_id, subject: saved.subject, title: saved.chapter_title, error: saved.error };
   generationEvents.emit(saved.status === GENERATION_STATUS.READY ? "chapter:completed" : "chapter:failed", payload);
 }
