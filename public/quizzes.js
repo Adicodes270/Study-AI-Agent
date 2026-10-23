@@ -28,11 +28,12 @@
 
   // ---------- Granular Subject Classifier (History, Civics, Economics, Geography & Physics, Chemistry, Biology) ----------
   const SCIENCE_CHAPTER_DISCIPLINE = {
+    // Class 9: new "Exploration" book (2026-27), 13 chapters. Keep in sync with src/intake/syllabusParser.js.
     iesc1: {
-      1: 'Chemistry', 2: 'Chemistry', 3: 'Chemistry', 4: 'Chemistry',
-      5: 'Biology', 6: 'Biology',
-      7: 'Physics', 8: 'Physics', 9: 'Physics', 10: 'Physics', 11: 'Physics',
-      12: 'Biology',
+      1: 'Physics', 2: 'Biology', 3: 'Biology', 4: 'Physics',
+      5: 'Chemistry', 6: 'Physics', 7: 'Physics',
+      8: 'Chemistry', 9: 'Chemistry', 10: 'Physics',
+      11: 'Biology', 12: 'Biology', 13: 'Biology',
     },
     jesc1: {
       1: 'Chemistry', 2: 'Chemistry', 3: 'Chemistry', 4: 'Chemistry',
@@ -752,7 +753,7 @@
 
   // ---------- Client-side NCERT Chapter PDF helper (with granular subjects!) ----------
   const CLIENT_NCERT_MAP = {
-    iesc1: { cls: 9, subject: 'Science', chapters: { 1: 'Matter in Our Surroundings', 2: 'Is Matter Around Us Pure?', 3: 'Atoms and Molecules', 4: 'Structure of the Atom', 5: 'The Fundamental Unit of Life', 6: 'Tissues', 7: 'Motion', 8: 'Force and Laws of Motion', 9: 'Gravitation', 10: 'Work and Energy', 11: 'Sound', 12: 'Improvement in Food Resources' } },
+    iesc1: { cls: 9, subject: 'Science', chapters: { 1: 'Exploration: Entering the World of Secondary Science', 2: 'Cell: The Building Block of Life', 3: 'Tissues in Action', 4: 'Describing Motion Around Us', 5: 'Exploring Mixtures and their Separation', 6: 'How Forces Affect Motion', 7: 'Work, Energy, and Simple Machines', 8: 'Journey Inside the Atom', 9: 'Atomic Foundations of Matter', 10: 'Sound Waves: Characteristics and Applications', 11: 'Reproduction: How Life Continues', 12: 'Patterns in Life: Diversity and Classification', 13: 'Earth as a System: Energy, Matter, and Life' } },
     iemh1: { cls: 9, subject: 'Mathematics', chapters: { 1: 'Number Systems', 2: 'Polynomials', 3: 'Coordinate Geometry', 4: 'Linear Equations in Two Variables', 5: "Introduction to Euclid's Geometry", 6: 'Lines and Angles', 7: 'Triangles', 8: 'Quadrilaterals', 9: 'Circles', 10: "Heron's Formula", 11: 'Surface Areas and Volumes', 12: 'Statistics' } },
     iess1: { cls: 9, subject: 'Geography', chapters: { 1: 'India - Size and Location', 2: 'Physical Features of India', 3: 'Drainage', 4: 'Climate', 5: 'Natural Vegetation and Wildlife', 6: 'Population' } },
     iess2: { cls: 9, subject: 'Economics', chapters: { 1: 'The Story of Village Palampur', 2: 'People as Resource', 3: 'Poverty as a Challenge', 4: 'Food Security in India' } },

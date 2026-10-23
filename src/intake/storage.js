@@ -152,25 +152,10 @@ export async function saveSyllabus(chatId, rawSyllabus, options = {}) {
             "SELECT id, pdf_url FROM ncert_chapters WHERE class = $1 AND book = $2 AND number = $3",
             [effectiveClass, bookName, chNum]
           );
-          const existing = found[0];
-
-          if (existing) {
-            ncertId = existing.id;
-            if (existing.pdf_url !== c.pdfUrl) {
-              await db.query("UPDATE ncert_chapters SET pdf_url = $1, title = $2 WHERE id = $3", [
-                c.pdfUrl,
-                c.title,
-                existing.id,
-              ]);
-            }
-          } else {
-            const { rows: inserted } = await db.query(
-              "INSERT INTO ncert_chapters (class, book, edition, number, title, pdf_url, pdf_path) " +
-                "VALUES ($1, $2, 'latest', $3, $4, $5, NULL) RETURNING id",
-              [effectiveClass, bookName, chNum, c.title, c.pdfUrl]
-            );
-            ncertId = inserted[0].id;
-          }
+          // ncert_chapters is a shared, read-only catalog: uploads must never insert into or update it
+          // (that caused "duplicate key ... ncert_chapters_pkey"). The user's chapter is stored in
+          // syllabus_chapters below; we only link to a catalog row if one already exists.
+          ncertId = found[0] ? found[0].id : null;
         }
 
         await db.query(

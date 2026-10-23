@@ -31,19 +31,21 @@ async function generate(apiKeys, request) {
 
 // Chapter-level subject mapping for NCERT Science books (iesc1 = Class 9, jesc1 = Class 10)
 const NCERT_SCIENCE_CHAPTER_DISCIPLINE = {
+  // Class 9: new "Exploration" book (2026-27), 13 chapters
   iesc1: {
-    1: "Chemistry", // Matter in Our Surroundings
-    2: "Chemistry", // Is Matter Around Us Pure?
-    3: "Chemistry", // Atoms and Molecules
-    4: "Chemistry", // Structure of the Atom
-    5: "Biology",   // The Fundamental Unit of Life
-    6: "Biology",   // Tissues
-    7: "Physics",   // Motion
-    8: "Physics",   // Force and Laws of Motion
-    9: "Physics",   // Gravitation
-    10: "Physics",  // Work and Energy
-    11: "Physics",  // Sound
-    12: "Biology",  // Improvement in Food Resources
+    1: "Physics",   // Exploration: Entering the World of Secondary Science (intro to all sciences)
+    2: "Biology",   // Cell: The Building Block of Life
+    3: "Biology",   // Tissues in Action
+    4: "Physics",   // Describing Motion Around Us
+    5: "Chemistry", // Exploring Mixtures and their Separation
+    6: "Physics",   // How Forces Affect Motion
+    7: "Physics",   // Work, Energy, and Simple Machines
+    8: "Chemistry", // Journey Inside the Atom
+    9: "Chemistry", // Atomic Foundations of Matter
+    10: "Physics",  // Sound Waves: Characteristics and Applications
+    11: "Biology",  // Reproduction: How Life Continues
+    12: "Biology",  // Patterns in Life: Diversity and Classification
+    13: "Biology",  // Earth as a System: Energy, Matter, and Life (Earth Science, no own tab)
   },
   jesc1: {
     1: "Chemistry", // Chemical Reactions and Equations
@@ -168,18 +170,19 @@ const NCERT_BOOKS_CATALOG = {
     class_level: 9,
     subject: "Science",
     chapters: {
-      1: "Matter in Our Surroundings",
-      2: "Is Matter Around Us Pure?",
-      3: "Atoms and Molecules",
-      4: "Structure of the Atom",
-      5: "The Fundamental Unit of Life",
-      6: "Tissues",
-      7: "Motion",
-      8: "Force and Laws of Motion",
-      9: "Gravitation",
-      10: "Work and Energy",
-      11: "Sound",
-      12: "Improvement in Food Resources",
+      1: "Exploration: Entering the World of Secondary Science",
+      2: "Cell: The Building Block of Life",
+      3: "Tissues in Action",
+      4: "Describing Motion Around Us",
+      5: "Exploring Mixtures and their Separation",
+      6: "How Forces Affect Motion",
+      7: "Work, Energy, and Simple Machines",
+      8: "Journey Inside the Atom",
+      9: "Atomic Foundations of Matter",
+      10: "Sound Waves: Characteristics and Applications",
+      11: "Reproduction: How Life Continues",
+      12: "Patterns in Life: Diversity and Classification",
+      13: "Earth as a System: Energy, Matter, and Life",
     },
   },
   iemh1: {
@@ -432,9 +435,11 @@ export function inferNcertFromFilename(fileName) {
 
 const CLASS_9_AND_10_NCERT_REFERENCE = `
 Complete Class 9 NCERT Books & Chapters Reference (Use Exact Specific Subject Names: Physics, Chemistry, Biology, History, Civics, Geography, Economics):
-- Chemistry ("iesc1"): 1: Matter in Our Surroundings | 2: Is Matter Around Us Pure? | 3: Atoms and Molecules | 4: Structure of the Atom
-- Biology ("iesc1"): 5: The Fundamental Unit of Life | 6: Tissues | 12: Improvement in Food Resources (Older editions: Diversity in Living Organisms, Why Do We Fall Ill, Natural Resources)
-- Physics ("iesc1"): 7: Motion | 8: Force and Laws of Motion | 9: Gravitation | 10: Work and Energy | 11: Sound
+- Science, new 2026-27 book "Exploration" ("iesc1", 13 chapters; the old 12-chapter book no longer exists on ncert.nic.in, the same iesc1 file codes now serve this one):
+  - Physics: 1: Exploration: Entering the World of Secondary Science | 4: Describing Motion Around Us | 6: How Forces Affect Motion | 7: Work, Energy, and Simple Machines | 10: Sound Waves: Characteristics and Applications
+  - Chemistry: 5: Exploring Mixtures and their Separation | 8: Journey Inside the Atom | 9: Atomic Foundations of Matter
+  - Biology: 2: Cell: The Building Block of Life | 3: Tissues in Action | 11: Reproduction: How Life Continues | 12: Patterns in Life: Diversity and Classification | 13: Earth as a System: Energy, Matter, and Life
+  - Old-book titles map to the new book as follows: "The Fundamental Unit of Life" -> 2, "Tissues" -> 3, "Motion" -> 4, "Force and Laws of Motion" -> 6, "Work and Energy" -> 7, "Structure of the Atom" -> 8, "Atoms and Molecules" -> 9, "Sound" -> 10, "Is Matter Around Us Pure?" -> 5. "Matter in Our Surroundings", "Gravitation" and "Improvement in Food Resources" are no longer standalone chapters: set is_ncert to false for them.
 - Mathematics ("iemh1"): 1: Number Systems | 2: Polynomials | 3: Coordinate Geometry | 4: Linear Equations in Two Variables | 5: Introduction to Euclid's Geometry | 6: Lines and Angles | 7: Triangles | 8: Quadrilaterals | 9: Circles | 10: Heron's Formula | 11: Surface Areas and Volumes | 12: Statistics
 - Geography ("iess1"): 1: India - Size and Location | 2: Physical Features of India | 3: Drainage | 4: Climate | 5: Natural Vegetation and Wildlife | 6: Population
 - Economics ("iess2"): 1: The Story of Village Palampur | 2: People as Resource | 3: Poverty as a Challenge | 4: Food Security in India

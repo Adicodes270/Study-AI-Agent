@@ -19,6 +19,10 @@ import { registerChapterGenerator, setChapterStep } from "./generationQueue.js";
 
 const MAX_PDF_BYTES = 40 * 1024 * 1024;
 
+// Test mode: add ONLY the chapter's saved link to NotebookLM. No download + file-upload fallback.
+// On by default; set NOTEBOOKLM_URL_ONLY=0 to bring the NCERT PDF fallback back.
+const URL_ONLY = process.env.NOTEBOOKLM_URL_ONLY !== "0";
+
 // Allowed resources = the app's list minus anything excluded (infographics, reports). Checked again in the Python script.
 export const GENERATABLE_RESOURCE_TYPES = NOTEBOOKLM_RESOURCE_TYPES.map((t) => t.id).filter((id) => !EXCLUDED_RESOURCE_TYPES.has(id));
 
@@ -262,8 +266,12 @@ export async function createChapterNotebook({ jobId, userId, chapter, sessionFil
   let sourceKind = first.reused ? "existing" : "url";
   let fallbackReason = null;
 
-  // 3. NCERT fallback
+  // 3. NCERT fallback (skipped while URL_ONLY is on: the saved link is the only source we try)
   let urlError = first.source_error || null;
+  if (!first.source_ok && URL_ONLY) {
+    const why = urlError || (url ? "URL was not accepted" : "no source URL provided");
+    throw new Error(`Could not add the source link for "${full.title}" (${url || "no link saved"}): ${why}`);
+  }
   if (!first.source_ok) {
     fallbackReason = urlError || (url ? "URL was not accepted" : "no source URL provided");
     let tmp = null;
