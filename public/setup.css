@@ -1094,3 +1094,30 @@ code {
 html {
   scroll-behavior: auto;
 }
+
+
+/* ==========================================================================
+   Step 4: Todoist API Key Integration & 4-Step Readiness Grid
+   ========================================================================== */
+.progress-steps-row {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.todoist-quick-links {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+@media (max-width: 1080px) {
+  .progress-steps-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .progress-steps-row {
+    grid-template-columns: 1fr;
+  }
+}

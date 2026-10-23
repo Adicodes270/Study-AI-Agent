@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Study Planner &amp; Todoist Sync — Study Agent</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+        rel="stylesheet">
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+
+    <link rel="stylesheet" href="./theme.css">
+    <link rel="stylesheet" href="./style.css">
+    <link rel="stylesheet" href="./planner.css">
+</head>
+
+<body class="perf-lite">
+    <div class="pl-bg" aria-hidden="true"></div>
+
+    <!-- Header & Navigation -->
+    <header class="header">
+        <nav class="nav" aria-label="Main Navigation">
+            <a href="index.html" class="brand-logo">Study Agent</a>
+
+            <ul class="nav-links" id="nav-menu">
+                <li class="nav-home-mobile"><a href="index.html">Home</a></li>
+                <li><a href="setup.html">Setup</a></li>
+                <li><a href="planner.html" class="active">Planner</a></li>
+                <li><a href="quizzes.html">Quizzes</a></li>
+                <li><a href="resources.html">Resources</a></li>
+                <li class="nav-cta-mobile"><a href="https://web.telegram.org/a/#8996972210" target="_blank" rel="noopener noreferrer">Start</a></li>
+            </ul>
+
+            <button class="nav-toggle" type="button" aria-label="Open menu" aria-expanded="false"
+                aria-controls="nav-menu"><i class="fa-solid fa-bars" aria-hidden="true"></i></button>
+
+            <div class="nav-actions">
+                <a href="setup.html" class="nav-btn nav-btn-text">Setup Telegram</a>
+                <a href="https://web.telegram.org/a/#8996972210" class="nav-btn nav-btn-primary" target="_blank" rel="noopener noreferrer">Start</a>
+            </div>
+        </nav>
+    </header>
+
+    <main class="pl-main">
+        <!-- Hero & Todoist Quick Access Bar -->
+        <section class="pl-hero">
+            <div class="pl-hero-left">
+                <div class="pl-eyebrow-row">
+                    <span class="pl-eyebrow-badge">
+                        <i class="fa-solid fa-wand-magic-sparkles"></i>
+                        <span>AI Study Planner · Todoist SDK Integration</span>
+                    </span>
+                    <span class="chip wait" id="planner-todoist-badge">
+                        <i class="fa-solid fa-circle-dot"></i> Checking Todoist…
+                    </span>
+                </div>
+                <h1>Your Adaptive AI Study Schedule &amp; Todoist Hub</h1>
+                <p class="pl-hero-sub">
+                    Balances your school hours (Mon–Sat), full-day Sundays &amp; vacations, daily study and sleep targets, exam countdowns, and past quiz weak spots—then syncs parent tasks and sub-tasks straight to Todoist.
+                </p>
+            </div>
+
+            <div class="pl-hero-actions bento-card">
+                <div class="pl-todoist-quick-top">
+                    <div>
+                        <span class="pl-card-kicker">Todoist Workspace</span>
+                        <strong id="todoist-connection-title">Todoist Quick Access</strong>
+                    </div>
+                    <button type="button" class="pl-link-btn" id="toggle-inline-todoist-btn">
+                        <i class="fa-solid fa-key"></i> <span id="toggle-inline-todoist-text">API Key</span>
+                    </button>
+                </div>
+
+                <!-- Inline Todoist API Token Drawer -->
+                <div class="pl-inline-key-box" id="inline-todoist-drawer" hidden>
+                    <p class="pl-inline-key-help">
+                        Log in to Todoist, open <a href="https://app.todoist.com/app/settings/integrations/developer" target="_blank" rel="noopener noreferrer">Todoist Developer Settings <i class="fa-solid fa-arrow-up-right-from-square"></i></a>, copy your API token, and paste it below:
+                    </p>
+                    <div class="pl-inline-key-row">
+                        <input type="password" id="planner-todoist-key-input" class="pl-input mono" placeholder="Paste Todoist API token (40-char token)...">
+                        <button type="button" class="btn btn-solid btn-sm" id="planner-save-todoist-key-btn">
+                            <i class="fa-solid fa-check"></i> <span>Verify &amp; Save</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="pl-hero-cta-grid">
+                    <a href="https://app.todoist.com/app/upcoming" target="_blank" rel="noopener noreferrer"
+                        class="btn btn-ghost" id="open-todoist-upcoming-btn">
+                        <i class="fa-solid fa-arrow-up-right-from-square"></i>
+                        <span>Open Todoist Upcoming</span>
+                    </a>
+                    <button type="button" class="btn btn-solid" id="top-sync-todoist-btn">
+                        <i class="fa-solid fa-cloud-arrow-up"></i>
+                        <span id="top-sync-todoist-label">Sync / Push to Todoist</span>
+                    </button>
+                </div>
+
+                <div class="pl-hero-secondary-row">
+                    <button type="button" class="btn btn-ghost btn-sm" id="top-regenerate-btn">
+                        <i class="fa-solid fa-rotate"></i>
+                        <span>Regenerate Plan</span>
+                    </button>
+                    <a href="setup.html#step-todoist" class="pl-link-btn">
+                        <i class="fa-solid fa-gear"></i> Manage keys in Setup
+                    </a>
+                </div>
+            </div>
+        </section>
+
+        <!-- SECTION 1: SYLLABUS & QUIZ PERFORMANCE DATA FALLBACK -->
+        <section class="pl-section" id="syllabus-section">
+            <div class="pl-two-col">
+                <div class="bento-card pl-card" id="syllabus-fallback-card">
+                    <div class="pl-card-head">
+                        <div>
+                            <span class="pl-card-kicker"><i class="fa-solid fa-book-open"></i> Step 1 · Study Material Source</span>
+                            <h2 id="syllabus-card-title">Syllabus &amp; Chapters</h2>
+                        </div>
+                        <span class="chip wait" id="syllabus-status-badge">Checking syllabus…</span>
+                    </div>
+
+                    <div class="pl-empty-syllabus-prompt" id="no-syllabus-prompt" hidden>
+                        <div class="pl-alert-box">
+                            <i class="fa-brands fa-telegram"></i>
+                            <div>
+                                <b>No syllabus detected from Telegram yet</b>
+                                <p>
+                                    Paste your syllabus or chapters below (or upload a syllabus PDF) so Study Agent can build your schedule. If you already took quizzes, the AI will also automatically use your past quiz scores and weak subtopics!
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="pl-syllabus-editor" id="syllabus-editor-panel">
+                        <div class="pl-label-row">
+                            <label for="planner-syllabus-textarea" class="pl-label">
+                                <i class="fa-solid fa-list-ul icon-accent"></i>
+                                <span id="syllabus-textarea-label">Paste or Append Syllabus Portions (Subject: Chapters)</span>
+                            </label>
+                            <button type="button" class="pl-link-btn" id="load-sample-syllabus-btn">
+                                <i class="fa-solid fa-wand-sparkles"></i> Fill Sample CBSE Syllabus
+                            </button>
+                        </div>
+                        <textarea id="planner-syllabus-textarea" class="pl-textarea" rows="4"
+                            placeholder="Example:&#10;Physics: Light - Reflection and Refraction, Electricity&#10;Chemistry: Chemical Reactions and Equations, Acids Bases and Salts&#10;Mathematics: Quadratic Equations, Arithmetic Progressions, Triangles&#10;History: The Rise of Nationalism in Europe"></textarea>
+
+                        <div class="pl-editor-actions">
+                            <button type="button" class="btn btn-solid btn-sm" id="save-pasted-syllabus-btn">
+                                <i class="fa-solid fa-file-import"></i>
+                                <span id="save-pasted-syllabus-label">Save Syllabus to Planner</span>
+                            </button>
+
+                            <input type="file" id="planner-syllabus-pdf" accept="application/pdf,.pdf" hidden>
+                            <button type="button" class="btn btn-ghost btn-sm" id="upload-syllabus-pdf-btn">
+                                <i class="fa-solid fa-file-pdf"></i>
+                                <span>Upload Syllabus PDF</span>
+                            </button>
+
+                            <button type="button" class="btn btn-ghost btn-sm" id="toggle-add-chapter-row-btn">
+                                <i class="fa-solid fa-plus"></i>
+                                <span>Add Single Chapter</span>
+                            </button>
+                        </div>
+
+                        <div class="pl-quick-add-chapter" id="quick-add-chapter-row" hidden>
+                            <select id="quick-chapter-subject" class="pl-select">
+                                <option value="Physics">Physics</option>
+                                <option value="Chemistry">Chemistry</option>
+                                <option value="Biology">Biology</option>
+                                <option value="Mathematics">Mathematics</option>
+                                <option value="History">History</option>
+                                <option value="Civics">Civics</option>
+                                <option value="Geography">Geography</option>
+                                <option value="Economics">Economics</option>
+                                <option value="English">English</option>
+                                <option value="Hindi">Hindi</option>
+                                <option value="Computer Science">Computer Science</option>
+                            </select>
+                            <input type="number" id="quick-chapter-number" class="pl-input pl-input-xs" min="1" max="40" value="1" placeholder="Ch #">
+                            <input type="text" id="quick-chapter-title" class="pl-input" placeholder="Chapter title (e.g. Electricity)">
+                            <button type="button" class="btn btn-solid btn-sm" id="confirm-add-chapter-btn">
+                                <i class="fa-solid fa-plus"></i> Add
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="pl-detected-chapters-wrap" id="detected-chapters-wrap" hidden>
+                        <div class="pl-detected-head">
+                            <span id="detected-chapters-summary">Detected chapters across your subjects</span>
+                            <button type="button" class="pl-link-btn" id="toggle-syllabus-editor-btn">
+                                <i class="fa-solid fa-pen-to-square"></i> Edit / Append Syllabus
+                            </button>
+                        </div>
+                        <div class="pl-chapters-chips-list" id="detected-chapters-list"></div>
+                    </div>
+                </div>
+
+                <!-- Right: Past Quiz History & Weak-Topic Revision Engine -->
+                <div class="bento-card pl-card" id="quiz-fallback-panel">
+                    <div class="pl-card-head">
+                        <div>
+                            <span class="pl-card-kicker"><i class="fa-solid fa-chart-line"></i> Adaptive Revision Intelligence</span>
+                            <h2>Quiz Performance &amp; Weak Topics</h2>
+                        </div>
+                        <span class="chip ok" id="quiz-history-badge">AI Linked</span>
+                    </div>
+
+                    <p class="pl-card-desc">
+                        Your past quiz results from <a href="quizzes.html" class="inline-link">Quizzes</a> automatically guide the AI Study Planner—chapters below 80% and weak subtopics get priority revision blocks.
+                    </p>
+
+                    <div class="pl-quiz-kpis" id="quiz-kpi-row">
+                        <div class="pl-mini-stat">
+                            <b id="qh-total-quizzed">0</b>
+                            <small>Chapters Quizzed</small>
+                        </div>
+                        <div class="pl-mini-stat">
+                            <b id="qh-heavy-count" class="text-danger">0</b>
+                            <small>Heavy Re-Study (&lt;50%)</small>
+                        </div>
+                        <div class="pl-mini-stat">
+                            <b id="qh-mod-count" class="text-warning">0</b>
+                            <small>Moderate Rev (50–79%)</small>
+                        </div>
+                        <div class="pl-mini-stat">
+                            <b id="qh-mastered-count" class="text-success">0</b>
+                            <small>Mastered (80%+)</small>
+                        </div>
+                    </div>
+
+                    <div class="pl-weak-topics-box" id="quiz-weak-topics-box">
+                        <span class="pl-sub-label">Targeted Revision Queue &amp; Weak Subtopics</span>
+                        <div class="pl-weak-list" id="quiz-weak-list"></div>
+                    </div>
+
+                    <div class="pl-quiz-footer-row">
+                        <label class="pl-checkbox-label">
+                            <input type="checkbox" id="include-quiz-revision-toggle" checked>
+                            <span>Automatically schedule extra revision sessions for weak quiz topics</span>
+                        </label>
+                        <a href="quizzes.html" class="btn btn-ghost btn-sm">
+                            <i class="fa-solid fa-bolt"></i> <span>Take a Quiz</span>
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- SECTION 2: PLANNER CONFIGURATION INPUTS (CLEAN 2x2 BENTO LAYOUT) -->
+        <section class="pl-section" id="planner-config-section">
+            <div class="bento-card pl-card">
+                <div class="pl-card-head">
+                    <div>
+                        <span class="pl-card-kicker"><i class="fa-solid fa-sliders"></i> Step 2 · Schedule Parameters &amp; Todoist Settings</span>
+                        <h2>Configure Your Study Routine</h2>
+                    </div>
+                    <span class="chip ok" id="schedule-balance-chip">5h Study · 8h Sleep · 6 School Days/wk</span>
+                </div>
+
+                <div class="pl-config-bento">
+                    <!-- PANEL 1 (Top-Left): Daily Hours, Session Style & Schedule Horizon -->
+                    <div class="pl-field-box">
+                        <div class="pl-box-header">
+                            <span class="pl-label">
+                                <i class="fa-solid fa-clock icon-accent"></i>
+                                <span>Daily Study &amp; Sleep Targets</span>
+                            </span>
+                            <div class="pl-horizon-inline">
+                                <label for="plan-days-select" class="pl-sub-label-inline">Horizon:</label>
+                                <select id="plan-days-select" class="pl-select pl-select-compact">
+                                    <option value="3">Next 3 Days</option>
+                                    <option value="7" selected>Next 7 Days (1 Wk)</option>
+                                    <option value="14">Next 14 Days (2 Wks)</option>
+                                    <option value="21">Next 21 Days</option>
+                                    <option value="30">Next 30 Days</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="pl-sliders-pair">
+                            <div class="pl-slider-card">
+                                <div class="pl-slider-head">
+                                    <label for="daily-study-hours-range" class="pl-label-sm">
+                                        <i class="fa-solid fa-book-open-reader icon-accent"></i> Daily Study
+                                    </label>
+                                    <div class="pl-num-pill">
+                                        <input type="number" id="daily-study-hours-input" class="pl-num-input" min="1" max="14" step="0.5" value="5">
+                                        <span>hrs/day</span>
+                                    </div>
+                                </div>
+                                <input type="range" id="daily-study-hours-range" class="pl-range" min="1" max="14" step="0.5" value="5">
+                                <small class="pl-field-hint">Default: 5 hours/day of focused study.</small>
+                            </div>
+
+                            <div class="pl-slider-card">
+                                <div class="pl-slider-head">
+                                    <label for="daily-sleep-hours-range" class="pl-label-sm">
+                                        <i class="fa-solid fa-moon icon-accent"></i> Daily Sleep
+                                    </label>
+                                    <div class="pl-num-pill">
+                                        <input type="number" id="daily-sleep-hours-input" class="pl-num-input" min="4" max="12" step="0.5" value="8">
+                                        <span>hrs/day</span>
+                                    </div>
+                                </div>
+                                <input type="range" id="daily-sleep-hours-range" class="pl-range" min="4" max="12" step="0.5" value="8">
+                                <small class="pl-field-hint">Default: 8 hours/day protected for sleep.</small>
+                            </div>
+                        </div>
+
+                        <div class="pl-style-block">
+                            <span class="pl-label">
+                                <i class="fa-solid fa-stopwatch icon-accent"></i>
+                                <span>Study Session Style &amp; Break Intervals</span>
+                            </span>
+                            <div class="pl-style-pills" id="session-style-pills" role="radiogroup" aria-label="Study session style">
+                                <button type="button" class="pl-style-pill is-active" data-style="pomodoro_25_5">
+                                    <b>Pomodoro 25 / 5</b>
+                                    <small>25m focus · 5m break</small>
+                                </button>
+                                <button type="button" class="pl-style-pill" data-style="deep_50_10">
+                                    <b>Deep Work 50 / 10</b>
+                                    <small>50m focus · 10m break</small>
+                                </button>
+                                <button type="button" class="pl-style-pill" data-style="block_90_15">
+                                    <b>Ultradian 90 / 15</b>
+                                    <small>90m focus · 15m break</small>
+                                </button>
+                                <button type="button" class="pl-style-pill" data-style="custom">
+                                    <b>Custom Intervals</b>
+                                    <small>Set custom minutes</small>
+                                </button>
+                            </div>
+
+                            <div class="pl-custom-intervals-row" id="custom-intervals-box" hidden>
+                                <div>
+                                    <label for="custom-focus-mins" class="pl-sub-label">Focus Duration (mins)</label>
+                                    <input type="number" id="custom-focus-mins" class="pl-input" min="10" max="180" value="45">
+                                </div>
+                                <div>
+                                    <label for="custom-break-mins" class="pl-sub-label">Break Duration (mins)</label>
+                                    <input type="number" id="custom-break-mins" class="pl-input" min="2" max="60" value="10">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- PANEL 2 (Top-Right): Weekly Schedule Categorization (Mon–Sat School · Sunday Full Day) -->
+                    <div class="pl-field-box">
+                        <div class="pl-box-header">
+                            <span class="pl-label">
+                                <i class="fa-solid fa-school icon-accent"></i>
+                                <span>Weekly Schedule (Mon–Sat School · Sunday Full Day)</span>
+                            </span>
+                        </div>
+                        <p class="pl-field-hint">
+                            Click any day to toggle between <b>School Day</b> (study blocks scheduled after school hours) and <b>Full Day</b> (morning, afternoon &amp; evening study + play windows).
+                        </p>
+
+                        <div class="pl-weekdays-row" id="school-days-toggles" role="group" aria-label="Toggle school days">
+                            <button type="button" class="pl-day-toggle is-school" data-day="1" title="Monday: School Day">
+                                <b>Mon</b><small>School</small>
+                            </button>
+                            <button type="button" class="pl-day-toggle is-school" data-day="2" title="Tuesday: School Day">
+                                <b>Tue</b><small>School</small>
+                            </button>
+                            <button type="button" class="pl-day-toggle is-school" data-day="3" title="Wednesday: School Day">
+                                <b>Wed</b><small>School</small>
+                            </button>
+                            <button type="button" class="pl-day-toggle is-school" data-day="4" title="Thursday: School Day">
+                                <b>Thu</b><small>School</small>
+                            </button>
+                            <button type="button" class="pl-day-toggle is-school" data-day="5" title="Friday: School Day">
+                                <b>Fri</b><small>School</small>
+                            </button>
+                            <button type="button" class="pl-day-toggle is-school" data-day="6" title="Saturday: School Day">
+                                <b>Sat</b><small>School</small>
+                            </button>
+                            <button type="button" class="pl-day-toggle is-full" data-day="0" title="Sunday: Non-School Full Day">
+                                <b>Sun</b><small>Full Day</small>
+                            </button>
+                        </div>
+
+                        <div class="pl-time-inputs-grid">
+                            <div class="pl-time-cell">
+                                <label for="school-start-time" class="pl-sub-label">School Starts</label>
+                                <input type="time" id="school-start-time" class="pl-input mono" value="08:00">
+                            </div>
+                            <div class="pl-time-cell">
+                                <label for="school-end-time" class="pl-sub-label">School Ends</label>
+                                <input type="time" id="school-end-time" class="pl-input mono" value="14:30">
+                            </div>
+                            <div class="pl-time-cell">
+                                <label for="wake-up-time" class="pl-sub-label">Wake-Up Time</label>
+                                <input type="time" id="wake-up-time" class="pl-input mono" value="06:30">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- PANEL 3 (Bottom-Left): Upcoming Exam Dates & Vacation / Holiday Dates -->
+                    <div class="pl-field-box">
+                        <div class="pl-dates-split">
+                            <!-- Sub-block A: Exam Dates -->
+                            <div class="pl-date-subblock">
+                                <span class="pl-label">
+                                    <i class="fa-solid fa-flag-checkered icon-accent"></i>
+                                    <span>Upcoming Exam Dates</span>
+                                </span>
+                                <p class="pl-field-hint">
+                                    Front-loads revision sessions as each exam date approaches.
+                                </p>
+                                <div class="pl-inline-form-row">
+                                    <input type="text" id="exam-subject-input" class="pl-input" placeholder="Subject / Exam (e.g. Physics Mid-Term)">
+                                    <input type="date" id="exam-date-input" class="pl-input mono pl-date-input">
+                                    <button type="button" class="btn btn-ghost btn-sm pl-add-btn" id="add-exam-btn">
+                                        <i class="fa-solid fa-plus"></i> <span>Add Exam</span>
+                                    </button>
+                                </div>
+                                <div class="pl-tags-list" id="exam-dates-list"></div>
+                            </div>
+
+                            <div class="pl-subblock-divider"></div>
+
+                            <!-- Sub-block B: Vacation & Holiday Dates -->
+                            <div class="pl-date-subblock">
+                                <span class="pl-label">
+                                    <i class="fa-solid fa-umbrella-beach icon-accent"></i>
+                                    <span>Vacation &amp; Holiday Dates (Full-Day Schedule)</span>
+                                </span>
+                                <p class="pl-field-hint">
+                                    Applies full-day study &amp; play schedules instead of school hours.
+                                </p>
+                                <div class="pl-vacation-form">
+                                    <input type="text" id="vacation-label-input" class="pl-input" placeholder="Holiday Label (e.g. Festival Break / Prep Leave)">
+                                    <div class="pl-vacation-dates-row">
+                                        <div class="pl-date-field">
+                                            <small>From Date</small>
+                                            <input type="date" id="vacation-start-input" class="pl-input mono">
+                                        </div>
+                                        <div class="pl-date-field">
+                                            <small>To Date (optional)</small>
+                                            <input type="date" id="vacation-end-input" class="pl-input mono">
+                                        </div>
+                                        <button type="button" class="btn btn-ghost btn-sm pl-add-btn" id="add-vacation-btn">
+                                            <i class="fa-solid fa-plus"></i> <span>Add Holiday</span>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="pl-tags-list" id="vacation-dates-list"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- PANEL 4 (Bottom-Right): Subject Priority & Difficulty Tags -->
+                    <div class="pl-field-box">
+                        <div class="pl-box-header">
+                            <span class="pl-label">
+                                <i class="fa-solid fa-layer-group icon-accent"></i>
+                                <span>Subject Priority &amp; Difficulty Tags</span>
+                            </span>
+                        </div>
+                        <p class="pl-field-hint">
+                            Tag subjects as <b>High</b>, <b>Medium</b>, or <b>Low</b> priority. High-priority subjects receive more study blocks and P1 flags in Todoist.
+                        </p>
+                        <div class="pl-priority-grid" id="subject-priority-list"></div>
+                    </div>
+                </div>
+
+                <!-- Inline Todoist Key Prompt inside Step 2 (shown automatically if user clicks Sync without a key) -->
+                <div class="pl-step2-todoist-prompt" id="step2-todoist-prompt" hidden>
+                    <div class="pl-step2-prompt-head">
+                        <span><i class="fa-solid fa-key icon-accent"></i> <b>Connect your Todoist API Token to push tasks</b> — Get your token from <a href="https://app.todoist.com/app/settings/integrations/developer" target="_blank" rel="noopener noreferrer" class="inline-link">Todoist Developer Settings <i class="fa-solid fa-arrow-up-right-from-square"></i></a></span>
+                        <button type="button" class="pl-link-btn" id="close-step2-todoist-prompt"><i class="fa-solid fa-xmark"></i> Close</button>
+                    </div>
+                    <div class="pl-inline-key-row">
+                        <input type="password" id="step2-todoist-key-input" class="pl-input mono" placeholder="Paste your Todoist API token here...">
+                        <button type="button" class="btn btn-solid btn-sm" id="step2-save-and-sync-btn">
+                            <i class="fa-solid fa-cloud-arrow-up"></i> <span>Save Key &amp; Sync to Todoist Now</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Primary Action Buttons Bar -->
+                <div class="pl-config-actions-bar">
+                    <div class="pl-config-actions-left">
+                        <span id="planner-status-msg" class="pl-status-msg">Ready to generate your personalized AI study schedule.</span>
+                    </div>
+                    <div class="pl-config-actions-right">
+                        <select id="todoist-sync-scope" class="pl-select pl-select-compact" title="Choose how many days to push to Todoist">
+                            <option value="all" selected>Push All Scheduled Days</option>
+                            <option value="2">Push Today &amp; Tomorrow (2 Days)</option>
+                            <option value="3">Push Next 3 Days</option>
+                        </select>
+                        <button type="button" class="btn btn-ghost" id="regenerate-plan-btn">
+                            <i class="fa-solid fa-wand-magic-sparkles"></i>
+                            <span id="regenerate-plan-label">Generate / Regenerate Plan</span>
+                        </button>
+                        <button type="button" class="btn btn-solid" id="sync-todoist-btn">
+                            <i class="fa-solid fa-list-check"></i>
+                            <span id="sync-todoist-label">Sync / Push to Todoist</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- SECTION 3: AI PLAN SUMMARY DASHBOARD & TODOIST SCHEDULE -->
+        <section class="pl-section" id="plan-summary-section">
+            <div class="bento-card pl-card pl-summary-hero-card">
+                <div class="pl-summary-top">
+                    <div>
+                        <span class="pl-card-kicker"><i class="fa-solid fa-brain"></i> Step 3 · AI Plan Summary &amp; Todoist Schedule</span>
+                        <h2 id="plan-coach-headline">Your Adaptive AI Study Plan</h2>
+                    </div>
+                    <div class="pl-summary-badges">
+                        <span class="chip ok" id="plan-style-badge">Pomodoro 25 / 5</span>
+                        <span class="chip wait" id="plan-sync-status-chip">Ready to Sync</span>
+                    </div>
+                </div>
+
+                <p class="pl-coach-summary" id="plan-coach-summary"></p>
+                <ul class="pl-coach-recs" id="plan-coach-recommendations"></ul>
+
+                <div class="pl-todoist-synced-banner" id="todoist-sync-summary-banner" hidden>
+                    <div class="pl-sync-banner-icon">
+                        <i class="fa-solid fa-circle-check"></i>
+                    </div>
+                    <div class="pl-sync-banner-body">
+                        <b id="todoist-sync-banner-title">Synced to Todoist!</b>
+                        <p id="todoist-sync-banner-desc">All parent study tasks and sub-tasks have been pushed to your Todoist Upcoming schedule.</p>
+                    </div>
+                    <a href="https://app.todoist.com/app/upcoming" target="_blank" rel="noopener noreferrer" class="btn btn-solid btn-sm">
+                        <i class="fa-solid fa-arrow-up-right-from-square"></i>
+                        <span>View in Todoist</span>
+                    </a>
+                </div>
+
+                <div class="pl-metrics-grid">
+                    <div class="pl-metric-card">
+                        <span class="pl-metric-label">Daily Allocation</span>
+                        <strong id="metric-daily-split">5h Study · 8h Sleep</strong>
+                        <small id="metric-session-style">Pomodoro (25m / 5m)</small>
+                    </div>
+                    <div class="pl-metric-card">
+                        <span class="pl-metric-label">Total Study Volume</span>
+                        <strong id="metric-total-hours">35 hrs</strong>
+                        <small id="metric-total-blocks">Across 7 days</small>
+                    </div>
+                    <div class="pl-metric-card">
+                        <span class="pl-metric-label">Weekly Categorization</span>
+                        <strong id="metric-day-types">6 School · 1 Full Day</strong>
+                        <small>Mon–Sat School · Sun/Holiday Full</small>
+                    </div>
+                    <div class="pl-metric-card">
+                        <span class="pl-metric-label">Todoist Sync Status</span>
+                        <strong id="metric-synced-tasks">0 Tasks Synced</strong>
+                        <small id="metric-synced-time">Click "Sync / Push to Todoist"</small>
+                    </div>
+                </div>
+            </div>
+
+            <div class="pl-subsection">
+                <div class="pl-sub-head">
+                    <h3><i class="fa-solid fa-ranking-star icon-accent"></i> Prioritized Subjects &amp; Revision Breakdown</h3>
+                    <p>Subjects ordered by priority tag, upcoming exam proximity, and past quiz performance.</p>
+                </div>
+                <div class="pl-subjects-grid" id="prioritized-subjects-grid"></div>
+            </div>
+
+            <div class="pl-subsection">
+                <div class="pl-sub-head pl-sub-head-row">
+                    <div>
+                        <h3><i class="fa-solid fa-calendar-day icon-accent"></i> Daily Study Schedule &amp; Todoist Tasks</h3>
+                        <p>Check off any parent task or sub-task to mark it completed in Todoist, or push individual days directly.</p>
+                    </div>
+                    <div class="pl-day-tabs" id="schedule-day-tabs" role="tablist" aria-label="Filter schedule by day"></div>
+                </div>
+
+                <div class="pl-days-list" id="daily-schedule-container"></div>
+            </div>
+        </section>
+    </main>
+
+    <div class="setup-toast-container" id="planner-toast-container" aria-live="polite"></div>
+
+    <footer class="foot">
+        <div class="foot-grid">
+            <div class="foot-brand">
+                <a href="index.html" class="brand-logo">Study Agent</a>
+                <p>Autonomous CBSE study planner powered by Gemini, Telegram, NotebookLM, and Todoist.</p>
+                <div class="socials">
+                    <a href="https://web.telegram.org/a/#8996972210" target="_blank" rel="noopener noreferrer" aria-label="Telegram"><i class="fa-brands fa-telegram"></i></a>
+                    <a href="https://app.todoist.com/app/upcoming" target="_blank" rel="noopener noreferrer" aria-label="Todoist"><i class="fa-solid fa-list-check"></i></a>
+                </div>
+            </div>
+            <nav aria-label="Platform">
+                <h4>Platform</h4>
+                <a href="index.html">Home</a>
+                <a href="setup.html">Setup Guide</a>
+                <a href="planner.html">Study Planner</a>
+                <a href="quizzes.html">Quizzes</a>
+                <a href="resources.html">Resources</a>
+            </nav>
+            <nav aria-label="Todoist">
+                <h4>Todoist Links</h4>
+                <a href="https://app.todoist.com/app/upcoming" target="_blank" rel="noopener noreferrer">Todoist Upcoming</a>
+                <a href="https://app.todoist.com/app/settings/integrations/developer" target="_blank" rel="noopener noreferrer">Developer API Token</a>
+                <a href="setup.html#step-todoist">Configure Todoist Key</a>
+            </nav>
+            <nav aria-label="Built with">
+                <h4>Built with</h4>
+                <a href="https://ai.google.dev/" target="_blank" rel="noopener noreferrer">Gemini API</a>
+                <a href="https://developer.todoist.com/" target="_blank" rel="noopener noreferrer">Todoist SDK</a>
+                <a href="https://ncert.nic.in/" target="_blank" rel="noopener noreferrer">NCERT</a>
+            </nav>
+        </div>
+        <div class="foot-bottom">
+            <span>&copy; 2026 Study Agent. Powered by @doist/todoist-sdk &amp; Google Gemini.</span>
+            <button type="button" class="to-top"><i class="fa-solid fa-arrow-up"></i> Back to top</button>
+        </div>
+    </footer>
+
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
+    <script defer src="./script.js"></script>
+    <script defer src="./planner.js"></script>
+</body>
+
+</html>

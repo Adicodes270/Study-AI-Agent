@@ -3,9 +3,16 @@
 // Used by the Vercel functions in /api and by the local server (src/webServer.js).
 import { Api } from "grammy";
 import { GoogleGenAI, Type } from "@google/genai";
+import { TodoistApi } from "@doist/todoist-sdk";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
-import { DEFAULT_CLASS_LEVEL, GEMINI_API_KEY, GEMINI_MODEL, TELEGRAM_BOT_TOKEN } from "./config.js";
+import {
+  DEFAULT_CLASS_LEVEL,
+  GEMINI_API_KEY,
+  GEMINI_MODEL,
+  TELEGRAM_BOT_TOKEN,
+  TODOIST_API_KEY,
+} from "./config.js";
 import {
   createQuizSession,
   getChapterForUser,
@@ -14,33 +21,57 @@ import {
   getChaptersWithResults,
   getLastQuizResult,
   getQuizSession,
+  getStudyPlanForUser,
   hasChapterResource,
+  hasDatabaseUrl,
   hasQuizResult,
   initDb,
+  readLocalStore,
   saveChapterResource,
   saveQuizProgress,
+  saveStudyPlanForUser,
   takeQuizSession,
   upsertQuizResult,
   withDb,
+  writeLocalStore,
 } from "./db.js";
-import { generateQuiz, grade, questionCountFor } from "./quizEngine.js";
+import { generateQuiz, grade, questionCountFor, revisionFor } from "./quizEngine.js";
 import {
+  cleanTodoistKey,
   deleteUserKey,
   exportStorageStateFile,
+  getTodoistKey,
   getUserKeys,
   getUserProfile,
+  inspectStorageState,
+  isValidTodoistKey,
+  saveTodoistKey,
   saveUserConfig,
 } from "./intake/userKeys.js";
 import { saveSyllabus } from "./intake/storage.js";
-import { enqueueExisting, enqueueSyllabus, getGenerationStatus } from "./generationQueue.js";
+import { cancelAutoStart, enqueueExisting, getAutoStart, getGenerationStatus, scheduleAutoStart } from "./generationQueue.js";
 import {
   classifyGranularSubject,
   parseSyllabus,
   parseSyllabusPdf,
   splitSyllabusIntoGranularSubjects,
 } from "./intake/syllabusParser.js";
+import {
+  DEFAULT_PLANNER_CONFIG,
+  SESSION_STYLE_PRESETS,
+  generateAiStudyPlan,
+  normalizePlannerConfig,
+  setTodoistTaskCompleted,
+  syncPlanToTodoist,
+  verifyTodoistToken,
+} from "./plannerEngine.js";
 
 const parseId = (v) => (/^\d+$/.test(String(v ?? "")) ? Number(v) : NaN);
+const FALLBACK_GUEST_ID = 100000001;
+const resolveUserId = (given, ctx) => {
+  const parsed = parseId(given ?? ctx?.cookies?.sa_telegram_id);
+  return Number.isNaN(parsed) ? FALLBACK_GUEST_ID : parsed;
+};
 const ok = (body) => ({ status: 200, body });
 const fail = (status, error, extra = {}) => ({ status, body: { error, ...extra } });
 
@@ -48,7 +79,7 @@ const fail = (status, error, extra = {}) => ({ status, body: { error, ...extra }
 export function safe(fn) {
   return async (...args) => {
     try {
-      await initDb();
+      await initDb().catch((e) => console.log("DB init warning (using local store fallback):", e.message));
       return await fn(...args);
     } catch (e) {
       console.log(`API error: ${e.message}${e.code ? ` [${e.code}]` : ""}`);
@@ -59,12 +90,35 @@ export function safe(fn) {
 
 // POST /api/user-keys
 export const saveKeys = safe(async (body = {}, hooks = {}) => {
-  const id = parseId(body.telegram_user_id);
-  if (Number.isNaN(id)) return fail(400, "Invalid Telegram user id");
+  const parsedId = parseId(body.telegram_user_id);
+  const id = Number.isNaN(parsedId) ? FALLBACK_GUEST_ID : parsedId;
   const keys = Array.isArray(body.gemini_api_keys) ? body.gemini_api_keys : [];
+  const rawTodoist =
+    body.todoist_api_key !== undefined
+      ? body.todoist_api_key
+      : body.todoistKey !== undefined
+        ? body.todoistKey
+        : undefined;
 
   let notebooklmState = null;
   let loginEmail = null;
+  if (!body.notebooklm_login_id && body.notebooklm_storage_state) {
+    let st = body.notebooklm_storage_state;
+    if (typeof st === "string") {
+      try {
+        st = JSON.parse(st);
+      } catch {
+        return fail(400, "That storage_state.json is not valid JSON");
+      }
+    }
+    const inspectFn = hooks.inspectStorageState || inspectStorageState;
+    try {
+      inspectFn(st);
+    } catch (err) {
+      return fail(400, err.message);
+    }
+    notebooklmState = st;
+  }
   if (body.notebooklm_login_id) {
     if (!hooks.takeLoginSession) {
       return fail(400, "NotebookLM browser login only works when Study Agent runs on your own computer");
@@ -76,39 +130,111 @@ export const saveKeys = safe(async (body = {}, hooks = {}) => {
   const rawEmail = loginEmail || (typeof body.google_email === "string" ? body.google_email.trim().toLowerCase() : "");
   if (rawEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail)) return fail(400, "That email address doesn't look valid");
 
-  const saved = await saveUserConfig(id, { keys, notebooklmState, email: rawEmail || null });
-  if (!saved.keys && !saved.session && !saved.email) {
-    return fail(400, `Nothing valid to save: received ${keys.length} Gemini key(s), none accepted (20+ characters, no spaces), and no NotebookLM session`);
+  if (rawTodoist !== undefined && rawTodoist !== null && String(rawTodoist).trim() !== "") {
+    if (!isValidTodoistKey(rawTodoist)) {
+      return fail(400, "That Todoist API token doesn't look valid (must be at least 16 characters with no spaces).");
+    }
   }
-  return ok({ ok: true, telegram_user_id: id, keys_saved: saved.keys, session_saved: saved.session, email_saved: saved.email, google_email: rawEmail || null });
+
+  const saved = await saveUserConfig(id, {
+    keys,
+    notebooklmState,
+    email: rawEmail || null,
+    todoistKey: rawTodoist,
+  });
+
+  if (!saved.keys && !saved.session && !saved.email && !saved.todoist && rawTodoist !== "") {
+    // Check if user already has keys saved so we don't error out on re-saving
+    const existingKeys = await getUserKeys(id);
+    const existingTodoist = await getTodoistKey(id);
+    if (!existingKeys.length && !existingTodoist) {
+      return fail(
+        400,
+        `Nothing valid to save: add a Gemini API key, Todoist API token, or NotebookLM session first.`
+      );
+    }
+  }
+
+  const activeTodoist = await getTodoistKey(id);
+  return ok({
+    ok: true,
+    telegram_user_id: id,
+    keys_saved: saved.keys,
+    session_saved: saved.session,
+    email_saved: saved.email,
+    todoist_saved: saved.todoist,
+    has_todoist_key: Boolean(activeTodoist),
+    todoist_masked: activeTodoist ? `${activeTodoist.slice(0, 4)}…${activeTodoist.slice(-4)}` : null,
+    google_email: rawEmail || null,
+  });
 });
 
 // GET /api/user-keys/:id
 export const getKeys = safe(async (idRaw) => {
-  const id = parseId(idRaw);
-  if (Number.isNaN(id)) return fail(400, "Invalid Telegram user id");
+  const parsedId = parseId(idRaw);
+  const id = Number.isNaN(parsedId) ? FALLBACK_GUEST_ID : parsedId;
   const keys = await getUserKeys(id);
   const profile = await getUserProfile(id);
+  const todoistKey = await getTodoistKey(id);
   return ok({
     telegram_user_id: id,
     google_email: profile?.google_email || null,
     notebooklm_session_saved: Boolean(profile?.has_session),
     count: keys.length,
     masked: keys.map((k) => `AIza…${k.slice(-4)}`),
+    has_todoist_key: Boolean(todoistKey),
+    todoist_masked: todoistKey ? `${todoistKey.slice(0, 4)}…${todoistKey.slice(-4)}` : null,
+    todoist_source: profile?.todoist_api_key ? "user" : TODOIST_API_KEY ? "env" : null,
   });
 });
 
 // DELETE /api/user-keys/:id
 export const removeKeys = safe(async (idRaw) => {
-  const id = parseId(idRaw);
-  if (Number.isNaN(id)) return fail(400, "Invalid Telegram user id");
+  const parsedId = parseId(idRaw);
+  const id = Number.isNaN(parsedId) ? FALLBACK_GUEST_ID : parsedId;
   return ok({ ok: true, deleted: await deleteUserKey(id) });
+});
+
+// POST /api/todoist/verify { telegramUserId?, todoistApiKey? }
+export const todoistVerify = safe(async (body = {}, ctx = {}) => {
+  const id = resolveUserId(body.telegramUserId ?? body.telegram_user_id, ctx);
+  const rawKey =
+    body.todoistApiKey ||
+    body.todoist_api_key ||
+    ctx?.cookies?.sa_todoist_key ||
+    (await getTodoistKey(id));
+
+  if (!rawKey) {
+    return fail(400, "No Todoist API key provided. Paste your token from Todoist Developer Settings.");
+  }
+
+  const check = await verifyTodoistToken(rawKey);
+  if (!check.valid) {
+    return fail(400, check.error || "Invalid Todoist API token.");
+  }
+
+  const cleaned = cleanTodoistKey(rawKey);
+  await saveTodoistKey(id, cleaned);
+
+  return ok({
+    ok: true,
+    valid: true,
+    verified: true,
+    mode: check.mode,
+    projectCount: check.projectCount ?? null,
+    telegram_user_id: id,
+    masked: `${cleaned.slice(0, 4)}…${cleaned.slice(-4)}`,
+  });
 });
 
 // GET /api/syllabus/:chatId
 export const getSyllabus = safe(async (chatIdRaw) => {
   const chatId = parseInt(chatIdRaw, 10);
   if (Number.isNaN(chatId)) return fail(400, "Invalid chat ID");
+  if (!hasDatabaseUrl()) {
+    const store = readLocalStore();
+    return ok({ chatId, chapters: store.syllabi?.[String(chatId)] || [] });
+  }
   const chapters = await withDb(async (db) => {
     const { rows } = await db.query(
       `SELECT id, subject, exam, number, title, match_status, pdf_url, recommended_questions
@@ -516,17 +642,84 @@ Identify:
   return null;
 }
 
+/**
+ * Deterministic multi-line text syllabus parser fallback (works even without a Gemini key or when offline).
+ */
+export function parsePlainTextSyllabusHeuristic(rawText = "") {
+  const lines = String(rawText || "")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  const bySubject = new Map();
+  let currentSubject = "Physics";
+
+  for (const line of lines) {
+    // Check "Subject: Chapter 1, Chapter 2" or "Subject - Chapter"
+    const colonMatch = /^([A-Za-z\s&]{3,28})\s*[:\-–]\s*(.+)$/.exec(line);
+    if (colonMatch) {
+      const potentialSubj = colonMatch[1].trim();
+      const rest = colonMatch[2].trim();
+      if (/^(physics|chemistry|biology|math|mathematics|science|history|civics|geography|economics|social\s*science|sst|english|hindi|sanskrit|computer|accountancy)$/i.test(potentialSubj)) {
+        currentSubject = potentialSubj;
+        const parts = rest.split(/\s*[;|,]\s*/).filter(Boolean);
+        for (const p of parts) {
+          const cleanTitle = p.replace(/^(?:ch(?:apter)?\s*\d+\s*[:.\-–]?\s*|\d+[.)]\s*)/i, "").trim();
+          if (!cleanTitle) continue;
+          const gran = classifyGranularSubject(currentSubject, cleanTitle, "", "", null);
+          if (!bySubject.has(gran)) bySubject.set(gran, []);
+          const list = bySubject.get(gran);
+          list.push({
+            number: list.length + 1,
+            title: cleanTitle,
+            is_ncert: false,
+            ncert_book_code: null,
+            ncert_chapter_number: null,
+            pdf_url: null,
+            recommended_questions: 15,
+          });
+        }
+        continue;
+      }
+    }
+
+    if (/^(physics|chemistry|biology|mathematics|maths|science|history|civics|political science|geography|economics|social science|english|hindi|sanskrit)\s*:?$/i.test(line)) {
+      currentSubject = line.replace(/:$/, "").trim();
+      continue;
+    }
+
+    const cleanTitle = line.replace(/^[-*•]\s*/, "").replace(/^(?:ch(?:apter)?\s*\d+\s*[:.\-–]?\s*|\d+[.)]\s*)/i, "").trim();
+    if (cleanTitle.length >= 2) {
+      const gran = classifyGranularSubject(currentSubject, cleanTitle, "", "", null);
+      if (!bySubject.has(gran)) bySubject.set(gran, []);
+      const list = bySubject.get(gran);
+      list.push({
+        number: list.length + 1,
+        title: cleanTitle,
+        is_ncert: false,
+        ncert_book_code: null,
+        ncert_chapter_number: null,
+        pdf_url: null,
+        recommended_questions: 15,
+      });
+    }
+  }
+
+  const subjects = [...bySubject.entries()].map(([name, chapters]) => ({ name, chapters }));
+  return subjects.length
+    ? { class_level: DEFAULT_CLASS_LEVEL || 10, exam: "School Syllabus", subjects }
+    : null;
+}
+
 // POST /api/syllabus/upload { telegramUserId, kind: "pdf" | "text", fileName?, dataBase64?, text?, questionCount?, geminiKey? }
-// Used both on initial onboarding AND when the student clicks "New Quiz" to upload an NCERT PDF or syllabus.
+// Used on initial onboarding, when clicking "New Quiz", AND from the Planner page syllabus input.
 export const MAX_SYLLABUS_PDF_BYTES = 20 * 1024 * 1024;
 export const syllabusUpload = safe(async (body = {}, ctx = {}) => {
-  const id = quizUserId(body.telegramUserId, ctx);
-  if (Number.isNaN(id)) return fail(400, "Missing or invalid Telegram user id");
+  const id = resolveUserId(body.telegramUserId, ctx);
 
   const saved = await getUserKeys(id);
   const extra = [body.geminiKey, ctx?.cookies?.sa_gemini_key].filter((k) => typeof k === "string" && k.length >= 20);
   const keys = [...new Set([...saved, ...extra])];
-  if (!keys.length && !GEMINI_API_KEY) return fail(400, "No Gemini API key found. Save one on the setup page first.");
 
   let parseFn, payload;
   if (body.kind === "pdf") {
@@ -536,25 +729,32 @@ export const syllabusUpload = safe(async (body = {}, ctx = {}) => {
     if (!bytes.length) return fail(400, "That file is empty");
     if (bytes.length > MAX_SYLLABUS_PDF_BYTES) return fail(413, "That PDF is over 20 MB, which is too big.");
     if (String.fromCharCode(...bytes.slice(0, 4)) !== "%PDF") return fail(400, "That file doesn't look like a PDF");
-    parseFn = parseSyllabusPdf; payload = bytes;
+    parseFn = parseSyllabusPdf;
+    payload = bytes;
   } else if (body.kind === "text") {
     const text = String(body.text || "").trim();
-    if (text.length < 10) return fail(400, "Paste your syllabus text first");
+    if (text.length < 3) return fail(400, "Paste your syllabus text first");
     if (text.length > 100_000) return fail(413, "That text is too long. Paste just the portion you need.");
-    parseFn = parseSyllabus; payload = text;
+    parseFn = parseSyllabus;
+    payload = text;
   } else {
     return fail(400, 'kind must be "pdf" or "text"');
   }
 
   let syllabus = null;
-  try {
-    syllabus = await parseFn(payload, keys, body.fileName || "");
-  } catch (e) {
-    console.log(`Initial syllabus parse failed (${e.message}), trying single-chapter extractor`);
+  if (keys.length || GEMINI_API_KEY) {
+    try {
+      syllabus = await parseFn(payload, keys, body.fileName || "");
+    } catch (e) {
+      console.log(`Initial syllabus parse failed (${e.message}), trying single-chapter/heuristic extractor`);
+    }
+    if (!syllabus?.subjects?.length) {
+      syllabus = await extractSingleChapterFallback(body, keys);
+    }
   }
 
-  if (!syllabus?.subjects?.length) {
-    syllabus = await extractSingleChapterFallback(body, keys);
+  if (!syllabus?.subjects?.length && body.kind === "text") {
+    syllabus = parsePlainTextSyllabusHeuristic(body.text);
   }
 
   if (!syllabus?.subjects?.length) {
@@ -568,7 +768,7 @@ export const syllabusUpload = safe(async (body = {}, ctx = {}) => {
       exam: "Custom Source",
       subjects: [
         {
-          name: inferredSubj !== "General" ? inferredSubj : "Custom Study",
+          name: inferredSubj !== "General" ? inferredSubj : "Physics",
           chapters: [
             {
               number: 1,
@@ -587,7 +787,6 @@ export const syllabusUpload = safe(async (body = {}, ctx = {}) => {
 
   syllabus = splitSyllabusIntoGranularSubjects(syllabus);
 
-  // Compute the AI-analyzed default question count (minimum 10, max 50) for the uploaded chapter(s)
   const firstSub = syllabus.subjects[0];
   const firstCh = firstSub?.chapters?.[0];
   const aiRecommended = firstCh
@@ -603,15 +802,13 @@ export const syllabusUpload = safe(async (body = {}, ctx = {}) => {
 
   const results = await saveSyllabus(id, syllabus, { questionCount: body.questionCount });
 
-  // Queue every chapter for sequential background generation (status 'Generating'); does not wait for it.
   let generation = null;
   try {
-    generation = await enqueueSyllabus(id, syllabus);
+    generation = await scheduleAutoStart(id, syllabus);
   } catch (e) {
-    console.log(`Could not queue chapter generation: ${e.message}`);
+    console.log(`Could not schedule chapter generation: ${e.message}`);
   }
 
-  // Find the newly saved chapter in the DB so the New Quiz UI can offer an instant "Start Quiz" action
   const allChapters = await getChaptersWithResults(id);
   const matchingCh =
     (firstCh &&
@@ -628,6 +825,7 @@ export const syllabusUpload = safe(async (body = {}, ctx = {}) => {
     subjects: results,
     ai_recommended_questions: aiRecommended,
     generation,
+    chapters: allChapters,
     latest_chapter: matchingCh
       ? {
           id: matchingCh.id,
@@ -638,6 +836,383 @@ export const syllabusUpload = safe(async (body = {}, ctx = {}) => {
           recommended_questions: questionCountFor(matchingCh),
         }
       : null,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AI Study Planner & Todoist Integration Endpoints (/api/planner/*)
+// ---------------------------------------------------------------------------
+
+function buildQuizHistorySummary(chapters = []) {
+  const quizzed = chapters.filter((c) => c.result && typeof c.result.percentage === "number");
+  const heavyRestudy = [];
+  const moderateRevision = [];
+  const mastered = [];
+  const weakSubtopics = [];
+
+  for (const ch of quizzed) {
+    const pct = ch.result.percentage;
+    const tier = ch.result.revision_tier || revisionFor(pct).tier;
+    const item = {
+      id: ch.id,
+      subject: ch.subject,
+      title: ch.title,
+      percentage: pct,
+      score: ch.result.score,
+      total: ch.result.total,
+      tier,
+      weakSubtopics: ch.result.weak_subtopics || [],
+    };
+    if (tier === "heavy_restudy" || pct < 50) heavyRestudy.push(item);
+    else if (tier === "moderate_revision" || pct < 80) moderateRevision.push(item);
+    else mastered.push(item);
+
+    for (const w of ch.result.weak_subtopics || []) {
+      weakSubtopics.push({ subject: ch.subject, chapterTitle: ch.title, subtopic: w, percentage: pct });
+    }
+  }
+
+  const avgPercentage = quizzed.length
+    ? Math.round(quizzed.reduce((acc, c) => acc + c.result.percentage, 0) / quizzed.length)
+    : null;
+
+  return {
+    totalQuizzedChapters: quizzed.length,
+    averagePercentage: avgPercentage,
+    heavyRestudyCount: heavyRestudy.length,
+    moderateRevisionCount: moderateRevision.length,
+    masteredCount: mastered.length,
+    heavyRestudy,
+    moderateRevision,
+    mastered,
+    weakSubtopics,
+  };
+}
+
+// GET /api/planner/state?telegramUserId=...
+export const plannerState = safe(async (query = {}, ctx = {}) => {
+  const id = resolveUserId(query.telegramUserId, ctx);
+  const [chapters, geminiKeys, profile, todoistKey, savedPlanData] = await Promise.all([
+    getChaptersWithResults(id),
+    getUserKeys(id),
+    getUserProfile(id),
+    getTodoistKey(id, ctx?.cookies?.sa_todoist_key),
+    getStudyPlanForUser(id),
+  ]);
+
+  const normalizedChapters = chapters.map((c) => ({
+    id: c.id,
+    subject: classifyGranularSubject(c.subject, c.title, c.pdf_url, "", c.number),
+    exam: c.exam || "",
+    number: c.number,
+    title: c.title,
+    pdf_url: c.pdf_url || null,
+    matched: isMatched(c),
+    is_custom: Boolean(c.is_custom),
+    recommended_questions: questionCountFor(c),
+    result: c.result || null,
+  }));
+
+  const syllabusChaptersOnly = normalizedChapters.filter((c) => !c.is_custom);
+  const quizHistory = buildQuizHistorySummary(normalizedChapters);
+
+  return ok({
+    ok: true,
+    telegram_user_id: id,
+    has_todoist_key: Boolean(todoistKey),
+    todoist_masked: todoistKey ? `${todoistKey.slice(0, 4)}…${todoistKey.slice(-4)}` : null,
+    todoist_source: profile?.todoist_api_key ? "user" : TODOIST_API_KEY ? "env" : ctx?.cookies?.sa_todoist_key ? "cookie" : null,
+    todoist_upcoming_url: "https://app.todoist.com/app/upcoming",
+    has_gemini_key: geminiKeys.length > 0 || Boolean(ctx?.cookies?.sa_gemini_key) || Boolean(GEMINI_API_KEY),
+    has_syllabus: syllabusChaptersOnly.length > 0,
+    chapters: normalizedChapters,
+    quiz_history: quizHistory,
+    session_styles: Object.values(SESSION_STYLE_PRESETS),
+    config: normalizePlannerConfig(savedPlanData?.config || DEFAULT_PLANNER_CONFIG),
+    plan: savedPlanData?.plan || null,
+    synced_tasks: savedPlanData?.syncedTasks || [],
+    todoist_synced_at: savedPlanData?.todoistSyncedAt || null,
+  });
+});
+
+// POST /api/planner/syllabus { telegramUserId?, text?, chapters?: [{ subject, number?, title }], mode?: "append" | "replace", deleteChapterId? }
+export const plannerSyllabusSave = safe(async (body = {}, ctx = {}) => {
+  const id = resolveUserId(body.telegramUserId, ctx);
+
+  // Deleting a single chapter from the syllabus
+  if (body.deleteChapterId != null) {
+    const delId = body.deleteChapterId;
+    const store = readLocalStore();
+    if (Array.isArray(store.syllabi?.[String(id)])) {
+      store.syllabi[String(id)] = store.syllabi[String(id)].filter((c) => String(c.id) !== String(delId));
+      writeLocalStore(store);
+    }
+    if (hasDatabaseUrl() && /^\d+$/.test(String(delId))) {
+      await withDb((db) =>
+        db.query("DELETE FROM syllabus_chapters WHERE id = $1 AND chat_id = $2", [Number(delId), id])
+      ).catch(() => {});
+    }
+    const updatedChapters = await getChaptersWithResults(id);
+    return ok({
+      ok: true,
+      has_syllabus: updatedChapters.length > 0,
+      chapters: updatedChapters,
+    });
+  }
+
+  // If user pasted raw text syllabus on the Planner page, parse & save it
+  if (typeof body.text === "string" && body.text.trim().length >= 3) {
+    const uploadRes = await syllabusUpload(
+      {
+        telegramUserId: id,
+        kind: "text",
+        text: body.text.trim(),
+        geminiKey: body.geminiKey,
+      },
+      ctx
+    );
+    return uploadRes;
+  }
+
+  // If user added/edited structured chapter items [{ subject, number, title }]
+  const incoming = Array.isArray(body.chapters) ? body.chapters : [];
+  if (!incoming.length) {
+    return fail(400, "Provide syllabus text or at least one chapter to save.");
+  }
+
+  const bySubject = new Map();
+  for (const item of incoming) {
+    const title = String(item?.title || "").trim();
+    if (!title) continue;
+    const rawSubject = String(item?.subject || "General").trim();
+    const gran = classifyGranularSubject(rawSubject, title, item?.pdf_url || "", "", item?.number);
+    if (!bySubject.has(gran)) bySubject.set(gran, []);
+    const list = bySubject.get(gran);
+    list.push({
+      number: Number(item?.number) || list.length + 1,
+      title,
+      is_ncert: Boolean(item?.pdf_url),
+      ncert_book_code: null,
+      ncert_chapter_number: Number(item?.number) || list.length + 1,
+      pdf_url: item?.pdf_url || null,
+      recommended_questions: 15,
+    });
+  }
+
+  if (body.mode === "append") {
+    const existing = await getChaptersWithResults(id);
+    for (const ex of existing) {
+      if (ex.is_custom) continue;
+      const gran = classifyGranularSubject(ex.subject, ex.title, ex.pdf_url, "", ex.number);
+      if (!bySubject.has(gran)) bySubject.set(gran, []);
+      const list = bySubject.get(gran);
+      if (!list.some((c) => c.title.toLowerCase() === String(ex.title).toLowerCase())) {
+        list.unshift({
+          number: ex.number || 1,
+          title: ex.title,
+          is_ncert: Boolean(ex.pdf_url),
+          ncert_book_code: null,
+          ncert_chapter_number: ex.number || 1,
+          pdf_url: ex.pdf_url || null,
+          recommended_questions: ex.recommended_questions || 15,
+        });
+      }
+    }
+  }
+
+  const syllabusObj = {
+    class_level: DEFAULT_CLASS_LEVEL || 10,
+    exam: String(body.exam || ""),
+    subjects: [...bySubject.entries()].map(([name, chapters]) => ({
+      name,
+      chapters: chapters.map((c, i) => ({ ...c, number: c.number || i + 1 })),
+    })),
+  };
+
+  await saveSyllabus(id, syllabusObj);
+  const updated = await getChaptersWithResults(id);
+  return ok({
+    ok: true,
+    has_syllabus: updated.length > 0,
+    chapters: updated,
+  });
+});
+
+// POST /api/planner/generate { telegramUserId?, config?, syllabusText?, autoSyncTodoist?, todoistApiKey?, geminiKey? }
+export const plannerGenerate = safe(async (body = {}, ctx = {}) => {
+  const id = resolveUserId(body.telegramUserId, ctx);
+
+  // If the user also pasted inline syllabus text while generating, save it first
+  if (typeof body.syllabusText === "string" && body.syllabusText.trim().length >= 3) {
+    await syllabusUpload(
+      {
+        telegramUserId: id,
+        kind: "text",
+        text: body.syllabusText.trim(),
+        geminiKey: body.geminiKey,
+      },
+      ctx
+    ).catch((e) => console.log(`Inline syllabus parse warning: ${e.message}`));
+  }
+
+  if (body.todoistApiKey && isValidTodoistKey(body.todoistApiKey)) {
+    await saveTodoistKey(id, body.todoistApiKey);
+  }
+
+  const [chapters, savedGeminiKeys] = await Promise.all([
+    getChaptersWithResults(id),
+    getUserKeys(id),
+  ]);
+
+  const extraGemini = [body.geminiKey, ctx?.cookies?.sa_gemini_key].filter(
+    (k) => typeof k === "string" && k.length >= 20
+  );
+  const geminiKeys = [...new Set([...savedGeminiKeys, ...extraGemini])];
+
+  const config = normalizePlannerConfig(body.config || {});
+  const plan = await generateAiStudyPlan({
+    chapters,
+    config,
+    geminiKeys,
+    startDate: body.startDate || null,
+  });
+
+  let syncResult = null;
+  if (body.autoSyncTodoist) {
+    const token = await getTodoistKey(id, body.todoistApiKey || ctx?.cookies?.sa_todoist_key);
+    if (token) {
+      syncResult = await syncPlanToTodoist({ token, plan });
+    }
+  }
+
+  const saved = await saveStudyPlanForUser(id, {
+    config,
+    plan: syncResult?.plan || plan,
+    syncedTasks: syncResult?.syncedTasks || null,
+    todoistSyncedAt: syncResult?.syncedAt || null,
+  });
+
+  return ok({
+    ok: true,
+    telegram_user_id: id,
+    config: saved.config,
+    plan: saved.plan,
+    synced_tasks: saved.syncedTasks,
+    todoist_synced_at: saved.todoistSyncedAt,
+    chapters,
+    quiz_history: buildQuizHistorySummary(chapters),
+  });
+});
+
+// POST /api/planner/sync-todoist { telegramUserId?, todoistApiKey?, plan?, config? }
+export const plannerSyncTodoist = safe(async (body = {}, ctx = {}) => {
+  const id = resolveUserId(body.telegramUserId, ctx);
+
+  if (body.todoistApiKey && isValidTodoistKey(body.todoistApiKey)) {
+    await saveTodoistKey(id, body.todoistApiKey);
+  }
+
+  const token = await getTodoistKey(id, body.todoistApiKey || ctx?.cookies?.sa_todoist_key);
+  if (!token) {
+    return fail(
+      400,
+      "No Todoist API key found. Add your Todoist API token on the Setup page (or paste it in the Planner) first."
+    );
+  }
+
+  let existingData = await getStudyPlanForUser(id);
+  let planToSync = body.plan || existingData?.plan || null;
+  const config = normalizePlannerConfig(body.config || existingData?.config || DEFAULT_PLANNER_CONFIG);
+
+  if (!planToSync || !Array.isArray(planToSync.days) || !planToSync.days.length) {
+    const chapters = await getChaptersWithResults(id);
+    const geminiKeys = await getUserKeys(id);
+    planToSync = await generateAiStudyPlan({ chapters, config, geminiKeys });
+  }
+
+  try {
+    const syncOut = await syncPlanToTodoist({
+      token,
+      plan: planToSync,
+      onlyDate: body.onlyDate || null,
+      maxDays: body.maxDays || null,
+      forceResync: Boolean(body.forceResync),
+    });
+    const saved = await saveStudyPlanForUser(id, {
+      config,
+      plan: syncOut.plan,
+      syncedTasks: syncOut.syncedTasks,
+      todoistSyncedAt: syncOut.syncedAt,
+    });
+
+    return ok({
+      ok: true,
+      telegram_user_id: id,
+      syncedAt: syncOut.syncedAt,
+      parentTasksCreated: syncOut.parentTasksCreated,
+      subTasksCreated: syncOut.subTasksCreated,
+      totalTasksCreated: syncOut.totalTasksCreated,
+      upcomingUrl: syncOut.upcomingUrl,
+      synced_tasks: saved.syncedTasks,
+      plan: saved.plan,
+    });
+  } catch (err) {
+    return fail(err.status || 502, err.message || "Failed to sync study plan to Todoist.");
+  }
+});
+
+// POST /api/planner/task-toggle { telegramUserId?, blockId?, subtaskId?, todoistTaskId?, completed, todoistApiKey? }
+export const plannerToggleTask = safe(async (body = {}, ctx = {}) => {
+  const id = resolveUserId(body.telegramUserId, ctx);
+  const completed = Boolean(body.completed);
+  const blockId = body.blockId ? String(body.blockId) : null;
+  const subtaskId = body.subtaskId ? String(body.subtaskId) : null;
+  let todoistTaskId = body.todoistTaskId ? String(body.todoistTaskId) : null;
+
+  const existingData = await getStudyPlanForUser(id);
+  const plan = existingData?.plan || null;
+
+  if (plan && Array.isArray(plan.days)) {
+    for (const day of plan.days) {
+      for (const block of day.studyBlocks || []) {
+        if (blockId && block.id === blockId && !subtaskId) {
+          block.completed = completed;
+          if (!todoistTaskId && block.todoistTaskId) todoistTaskId = String(block.todoistTaskId);
+        }
+        if (subtaskId && Array.isArray(block.subtasks)) {
+          for (const sub of block.subtasks) {
+            if (sub.id === subtaskId) {
+              sub.completed = completed;
+              if (!todoistTaskId && sub.todoistTaskId) todoistTaskId = String(sub.todoistTaskId);
+            }
+          }
+        }
+      }
+    }
+    await saveStudyPlanForUser(id, { plan });
+  }
+
+  let todoistUpdated = false;
+  if (todoistTaskId) {
+    const token = await getTodoistKey(id, body.todoistApiKey || ctx?.cookies?.sa_todoist_key);
+    if (token) {
+      try {
+        await setTodoistTaskCompleted({ token, taskId: todoistTaskId, completed });
+        todoistUpdated = true;
+      } catch (e) {
+        console.log(`Todoist task toggle warning (${todoistTaskId}): ${e.message}`);
+      }
+    }
+  }
+
+  return ok({
+    ok: true,
+    blockId,
+    subtaskId,
+    todoistTaskId,
+    completed,
+    todoistUpdated,
+    plan,
   });
 });
 
@@ -702,20 +1277,47 @@ export const resourcesList = safe(async (query = {}, ctx = {}) => {
       notebookUrl: status === "Ready" ? r.notebook_url || null : null,
     };
   });
-  return ok({ chapters });
+  const resourceTypes = NOTEBOOKLM_RESOURCE_TYPES.filter((t) => !EXCLUDED_RESOURCE_TYPES.has(t.id)).map(({ id: tid, label, description }) => ({
+    id: tid,
+    label,
+    description,
+  }));
+  const autoStart = await getAutoStart(id).catch(() => null);
+  return ok({ chapters, resourceTypes, autoStart });
 });
 
-// POST /api/resources/start { telegramUserId?, chapterIds?: number[] }
-// Queue every saved chapter that isn't Ready yet (or just the given ones). Used by the "Generate" / "Retry" buttons.
+// POST /api/resources/start
 export const resourcesStart = safe(async (body = {}, ctx = {}) => {
   const id = quizUserId(body.telegramUserId, ctx);
   if (Number.isNaN(id)) return fail(400, "Missing or invalid Telegram user id");
-  const ids = (Array.isArray(body.chapterIds) ? body.chapterIds : []).map(Number).filter(Number.isInteger);
-  const out = await enqueueExisting(id, ids);
+  const allowed = new Set(NOTEBOOKLM_RESOURCE_TYPES.map((t) => t.id).filter((t) => !EXCLUDED_RESOURCE_TYPES.has(t)));
+  let ids = (Array.isArray(body.chapterIds) ? body.chapterIds : []).map(Number).filter(Number.isInteger);
+  let typesById = null;
+  const hasSelections = body.selections && typeof body.selections === "object" && !Array.isArray(body.selections);
+
+  if (hasSelections) {
+    typesById = {};
+    ids = [];
+    for (const [key, value] of Object.entries(body.selections)) {
+      const chapterId = Number(key);
+      if (!Number.isInteger(chapterId)) continue;
+      const types = [...new Set((Array.isArray(value) ? value : []).map(String).filter((t) => allowed.has(t)))];
+      if (!types.length) continue;
+      typesById[chapterId] = types;
+      ids.push(chapterId);
+    }
+    if (!ids.length) return fail(400, "Tick at least one chapter and choose at least one thing to generate for it.");
+  } else if (body.cancelAuto === true) {
+    const was = await cancelAutoStart(id);
+    return ok({ ok: true, queued: 0, message: was ? "Automatic start cancelled. Generate chapters whenever you're ready." : "Automatic start was not active." });
+  }
+
+  if (hasSelections || !ids.length) await cancelAutoStart(id);
+  const out = await enqueueExisting(id, ids, typesById);
   return ok({ ok: true, queued: out.queued, message: out.queued ? `Started generating ${out.queued} chapter(s).` : "Nothing to generate: every chapter is already Ready or none were found." });
 });
 
-// GET /api/generation/status?telegramUserId=...  -> per-chapter 'Generating' | 'Ready' | 'Failed'
+// GET /api/generation/status?telegramUserId=...
 export const generationStatus = safe(async (query = {}, ctx = {}) => {
   const id = quizUserId(query.telegramUserId, ctx);
   if (Number.isNaN(id)) return fail(400, "Missing or invalid Telegram user id");

@@ -1,12 +1,33 @@
-// src/db.js  (Neon / Postgres)
+// src/db.js  (Neon / Postgres + Local Fallback Store for Planner & Keys)
+import fs from "node:fs";
+import path from "node:path";
 import pg from "pg";
 
-import { DATABASE_URL } from "./config.js";
+import { DATABASE_URL, ROOT } from "./config.js";
 import { classifyGranularSubject } from "./intake/syllabusParser.js";
 
 // Telegram ids can be larger than int32, so the columns are BIGINT.
 // node-postgres returns BIGINT as a string by default; ids fit safely in a JS number.
 pg.types.setTypeParser(20, (v) => Number(v));
+
+// Local JSON fallback store when DATABASE_URL is not configured or temporarily unreachable
+const LOCAL_STORE_PATH = path.join(ROOT, "data", "local_store.json");
+
+export function readLocalStore() {
+  try {
+    if (fs.existsSync(LOCAL_STORE_PATH)) {
+      return JSON.parse(fs.readFileSync(LOCAL_STORE_PATH, "utf8"));
+    }
+  } catch {}
+  return { users: {}, syllabi: {}, quizResults: {}, studyPlans: {} };
+}
+
+export function writeLocalStore(data) {
+  try {
+    fs.mkdirSync(path.dirname(LOCAL_STORE_PATH), { recursive: true });
+    fs.writeFileSync(LOCAL_STORE_PATH, JSON.stringify(data, null, 2), "utf8");
+  } catch {}
+}
 
 let pool = null;
 function getPool() {
@@ -26,16 +47,24 @@ function getPool() {
   return pool;
 }
 
+export function hasDatabaseUrl() {
+  return Boolean(DATABASE_URL);
+}
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
     telegram_user_id     BIGINT PRIMARY KEY,
-    gemini_api_key       TEXT NOT NULL,
+    gemini_api_key       TEXT NOT NULL DEFAULT '',
     gemini_fallback_keys TEXT NOT NULL DEFAULT '[]',
+    todoist_api_key      TEXT,
     google_email         TEXT,
     notebooklm_state     TEXT,
     notebooklm_saved_at  TIMESTAMPTZ,
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS todoist_api_key TEXT;
 
 CREATE TABLE IF NOT EXISTS chats (
     chat_id BIGINT PRIMARY KEY,
@@ -178,7 +207,29 @@ CREATE TABLE IF NOT EXISTS chapter_generation (
 
 ALTER TABLE chapter_generation ADD COLUMN IF NOT EXISTS notebook_url TEXT;
 ALTER TABLE chapter_generation ADD COLUMN IF NOT EXISTS step TEXT;
+-- JSON array of the resource types the user picked for this chapter (NULL = every allowed type)
+ALTER TABLE chapter_generation ADD COLUMN IF NOT EXISTS resource_types TEXT;
 UPDATE chapter_generation SET status = 'Ready' WHERE status = 'Completed';
+
+-- After a syllabus upload the user gets a few minutes (default 5) on the Resources page to choose which
+-- chapters and which resource types to generate. One row per user while that window is open; when start_at
+-- passes, the server generates everything in chapters_json (a JSON array of { subject, exam, number, title }).
+CREATE TABLE IF NOT EXISTS generation_plan (
+    telegram_user_id BIGINT PRIMARY KEY,
+    start_at         TIMESTAMPTZ NOT NULL,
+    chapters_json    TEXT NOT NULL,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- AI Study Planner & Todoist integration state per user
+CREATE TABLE IF NOT EXISTS study_plans (
+    telegram_user_id  BIGINT PRIMARY KEY,
+    config_json       TEXT NOT NULL DEFAULT '{}',
+    plan_json         TEXT NOT NULL DEFAULT '{}',
+    synced_tasks_json TEXT NOT NULL DEFAULT '[]',
+    todoist_synced_at TIMESTAMPTZ,
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
 CREATE INDEX IF NOT EXISTS idx_chapter_resources_user
     ON chapter_resources (telegram_user_id, subject, exam, chapter_title);
@@ -189,6 +240,9 @@ let schemaReady = null;
 
 /** Create tables if they don't exist yet. Safe to call many times. */
 export function initDb() {
+  if (!DATABASE_URL) {
+    return Promise.resolve();
+  }
   if (!schemaReady) {
     schemaReady = getPool()
       .query(SCHEMA)
@@ -296,16 +350,53 @@ const chapterKey = (r) => [
 ];
 
 /** Every syllabus chapter for this student, each with its latest quiz result (including review) and any Pending quiz session. */
+function getLocalSyllabusFallback(telegramUserId) {
+  const store = readLocalStore();
+  const direct = store.syllabi?.[String(telegramUserId)];
+  if (Array.isArray(direct) && direct.length) return direct;
+  for (const list of Object.values(store.syllabi || {})) {
+    if (Array.isArray(list) && list.length) return list;
+  }
+  return [];
+}
+
 export async function getChaptersWithResults(telegramUserId) {
-  await initDb();
+  if (!DATABASE_URL) {
+    return getLocalSyllabusFallback(telegramUserId);
+  }
+  try {
+    await initDb();
+  } catch {
+    return getLocalSyllabusFallback(telegramUserId);
+  }
   const p = getPool();
-  const { rows: chapters } = await p.query(
+  let { rows: chapters } = await p.query(
     `SELECT id, class, subject, exam, number, title, note, pdf_url, match_status, recommended_questions
        FROM syllabus_chapters
       WHERE chat_id = $1
       ORDER BY subject, exam, number NULLS LAST, id`,
     [telegramUserId]
-  );
+  ).catch(() => ({ rows: [] }));
+
+  if (!chapters.length) {
+    const fallbackChat = await p.query(
+      `SELECT chat_id FROM syllabus_chapters GROUP BY chat_id ORDER BY MAX(id) DESC LIMIT 1`
+    ).catch(() => ({ rows: [] }));
+    if (fallbackChat.rows[0]?.chat_id) {
+      const fbRes = await p.query(
+        `SELECT id, class, subject, exam, number, title, note, pdf_url, match_status, recommended_questions
+           FROM syllabus_chapters
+          WHERE chat_id = $1
+          ORDER BY subject, exam, number NULLS LAST, id`,
+        [fallbackChat.rows[0].chat_id]
+      ).catch(() => ({ rows: [] }));
+      chapters = fbRes.rows || [];
+    }
+  }
+  if (!chapters.length) {
+    const localList = getLocalSyllabusFallback(telegramUserId);
+    if (localList.length) return localList;
+  }
   const { rows: results } = await p.query(
     `SELECT id, subject, exam, chapter_title, score, total, percentage, revision_tier,
             revision_message, weak_subtopics_json, review_json, attempts, updated_at
@@ -852,4 +943,91 @@ export async function saveChapterResource(r, db = null) {
   let parsed = null;
   try { parsed = JSON.parse(saved.content_json); } catch {}
   return { ...saved, content: parsed, already_existed: false };
+}
+
+// ---------------------------------------------------------------------------
+// AI Study Planner & Todoist Sync Persistence Helpers
+// ---------------------------------------------------------------------------
+export async function getStudyPlanForUser(telegramUserId) {
+  const store = readLocalStore();
+  const localPlan = store.studyPlans?.[String(telegramUserId)] || null;
+  if (!DATABASE_URL) return localPlan;
+
+  try {
+    await initDb();
+    const { rows } = await getPool().query(
+      `SELECT config_json, plan_json, synced_tasks_json, todoist_synced_at, updated_at
+         FROM study_plans
+        WHERE telegram_user_id = $1`,
+      [telegramUserId]
+    );
+    const r = rows[0];
+    if (!r) return localPlan;
+    let config = {};
+    let plan = null;
+    let syncedTasks = [];
+    try { config = JSON.parse(r.config_json || "{}"); } catch {}
+    try { plan = JSON.parse(r.plan_json || "null"); } catch {}
+    try { syncedTasks = JSON.parse(r.synced_tasks_json || "[]"); } catch {}
+    return {
+      config,
+      plan: plan && Object.keys(plan).length ? plan : null,
+      syncedTasks: Array.isArray(syncedTasks) ? syncedTasks : [],
+      todoistSyncedAt: r.todoist_synced_at || null,
+      updatedAt: r.updated_at || null,
+    };
+  } catch {
+    return localPlan;
+  }
+}
+
+export async function saveStudyPlanForUser(
+  telegramUserId,
+  { config = null, plan = null, syncedTasks = null, todoistSyncedAt = null } = {}
+) {
+  const existing = (await getStudyPlanForUser(telegramUserId)) || {
+    config: {},
+    plan: null,
+    syncedTasks: [],
+    todoistSyncedAt: null,
+  };
+
+  const merged = {
+    config: config !== null ? config : existing.config || {},
+    plan: plan !== null ? plan : existing.plan || null,
+    syncedTasks: syncedTasks !== null ? syncedTasks : existing.syncedTasks || [],
+    todoistSyncedAt: todoistSyncedAt !== null ? todoistSyncedAt : existing.todoistSyncedAt || null,
+    updatedAt: new Date().toISOString(),
+  };
+
+  const store = readLocalStore();
+  store.studyPlans = store.studyPlans || {};
+  store.studyPlans[String(telegramUserId)] = merged;
+  writeLocalStore(store);
+
+  if (DATABASE_URL) {
+    try {
+      await initDb();
+      await getPool().query(
+        `INSERT INTO study_plans (telegram_user_id, config_json, plan_json, synced_tasks_json, todoist_synced_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, now())
+         ON CONFLICT (telegram_user_id) DO UPDATE
+           SET config_json = EXCLUDED.config_json,
+               plan_json = EXCLUDED.plan_json,
+               synced_tasks_json = EXCLUDED.synced_tasks_json,
+               todoist_synced_at = COALESCE(EXCLUDED.todoist_synced_at, study_plans.todoist_synced_at),
+               updated_at = now()`,
+        [
+          telegramUserId,
+          JSON.stringify(merged.config || {}),
+          JSON.stringify(merged.plan || {}),
+          JSON.stringify(merged.syncedTasks || []),
+          merged.todoistSyncedAt,
+        ]
+      );
+    } catch (e) {
+      console.log(`Could not persist study plan to Postgres (saved locally): ${e.message}`);
+    }
+  }
+  return merged;
 }

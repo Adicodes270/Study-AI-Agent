@@ -1,6 +1,6 @@
 // src/intake/storage.js
 import { DEFAULT_CLASS_LEVEL } from "../config.js";
-import { withDb } from "../db.js";
+import { hasDatabaseUrl, readLocalStore, withDb, writeLocalStore } from "../db.js";
 import { questionCountFor } from "../quizEngine.js";
 import { classifyGranularSubject, splitSyllabusIntoGranularSubjects } from "./syllabusParser.js";
 
@@ -20,6 +20,75 @@ export async function saveSyllabus(chatId, rawSyllabus, options = {}) {
     options.questionCount != null && options.questionCount !== ""
       ? Math.max(1, Math.min(50, parseInt(options.questionCount, 10) || 10))
       : null;
+
+  // Always mirror to local store for offline / no-DB resilience
+  try {
+    const store = readLocalStore();
+    store.syllabi = store.syllabi || {};
+    const existingList = Array.isArray(store.syllabi[String(chatId)]) ? store.syllabi[String(chatId)] : [];
+    const nextList = [...existingList];
+    let nextId = nextList.reduce((m, c) => Math.max(m, Number(c.id) || 0), 0) + 1;
+
+    for (const subject of syllabus.subjects || []) {
+      const label = syllabus.exam ? `${subject.name} (${syllabus.exam})` : subject.name;
+      const prepared = (subject.chapters || []).map((c) => {
+        const bookCode = c.ncert_book_code ? c.ncert_book_code.toLowerCase().trim() : null;
+        const ncertChNum = c.ncert_chapter_number || c.number;
+        const pdfUrl = c.is_ncert
+          ? buildNcertPdfUrl(bookCode, ncertChNum) || c.pdf_url || null
+          : c.pdf_url || null;
+        const matchStatus = pdfUrl ? "matched" : "unmatched";
+        const aiDefaultCount = questionCountFor({
+          subject: subject.name,
+          title: c.title,
+          recommended_questions: c.recommended_questions,
+        });
+        const recommendedQuestions = userQuestionCount || Math.max(10, Math.min(50, aiDefaultCount));
+        return {
+          id: nextId++,
+          class: syllabus.class_level || DEFAULT_CLASS_LEVEL,
+          subject: subject.name,
+          exam,
+          number: c.number,
+          title: c.title,
+          note: c.note || null,
+          pdf_url: pdfUrl,
+          match_status: matchStatus,
+          recommended_questions: recommendedQuestions,
+          pending_quiz: null,
+          result: null,
+        };
+      });
+
+      const oldForSubj = nextList.filter((r) => r.subject === subject.name && (r.exam || "") === exam);
+      if (oldForSubj.length > 0 && prepared.length <= 2) {
+        for (const inc of prepared) {
+          const idx = nextList.findIndex(
+            (m) =>
+              m.subject === subject.name &&
+              m.title.toLowerCase() === inc.title.toLowerCase()
+          );
+          if (idx >= 0) nextList[idx] = { ...nextList[idx], ...inc, id: nextList[idx].id };
+          else nextList.push(inc);
+        }
+        results[label] = "updated";
+      } else {
+        for (let i = nextList.length - 1; i >= 0; i--) {
+          if (nextList[i].subject === subject.name && (nextList[i].exam || "") === exam) {
+            nextList.splice(i, 1);
+          }
+        }
+        nextList.push(...prepared);
+        results[label] = oldForSubj.length ? "updated" : "added";
+      }
+    }
+    store.syllabi[String(chatId)] = nextList;
+    writeLocalStore(store);
+  } catch {}
+
+  if (!hasDatabaseUrl()) {
+    return results;
+  }
 
   await withDb(async (db) => {
     // Class priority: in the message > already saved > CLASS_LEVEL from .env
@@ -127,7 +196,7 @@ export async function saveSyllabus(chatId, rawSyllabus, options = {}) {
         r.title,
         r.pdf_url,
         r.match_status,
-        r.recommended_questions,
+        r.recommendedQuestions,
       ]);
 
       if (JSON.stringify(old) === JSON.stringify(fresh)) {
@@ -152,9 +221,6 @@ export async function saveSyllabus(chatId, rawSyllabus, options = {}) {
             "SELECT id, pdf_url FROM ncert_chapters WHERE class = $1 AND book = $2 AND number = $3",
             [effectiveClass, bookName, chNum]
           );
-          // ncert_chapters is a shared, read-only catalog: uploads must never insert into or update it
-          // (that caused "duplicate key ... ncert_chapters_pkey"). The user's chapter is stored in
-          // syllabus_chapters below; we only link to a catalog row if one already exists.
           ncertId = found[0] ? found[0].id : null;
         }
 

@@ -36,13 +36,14 @@
         .rs-head h1 { font-size: clamp(1.7rem, 3.4vw, 2.5rem); font-weight: 800; letter-spacing: -0.03em; line-height: 1.15; color: var(--text-primary); }
         .rs-head p { color: var(--text-secondary); margin-top: 0.4rem; max-width: 60ch; }
 
-        .rs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 1rem; margin-top: 1.75rem; }
+        .rs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 1rem; margin-top: 1.75rem; align-items: start; }
         .rs-card {
             display: flex; flex-direction: column; gap: 0.75rem; padding: 1.25rem;
             background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-card);
             transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
         }
         .rs-card:hover { border-color: var(--border-highlight); transform: translateY(-2px); box-shadow: var(--shadow-window); }
+        .rs-card.is-selected { border-color: var(--accent-primary); box-shadow: 0 0 0 1px var(--accent-primary) inset; }
         .rs-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; }
         .rs-title { font-size: 1.05rem; font-weight: 700; line-height: 1.3; color: var(--text-primary); overflow-wrap: anywhere; }
         .rs-subject { font-size: 0.75rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
@@ -59,9 +60,37 @@
         html.light .rs-badge-ready { color: hsl(152, 62%, 28%); background: hsla(152, 62%, 34%, 0.12); }
 
         .rs-main [hidden] { display: none !important; }
-        .rs-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.9rem; margin-top: 1.5rem; }
-        .rs-toolbar .rs-live { margin: 0; }
         .rs-open { align-self: flex-start; margin-top: 0.35rem; cursor: pointer; font-family: inherit; }
+
+        /* Choose-what-to-generate panel */
+        .rs-panel { margin-top: 1.5rem; display: grid; gap: 0.9rem; }
+        .rs-auto {
+            display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem 0.9rem; padding: 0.9rem 1.1rem;
+            background: var(--accent-primary-soft); border: 1px solid var(--border-highlight); border-radius: var(--radius-card);
+            color: var(--text-primary);
+        }
+        .rs-auto > i { color: var(--accent-primary); }
+        .rs-auto p { flex: 1 1 260px; font-size: 0.9rem; line-height: 1.45; color: var(--text-secondary); }
+        .rs-auto strong { color: var(--text-primary); font-family: 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; }
+        .rs-linkbtn { background: none; border: 0; padding: 0.25rem 0.1rem; cursor: pointer; font: 600 0.85rem 'Plus Jakarta Sans', sans-serif; color: var(--text-secondary); text-decoration: underline; }
+        .rs-linkbtn:hover { color: var(--text-primary); }
+        .rs-panel-row {
+            display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem 1.25rem; padding: 0.85rem 1.1rem;
+            background: var(--bg-surface); border: 1px solid var(--border-subtle); border-radius: var(--radius-card);
+        }
+        .rs-panel-row .rs-live { margin: 0; }
+        .rs-panel-row .btn { margin-left: auto; cursor: pointer; font-family: inherit; }
+        .rs-panel-row .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+        .rs-check { display: inline-flex; align-items: center; gap: 0.55rem; cursor: pointer; font-size: 0.88rem; color: var(--text-primary); line-height: 1.3; }
+        .rs-check input { width: 1.05rem; height: 1.05rem; flex: none; accent-color: var(--accent-primary); cursor: pointer; }
+        .rs-check input:disabled { cursor: not-allowed; }
+        .rs-check-strong { font-weight: 700; }
+        .rs-types { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 0.6rem; padding-top: 0.75rem; border-top: 1px solid var(--border-subtle); }
+        .rs-types legend { float: left; width: 100%; padding: 0 0 0.45rem; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
+        .rs-types legend + * { clear: both; }
+        .rs-types-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(135px, 1fr)); gap: 0.5rem 0.9rem; }
+        :where(.rs-main) :focus-visible { outline: 2px solid var(--accent-secondary); outline-offset: 3px; }
 
         /* Loading, empty and error states */
         .rs-state { margin-top: 1.75rem; display: flex; flex-direction: column; align-items: center; gap: 0.9rem; text-align: center;
@@ -75,7 +104,12 @@
         @keyframes rs-shimmer { to { background-position: -200% 0; } }
         .rs-live { margin-top: 1rem; font-size: 0.8rem; color: var(--text-muted); }
         @media (prefers-reduced-motion: reduce) { .rs-spinner, .rs-skeleton { animation: none; } .rs-card { transition: none; } }
-        @media (max-width: 480px) { .rs-main { padding-top: 6.5rem; } .rs-card-top { flex-direction: column-reverse; align-items: flex-start; } .rs-open { align-self: stretch; justify-content: center; } }
+        @media (max-width: 480px) {
+            .rs-main { padding-top: 6.5rem; }
+            .rs-card-top { flex-direction: column-reverse; align-items: flex-start; }
+            .rs-open { align-self: stretch; justify-content: center; }
+            .rs-panel-row .btn { margin-left: 0; width: 100%; justify-content: center; }
+        }
     </style>
 </head>
 
@@ -91,8 +125,9 @@
 
 
             <ul class="nav-links" id="nav-menu">
-                <li><a href="index.html" >Home</a></li>
+                <li class="nav-home-mobile"><a href="index.html">Home</a></li>
                 <li><a href="setup.html">Setup</a></li>
+                <li><a href="planner.html">Planner</a></li>
                 <li><a href="quizzes.html">Quizzes</a></li>
                 <li><a href="resources.html" class="active">Resources</a></li>
                 <li class="nav-cta-mobile"><a href="https://web.telegram.org/a/#8996972210" target="_blank" rel="noopener noreferrer">Start</a></li>
@@ -113,7 +148,7 @@
     <main class="rs-main">
         <div class="rs-head">
             <h1>Your NotebookLM resources</h1>
-            <p>Study guides, audio overviews, flashcards and more, generated chapter by chapter from your syllabus.</p>
+            <p>Study guides, audio overviews, flashcards and more, generated chapter by chapter from your syllabus. Tick the chapters you want and choose what to generate for each.</p>
         </div>
 
         <!-- Loading indicator -->
@@ -125,11 +160,22 @@
         <!-- Empty / error messages -->
         <div id="rs-message" class="rs-state" role="alert" hidden></div>
 
+        <!-- Choose what to generate: countdown to the automatic start, select-all chapters, generate button -->
+        <section id="rs-panel" class="rs-panel" aria-label="Choose what to generate" hidden>
+            <div id="rs-auto" class="rs-auto" hidden>
+                <i class="fa-solid fa-hourglass-half" aria-hidden="true"></i>
+                <p>Generation starts automatically in <strong id="rs-auto-time" role="timer">5:00</strong>. Until then, tick the chapters you want and choose what to generate for each. If you do nothing, every chapter is generated with everything selected.</p>
+                <button type="button" class="rs-linkbtn" id="rs-auto-cancel">Cancel automatic start</button>
+            </div>
+            <div class="rs-panel-row">
+                <label class="rs-check rs-check-strong"><input type="checkbox" id="rs-select-all"><span>Select all chapters</span></label>
+                <span id="rs-count" class="rs-live"></span>
+                <span id="rs-toast" class="rs-live" role="status" aria-live="polite"></span>
+                <button type="button" class="btn btn-solid" id="rs-generate" disabled><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> <span id="rs-generate-label">Generate selected</span></button>
+            </div>
+        </section>
+
         <!-- Chapter cards -->
-        <div id="rs-toolbar" class="rs-toolbar" hidden>
-            <button type="button" class="btn btn-solid" id="rs-start-all"><span>Generate all missing</span></button>
-            <span id="rs-toast" class="rs-live" role="status" aria-live="polite"></span>
-        </div>
         <ul id="rs-list" class="rs-grid" style="list-style:none;padding:0" hidden></ul>
         <p id="rs-live" class="rs-live" role="status" aria-live="polite" hidden></p>
     </main>
@@ -138,8 +184,19 @@
     document.addEventListener('DOMContentLoaded', () => {
         const $ = (id) => document.getElementById(id);
         const loadingEl = $('rs-loading'), msgEl = $('rs-message'), listEl = $('rs-list'), liveEl = $('rs-live');
+        const panelEl = $('rs-panel'), autoEl = $('rs-auto'), selectAllEl = $('rs-select-all');
+        const generateBtn = $('rs-generate'), toastEl = $('rs-toast');
         const POLL_MS = 8000;
-        let pollTimer = null;
+        let pollTimer = null, tickTimer = null, requesting = false;
+
+        // Page state. sel: chapterId (string) -> Set of ticked resource-type ids. A chapter that is in sel is "ticked".
+        const state = { chapters: [], types: [], sel: new Map(), deadline: null, sig: '', reloading: false };
+        // Only used if an older server does not send the list (infographics and reports are never offered)
+        const FALLBACK_TYPES = [
+            { id: 'audio_overview', label: 'Audio Overview' }, { id: 'study_guide', label: 'Study Guide' },
+            { id: 'briefing_doc', label: 'Briefing Doc' }, { id: 'faq', label: 'FAQ' }, { id: 'timeline', label: 'Timeline' },
+            { id: 'flashcards', label: 'Flashcards' }, { id: 'mind_map', label: 'Mind Map' }, { id: 'slide_deck', label: 'Slide Deck' },
+        ];
 
         const getCookie = (name) => {
             const m = document.cookie.split('; ').find((c) => c.startsWith(name + '='));
@@ -175,12 +232,14 @@
             return n;
         }
         const safeUrl = (u) => { try { const p = new URL(u); return p.protocol === 'https:' ? p.href : ''; } catch { return ''; } };
+        const selectable = (c) => c.status === 'Pending' || c.status === 'Failed'; // not Ready, not already Generating
+        const allTypeIds = () => state.types.map((t) => t.id);
 
         function showOnly(which) {
             loadingEl.hidden = which !== 'loading';
             msgEl.hidden = which !== 'message';
             listEl.hidden = which !== 'list';
-            if (which !== 'list') $('rs-toolbar').hidden = true;
+            if (which !== 'list') panelEl.hidden = true;
         }
 
         function showMessage({ icon, text, error = false, actions = [] }) {
@@ -200,9 +259,77 @@
             return b;
         }
 
+        // ---------- Selection ----------
+
+        /** Make a card's checkbox, options box and checkmarks match state.sel. */
+        function syncCard(li) {
+            const pick = li.querySelector('.rs-pick');
+            if (!pick) return;
+            const set = state.sel.get(li.dataset.id);
+            const on = Boolean(set);
+            li.classList.toggle('is-selected', on);
+            pick.checked = on;
+            const box = li.querySelector('.rs-types');
+            box.hidden = !on;
+            if (!on) return;
+            box.querySelectorAll('.rs-type').forEach((c) => { c.checked = set.has(c.value); });
+            const all = box.querySelector('.rs-types-all');
+            all.checked = set.size === state.types.length;
+            all.indeterminate = set.size > 0 && set.size < state.types.length;
+        }
+
+        /** Top panel: select-all state, "N of M selected", and whether Generate is allowed. */
+        function syncPanel() {
+            const open = state.chapters.filter(selectable);
+            const ticked = open.filter((c) => state.sel.has(String(c.chapterId))).length;
+            const empty = [...state.sel.values()].filter((s) => s.size === 0).length;
+            panelEl.hidden = open.length === 0;
+            selectAllEl.disabled = open.length === 0;
+            selectAllEl.checked = open.length > 0 && ticked === open.length;
+            selectAllEl.indeterminate = ticked > 0 && ticked < open.length;
+            $('rs-count').textContent = `${ticked} of ${open.length} chapter${open.length === 1 ? '' : 's'} selected`
+                + (empty ? ` · ${empty} still need at least one item` : '');
+            $('rs-generate-label').textContent = ticked ? `Generate selected (${ticked})` : 'Generate selected';
+            generateBtn.disabled = requesting || ticked === 0 || empty > 0;
+        }
+
+        selectAllEl.addEventListener('change', () => {
+            const open = state.chapters.filter(selectable);
+            if (selectAllEl.checked) {
+                open.forEach((c) => { const id = String(c.chapterId); if (!state.sel.get(id)?.size) state.sel.set(id, new Set(allTypeIds())); });
+            } else {
+                state.sel.clear();
+            }
+            listEl.querySelectorAll('.rs-card').forEach(syncCard);
+            syncPanel();
+        });
+
+        listEl.addEventListener('change', (e) => {
+            const t = e.target;
+            const li = t.closest('.rs-card');
+            if (!li) return;
+            const id = li.dataset.id;
+            if (t.classList.contains('rs-pick')) {
+                if (t.checked) state.sel.set(id, new Set(allTypeIds())); else state.sel.delete(id);
+            } else if (t.classList.contains('rs-types-all')) {
+                state.sel.set(id, t.checked ? new Set(allTypeIds()) : new Set());
+            } else if (t.classList.contains('rs-type')) {
+                const set = state.sel.get(id);
+                if (!set) return;
+                if (t.checked) set.add(t.value); else set.delete(t.value);
+            } else {
+                return;
+            }
+            syncCard(li);
+            syncPanel();
+        });
+
+        // ---------- Cards ----------
+
         function renderCard(ch) {
             const status = BADGES[ch.status] ? ch.status : 'Pending';
             const li = el('li', 'rs-card');
+            li.dataset.id = String(ch.chapterId);
 
             const top = el('div', 'rs-card-top');
             const titleWrap = el('div');
@@ -224,35 +351,93 @@
                 a.append(ai, document.createTextNode(' Open in NotebookLM'));
                 li.append(a);
             }
-            if (status === 'Pending' || status === 'Failed') {
-                const b = el('button', 'btn btn-solid rs-open', status === 'Failed' ? 'Retry' : 'Generate');
-                b.type = 'button';
-                b.addEventListener('click', () => start([ch.chapterId], b));
-                li.append(b);
+
+            if (selectable(ch)) {
+                const pickLabel = el('label', 'rs-check rs-check-strong');
+                const pick = el('input', 'rs-pick'); pick.type = 'checkbox';
+                pickLabel.append(pick, el('span', null, status === 'Failed' ? 'Select to retry this chapter' : 'Select this chapter'));
+
+                const box = el('fieldset', 'rs-types'); box.hidden = true;
+                box.append(el('legend', null, 'What to generate'));
+                const allLabel = el('label', 'rs-check rs-check-strong');
+                const allBox = el('input', 'rs-types-all'); allBox.type = 'checkbox';
+                allLabel.append(allBox, el('span', null, 'Select all'));
+                const grid = el('div', 'rs-types-grid');
+                state.types.forEach((t) => {
+                    const l = el('label', 'rs-check');
+                    if (t.description) l.title = t.description;
+                    const c = el('input', 'rs-type'); c.type = 'checkbox'; c.value = t.id;
+                    l.append(c, el('span', null, t.label));
+                    grid.append(l);
+                });
+                box.append(allLabel, grid);
+                li.append(pickLabel, box);
+                syncCard(li);
             }
             return li;
         }
 
-        async function start(ids, btn) {
-            const toast = $('rs-toast');
-            if (btn) btn.disabled = true;
-            toast.textContent = 'Starting…';
+        // ---------- Talking to the server ----------
+
+        async function post(payload) {
+            requesting = true; syncPanel();
+            toastEl.textContent = 'Starting…';
             try {
                 const id = userIdFromSetup();
                 const res = await fetch('/api/resources/start', {
                     method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ telegramUserId: id || undefined, chapterIds: ids }),
+                    body: JSON.stringify({ telegramUserId: id || undefined, ...payload }),
                 });
                 const data = await res.json().catch(() => null);
                 if (!res.ok) throw new Error(data?.error || `Server responded with ${res.status}`);
-                toast.textContent = data?.message || 'Started.';
-                await load({ silent: true });
+                toastEl.textContent = data?.message || 'Started.';
+                return true;
             } catch (err) {
-                toast.textContent = 'Could not start generation. Please try again.';
-                if (btn) btn.disabled = false;
+                toastEl.textContent = err instanceof TypeError ? 'Could not reach the server. Please try again.' : (err.message || 'Could not start generation. Please try again.');
+                return false;
+            } finally {
+                requesting = false; syncPanel();
             }
         }
-        $('rs-start-all').addEventListener('click', (e) => start([], e.currentTarget));
+
+        generateBtn.addEventListener('click', async () => {
+            const selections = {};
+            state.sel.forEach((set, id) => { if (set.size) selections[id] = [...set]; });
+            if (await post({ selections })) {
+                state.sel.clear();
+                listEl.querySelectorAll('.rs-card').forEach(syncCard);
+                syncPanel();
+                await load({ silent: true });
+            }
+        });
+
+        $('rs-auto-cancel').addEventListener('click', async () => {
+            if (await post({ cancelAuto: true })) await load({ silent: true });
+        });
+
+        // ---------- Countdown to the automatic start ----------
+
+        function paintAuto() {
+            const left = Math.max(0, (state.deadline || 0) - Date.now());
+            const m = Math.floor(left / 60000), s = Math.floor((left % 60000) / 1000);
+            $('rs-auto-time').textContent = left > 0 ? `${m}:${String(s).padStart(2, '0')}` : 'a moment';
+            if (left === 0 && !state.reloading) {
+                state.reloading = true;
+                setTimeout(() => { state.reloading = false; load({ silent: true }); }, 4000);
+            }
+        }
+
+        function setAuto(a) {
+            clearInterval(tickTimer); tickTimer = null;
+            if (!a || !a.startAt) { state.deadline = null; autoEl.hidden = true; return; }
+            const left = new Date(a.startAt) - new Date(a.now);
+            state.deadline = Date.now() + (Number.isFinite(left) ? Math.max(0, left) : 0);
+            autoEl.hidden = false;
+            paintAuto();
+            tickTimer = setInterval(paintAuto, 1000);
+        }
+
+        // ---------- Loading ----------
 
         function render(data) {
             const chapters = Array.isArray(data?.chapters) ? data.chapters : [];
@@ -262,14 +447,26 @@
                     text: data?.message || 'No syllabus has been processed yet. Upload your syllabus to get started.',
                     actions: [button('Add your syllabus', 'fa-upload', null, 'quizzes.html')],
                 });
-                liveEl.hidden = true; $('rs-toolbar').hidden = true;
+                liveEl.hidden = true; setAuto(null);
                 return false;
             }
-            listEl.replaceChildren(...chapters.map(renderCard));
-            const missing = chapters.some((c) => c.status !== 'Ready' && c.status !== 'Generating');
-            $('rs-toolbar').hidden = !missing;
-            $('rs-start-all').disabled = false;
+            state.types = Array.isArray(data.resourceTypes) && data.resourceTypes.length ? data.resourceTypes : FALLBACK_TYPES;
+            state.chapters = chapters;
+
+            const openIds = new Set(chapters.filter(selectable).map((c) => String(c.chapterId)));
+            const typeIds = new Set(allTypeIds());
+            [...state.sel.keys()].forEach((id) => { if (!openIds.has(id)) state.sel.delete(id); });
+            state.sel.forEach((set) => set.forEach((t) => { if (!typeIds.has(t)) set.delete(t); }));
+
+            const sig = JSON.stringify([chapters.map((c) => [c.chapterId, c.status, c.description, c.notebookUrl, c.chapterName, c.subject]), [...typeIds]]);
+            if (sig !== state.sig || listEl.hidden) {
+                state.sig = sig;
+                listEl.replaceChildren(...chapters.map(renderCard));
+            }
             showOnly('list');
+            setAuto(data.autoStart);
+            syncPanel();
+
             const busy = chapters.some((c) => c.status === 'Generating');
             liveEl.hidden = !busy;
             liveEl.textContent = busy ? 'Some chapters are still generating. This page updates automatically.' : '';
@@ -298,7 +495,7 @@
                 const busy = render(data);
                 if (busy && !document.hidden) pollTimer = setTimeout(() => load({ silent: true }), POLL_MS);
             } catch (err) {
-                if (silent && !listEl.hidden) return; // keep showing the last good list if a background refresh fails
+                if (silent && !listEl.hidden) return;
                 const offline = !navigator.onLine || err instanceof TypeError;
                 showMessage({
                     error: true,
@@ -311,8 +508,7 @@
             }
         }
 
-        // Pause background refreshes while the tab is hidden, refresh when it comes back
-        document.addEventListener('visibilitychange', () => { if (!document.hidden && !liveEl.hidden) load({ silent: true }); });
+        document.addEventListener('visibilitychange', () => { if (!document.hidden && !listEl.hidden) load({ silent: true }); });
 
         load();
     });
@@ -323,4 +519,4 @@
     <script src="https://cdn.jsdelivr.net/npm/lenis@1.1.20/dist/lenis.min.js"></script>
     <script src="./script.js"></script>
 
-</body>
+</body></html>

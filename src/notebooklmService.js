@@ -291,7 +291,10 @@ export async function createChapterNotebook({ jobId, userId, chapter, sessionFil
   }
 
   // 4. Study resources (infographics / reports are never requested)
-  const types = GENERATABLE_RESOURCE_TYPES;
+  // Only what the user ticked for this chapter (never infographics/reports); no choice saved = every allowed type
+  const wanted = Array.isArray(full.resourceTypes) ? full.resourceTypes : [];
+  let types = GENERATABLE_RESOURCE_TYPES.filter((t) => wanted.includes(t));
+  if (!types.length) types = GENERATABLE_RESOURCE_TYPES;
   await step("Starting study resources in NotebookLM");
   const gen = await py({ action: "generate", storage_path: sessionFile, notebook_id: notebookId, title: full.title, resource_types: types }, 420_000);
   if (!gen?.ok) throw pyError(gen || {}, "Resource generation failed");

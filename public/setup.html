@@ -34,8 +34,9 @@
             <a href="index.html" class="brand-logo">Study Agent</a>
 
             <ul class="nav-links" id="nav-menu">
-                <li><a href="index.html">Home</a></li>
+                <li class="nav-home-mobile"><a href="index.html">Home</a></li>
                 <li><a href="setup.html" class="active">Setup</a></li>
+                <li><a href="planner.html">Planner</a></li>
                 <li><a href="quizzes.html">Quizzes</a></li>
                 <li><a href="resources.html">Resources</a></li>
                 <li class="nav-cta-mobile"><a href="https://web.telegram.org/a/#8996972210" target="_blank" rel="noopener noreferrer">Start</a></li>
@@ -60,7 +61,7 @@
             </div>
             <h1>Connect your personal AI study workspace</h1>
             <p class="hero-sub">
-                Link your Gemini API keys, pair your Telegram account with our Study Agent bot in one tap, and sign in to Google NotebookLM. Everything is saved straight to your browser.
+                Link your Gemini API keys, pair your Telegram account with our Study Agent bot, sign in to Google NotebookLM, and connect your Todoist API token for automated AI study planning.
             </p>
 
             <!-- Live Readiness Tracker -->
@@ -68,7 +69,7 @@
                 <div class="progress-top">
                     <div class="progress-title-group">
                         <span class="progress-eyebrow">Onboarding Readiness</span>
-                        <strong id="progress-summary-text">0 of 3 integrations configured</strong>
+                        <strong id="progress-summary-text">0 of 4 integrations configured</strong>
                     </div>
                     <div class="progress-actions">
                         <span class="chip wait" id="overall-status-chip">Setup Incomplete</span>
@@ -106,6 +107,15 @@
                         </div>
                         <i class="fa-solid fa-circle-dot pill-icon"></i>
                     </a>
+
+                    <a href="#step-todoist" class="progress-pill" id="pill-step-4">
+                        <span class="pill-num">4</span>
+                        <div class="pill-meta">
+                            <b>Todoist API</b>
+                            <small id="pill-status-4">Not connected</small>
+                        </div>
+                        <i class="fa-solid fa-circle-dot pill-icon"></i>
+                    </a>
                 </div>
             </div>
         </section>
@@ -121,7 +131,7 @@
                 </div>
                 <h2>Gemini API Keys &amp; Automatic Fallback</h2>
                 <p class="lead">
-                    Gemini powers your summaries, flashcards, and quiz generation. Add your primary key below—and optionally add backup keys so Study Agent automatically rotates if one hits a rate limit.
+                    Gemini powers your summaries, flashcards, study planner, and quiz generation. Add your primary key below—and optionally add backup keys so Study Agent automatically rotates if one hits a rate limit.
                 </p>
             </div>
 
@@ -478,11 +488,133 @@
         </section>
 
         <!-- ==================================================================
+             STEP 4: TODOIST API KEY INTEGRATION (AI STUDY PLANNER)
+             ================================================================== -->
+        <section class="setup-step" id="step-todoist">
+            <div class="step-header">
+                <div class="step-badge-row">
+                    <span class="step-number-tag">STEP 04</span>
+                    <span class="chip wait" id="todoist-step-chip">Required for Planner</span>
+                </div>
+                <h2>Todoist API Key Integration</h2>
+                <p class="lead">
+                    Connect your Todoist account so the AI Study Planner can automatically schedule daily parent tasks, chapter sub-tasks, study intervals, and revision reminders directly into your Todoist Upcoming view.
+                </p>
+            </div>
+
+            <div class="setup-grid">
+                <!-- Left: Todoist Token Input & Verification Card -->
+                <div class="bento-card setup-config-card">
+                    <div class="card-head-row">
+                        <div>
+                            <h3><i class="fa-solid fa-list-check icon-accent"></i> Your Todoist API Key</h3>
+                            <p>Used by <code>@doist/todoist-sdk</code> to sync your AI study schedule and sub-tasks.</p>
+                        </div>
+                        <span class="chip wait" id="todoist-status-chip">Enter Token</span>
+                    </div>
+
+                    <div class="field-group">
+                        <label for="todoist-api-key" class="field-label">
+                            <span>Todoist Developer API Token</span>
+                            <a href="https://app.todoist.com/app/settings/integrations/developer" target="_blank" rel="noopener noreferrer" class="inline-link">
+                                Get token from Todoist <i class="fa-solid fa-arrow-up-right-from-square"></i>
+                            </a>
+                        </label>
+                        <div class="input-action-row">
+                            <div class="input-wrapper">
+                                <i class="fa-solid fa-key input-prefix-icon"></i>
+                                <input type="password" id="todoist-api-key" class="setup-input mono"
+                                    placeholder="Paste your Todoist API token (e.g. 0123456789abcdef...)"
+                                    autocomplete="off">
+                                <button type="button" class="icon-btn" id="toggle-todoist-vis-btn" title="Show/Hide Todoist API Key">
+                                    <i class="fa-regular fa-eye"></i>
+                                </button>
+                            </div>
+                            <button type="button" class="btn btn-ghost btn-sm" id="verify-todoist-key-btn">
+                                <i class="fa-solid fa-check"></i>
+                                <span>Verify &amp; Save Key</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Connected Todoist Status Pill -->
+                    <div class="connected-account-pill" id="todoist-connected-pill" hidden>
+                        <div class="account-avatar"><i class="fa-solid fa-list-check"></i></div>
+                        <div class="account-details">
+                            <b id="todoist-connected-title">Todoist API Connected</b>
+                            <small id="todoist-connected-meta">Ready to push parent tasks &amp; sub-tasks to Todoist</small>
+                        </div>
+                        <span class="chip ok">Connected</span>
+                    </div>
+
+                    <div class="todoist-quick-links">
+                        <a href="planner.html" class="btn btn-solid btn-sm">
+                            <i class="fa-solid fa-calendar-check"></i>
+                            <span>Open AI Study Planner</span>
+                        </a>
+                        <a href="https://app.todoist.com/app/upcoming" target="_blank" rel="noopener noreferrer" class="btn btn-ghost btn-sm">
+                            <i class="fa-solid fa-arrow-up-right-from-square"></i>
+                            <span>Open Todoist Upcoming</span>
+                        </a>
+                    </div>
+
+                    <div class="rotation-banner">
+                        <div class="rotation-icon">
+                            <i class="fa-solid fa-calendar-days"></i>
+                        </div>
+                        <div>
+                            <b>Automatic Parent Tasks, Sub-Tasks &amp; Due Dates</b>
+                            <p>Study Agent creates structured daily study blocks in Todoist with NCERT PDF links, YouTube tutorials, Pomodoro/Deep Work intervals, and checkable sub-tasks.</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right: Step-by-Step Todoist Token Guide -->
+                <aside class="bento-card setup-guide-card">
+                    <div class="guide-header">
+                        <span class="guide-tag"><i class="fa-solid fa-list-check"></i> 30-Second Setup</span>
+                        <h3>How to get your Todoist API Key</h3>
+                        <p>Follow these three quick steps to copy your personal Todoist API token:</p>
+                    </div>
+
+                    <ol class="guide-steps">
+                        <li>
+                            <span class="guide-num">1</span>
+                            <div>
+                                <b>Log in to Todoist</b>
+                                <p>Sign in to your Todoist account in your browser if you haven't already.</p>
+                            </div>
+                        </li>
+                        <li>
+                            <span class="guide-num">2</span>
+                            <div>
+                                <b>Open Todoist Developer Settings</b>
+                                <p>Visit <a href="https://app.todoist.com/app/settings/integrations/developer" target="_blank" rel="noopener noreferrer" class="inline-link">https://app.todoist.com/app/settings/integrations/developer <i class="fa-solid fa-arrow-up-right-from-square"></i></a> in a new tab.</p>
+                            </div>
+                        </li>
+                        <li>
+                            <span class="guide-num">3</span>
+                            <div>
+                                <b>Copy &amp; paste your API token</b>
+                                <p>Under the <b>API token</b> section, click <code>Copy to clipboard</code> and paste your token into the input field on the left, then click <b>Verify &amp; Save Key</b>.</p>
+                            </div>
+                        </li>
+                    </ol>
+
+                    <div class="guide-tip">
+                        <i class="fa-regular fa-lightbulb"></i>
+                        <span><b>Server fallback supported:</b> You can also set <code>TODOIST_API_KEY</code> in your <code>.env</code> file as a default fallback.</span>
+                    </div>
+                </aside>
+            </div>
+        </section>
+
+        <!-- ==================================================================
              FINAL SAVE & CONFIGURATION SUMMARY CARD
              ================================================================== -->
         <section class="setup-footer-section" id="step-finish">
             <div class="cta-card setup-finish-card">
-                <span class="chip wait" id="finish-card-chip">Waiting for all 3 steps</span>
+                <span class="chip wait" id="finish-card-chip">Waiting for all 4 steps</span>
                 <h2 id="finish-card-title">Save your Study Agent configuration</h2>
 
                 <div class="cta-row finish-actions-row">
@@ -490,6 +622,10 @@
                         <i class="fa-solid fa-floppy-disk"></i>
                         <span>Save Configuration</span>
                     </button>
+                    <a href="planner.html" class="btn btn-ghost">
+                        <i class="fa-solid fa-calendar-check"></i>
+                        <span>Go to AI Study Planner</span>
+                    </a>
                     <button type="button" class="btn btn-ghost btn-danger-outline" id="reset-config-btn">
                         <i class="fa-solid fa-trash-can"></i>
                         <span>Reset</span>
@@ -507,7 +643,7 @@
         <div class="foot-grid">
             <div class="foot-brand">
                 <a href="index.html" class="brand-logo">Study Agent</a>
-                <p>Your autonomous study partner powered by Gemini, Telegram, and NotebookLM.</p>
+                <p>Your autonomous study partner powered by Gemini, Telegram, NotebookLM, and Todoist.</p>
                 <div class="socials">
                     <a href="https://web.telegram.org/a/#8996972210" target="_blank" rel="noopener noreferrer" aria-label="Telegram"><i class="fa-brands fa-telegram"></i></a>
                     <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" aria-label="Google AI Studio"><i class="fa-solid fa-wand-magic-sparkles"></i></a>
@@ -517,6 +653,7 @@
                 <h4>Platform</h4>
                 <a href="index.html">Home</a>
                 <a href="setup.html">Setup Guide</a>
+                <a href="planner.html">Study Planner</a>
                 <a href="quizzes.html">Quizzes</a>
                 <a href="resources.html">Resources</a>
             </nav>
@@ -525,11 +662,12 @@
                 <a href="#step-gemini">Gemini API Fallback</a>
                 <a href="#step-telegram">Telegram Pairing</a>
                 <a href="#step-notebooklm">NotebookLM Auth</a>
+                <a href="#step-todoist">Todoist API Key</a>
             </nav>
             <nav aria-label="Quick Links">
                 <h4>Quick Links</h4>
                 <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer">Get Gemini Key</a>
-                <a href="https://web.telegram.org/a/#8996972210" target="_blank" rel="noopener noreferrer">Open Study Agent Bot</a>
+                <a href="https://app.todoist.com/app/settings/integrations/developer" target="_blank" rel="noopener noreferrer">Get Todoist Token</a>
                 <a href="https://notebooklm.google.com" target="_blank" rel="noopener noreferrer">Google NotebookLM</a>
             </nav>
         </div>
@@ -542,7 +680,7 @@
     <!-- Core UI animations (No three.min.js) -->
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
-        <script defer src="./script.js"></script>
+    <script defer src="./script.js"></script>
     <script defer src="./setup.js"></script>
 </body>
 

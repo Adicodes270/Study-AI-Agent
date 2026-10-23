@@ -36,8 +36,9 @@
 
 
             <ul class="nav-links" id="nav-menu">
-                <li><a href="index.html" class="active">Home</a></li>
+                <li class="nav-home-mobile"><a href="index.html" class="active">Home</a></li>
                 <li><a href="setup.html">Setup</a></li>
+                <li><a href="planner.html">Planner</a></li>
                 <li><a href="quizzes.html">Quizzes</a></li>
                 <li><a href="resources.html">Resources</a></li>
                 <li class="nav-cta-mobile"><a href="https://web.telegram.org/a/#8996972210" target="_blank" rel="noopener noreferrer">Start</a></li>
@@ -61,9 +62,10 @@
                 <p class="hero-sub">Send your syllabus to a Telegram group. Study Agent finds the NCERT chapters, builds
                     a day-by-day plan in Todoist, and reschedules it after every quiz.</p>
                 <div class="cta-row">
-                    <a href="https://web.telegram.org/a/#8996972210" class="btn btn-solid" target="_blank" rel="noopener noreferrer"><i class="fa-brands fa-telegram"></i>
-                        Start studying</a>
-                    <a href="#how" class="btn btn-ghost">See how it works</a>
+                    <a href="planner.html" class="btn btn-solid"><i class="fa-solid fa-calendar-check"></i>
+                        Open Study Planner</a>
+                    <a href="https://web.telegram.org/a/#8996972210" class="btn btn-ghost" target="_blank" rel="noopener noreferrer"><i class="fa-brands fa-telegram"></i>
+                        Start on Telegram</a>
                 </div>
                 <div class="stats">
                     <div><b>8 to 12</b><span>CBSE classes</span></div>
@@ -173,8 +175,8 @@
             <p class="lead reveal">Start here for the overview, then open a page to go deeper.</p>
             <div class="bento">
                 <a class="bento-card b-wide reveal" href="setup.html">
-                    <h3>Set up Telegram</h3>
-                    <p>Create the bot, add it to your study group, and send your first portion.</p>
+                    <h3>Set up Telegram &amp; Todoist</h3>
+                    <p>Connect your Gemini keys, pair the Telegram bot, and link your Todoist API token in minutes.</p>
                     <div class="mini">
                         <div class="msg me">Science portion for half yearly</div>
                         <div class="msg">Saved. 8 chapters found.</div>
@@ -202,16 +204,17 @@
                     </div>
                     <span class="more">Browse resources <i class="fa-solid fa-arrow-right"></i></span>
                 </a>
-                <div class="bento-card b-wide reveal">
+                <a class="bento-card b-wide reveal" href="planner.html">
                     <h3>A plan that counts down to the exam</h3>
-                    <p>Tasks are placed at four checkpoints so nothing piles up at the end.</p>
+                    <p>Configure exam dates, study/sleep hours, school vs vacation days, and push straight to Todoist.</p>
                     <div class="timeline">
                         <div><b>30 days</b>Read and note</div>
                         <div><b>21 days</b>Watch videos</div>
                         <div><b>14 days</b>Take the quiz</div>
                         <div><b>7 days</b>Light revision</div>
                     </div>
-                </div>
+                    <span class="more">Open AI Study Planner <i class="fa-solid fa-arrow-right"></i></span>
+                </a>
             </div>
         </section>
 
@@ -236,11 +239,10 @@
                             class="fa-brands fa-telegram"></i></a>
                     <a href="https://github.com/Adicodes270/Study-AI-Agent" aria-label="GitHub"><i
                             class="fa-brands fa-github"></i></a>
-                    <!-- <a href="https://youtube.com/" aria-label="YouTube"><i class="fa-brands fa-youtube"></i></a> -->
                 </div>
             </div>
             <nav aria-label="Product">
-                <h4>Product</h4><a href="setup.html">Setup</a><a href="quizzes.html">Quizzes</a><a
+                <h4>Product</h4><a href="setup.html">Setup</a><a href="planner.html">Planner</a><a href="quizzes.html">Quizzes</a><a
                     href="resources.html">Resources</a>
             </nav>
             <nav aria-label="Project">

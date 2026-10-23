@@ -14,6 +14,9 @@ export const DATABASE_URL = (process.env.DATABASE_URL ?? "").trim();
 export const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? "";
 export const GEMINI_MODEL = (process.env.GEMINI_MODEL ?? "").trim() || "gemini-3.5-flash-lite";
 
+// Optional fallback Todoist API key from .env
+export const TODOIST_API_KEY = (process.env.TODOIST_API_KEY ?? "").trim();
+
 const _class = (process.env.CLASS_LEVEL ?? "").trim();
 export const DEFAULT_CLASS_LEVEL = /^\d+$/.test(_class) ? parseInt(_class, 10) : null;
 

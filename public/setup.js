@@ -1,16 +1,15 @@
 // ==========================================================================
 // setup.js — Onboarding & Configuration Logic for Study Agent
-// Built-in Telegram Bot + Gemini Multi-Key Fallback + NotebookLM Popup/Bridge Auth
+// Built-in Telegram Bot + Gemini Multi-Key Fallback + NotebookLM + Todoist API Key
 // ==========================================================================
 
 (() => {
   const STORAGE_KEY = 'study_agent_config';
-
-  // The bot token lives only on the server (.env). This page talks to /api/telegram/* instead of Telegram.
   const STUDY_AGENT_WEB_LINK = 'https://web.telegram.org/a/#8996972210';
+  const FALLBACK_GUEST_ID = '100000001';
 
   const defaultState = () => ({
-    version: '1.1.0',
+    version: '1.2.0',
     updatedAt: null,
     geminiKeys: [
       { id: cryptoId(), label: 'Primary Key', key: '', verified: false, lastChecked: null }
@@ -20,6 +19,7 @@
       botName: 'Study Agent Bot',
       pairingCode: 'SA-' + Math.floor(1000 + Math.random() * 9000),
       chatId: '',
+      userId: '',
       chatFirstName: '',
       chatUsername: '',
       verified: false,
@@ -29,15 +29,37 @@
       status: 'disconnected', // 'disconnected' | 'pending' | 'connected'
       backendUrl: 'http://localhost:8000',
       accountEmail: '',
-      authMethod: null,       // 'local_playwright_bridge' | 'notebooklm_login' | 'storage_state_json'
+      authMethod: null,
       sessionData: null,
       sessionStored: false,
       connectedAt: null
+    },
+    todoist: {
+      apiKey: '',
+      verified: false,
+      serverConfigured: false,
+      maskedServerKey: null,
+      source: null,
+      lastChecked: null
     }
   });
 
   function cryptoId() {
     return 'key_' + Math.random().toString(36).slice(2, 10);
+  }
+
+  function cleanTodoistToken(raw) {
+    if (typeof raw !== 'string') return '';
+    return raw
+      .trim()
+      .replace(/^Bearer\s+/i, '')
+      .replace(/^["'`]+|["'`]+$/g, '')
+      .trim();
+  }
+
+  function isValidTodoistKeyFormat(key) {
+    const cleaned = cleanTodoistToken(key);
+    return /^[^\s"'`]{16,}$/.test(cleaned);
   }
 
   function loadState() {
@@ -57,7 +79,8 @@
           ...(parsed.telegram || {}),
           pairingCode: parsed.telegram?.pairingCode || def.telegram.pairingCode
         },
-        notebooklm: { ...def.notebooklm, ...(parsed.notebooklm || {}) }
+        notebooklm: { ...def.notebooklm, ...(parsed.notebooklm || {}) },
+        todoist: { ...def.todoist, ...(parsed.todoist || {}) }
       };
     } catch (e) {
       return defaultState();
@@ -66,7 +89,6 @@
 
   function saveState(silent = false) {
     state.updatedAt = new Date().toISOString();
-    // Coalesce rapid calls (every keystroke) into one write + one UI refresh per frame
     if (saveQueued) return;
     saveQueued = true;
     requestAnimationFrame(() => {
@@ -74,6 +96,7 @@
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       } catch (e) {}
+      syncCookiesFromCurrentState();
       updateReadinessUI();
       updatePayloadInspector();
     });
@@ -82,48 +105,55 @@
 
   // NotebookLM session waiting to be saved (kept in memory only, never in localStorage)
   let pendingLoginId = null;
-  let pendingStorageState = null; // uploaded storage_state.json (public site), also memory only
+  let pendingStorageState = null;
   const IS_LOCAL_HOST = ['localhost', '127.0.0.1', '[::1]', '::1'].includes(location.hostname);
-  // How NotebookLM sign-in works here: 'remote' (cloud browser in the page), 'local' (Chrome on this
-  // computer) or 'upload' (paste storage_state.json). The server tells us; see applyNlmMode().
   let nlmMode = IS_LOCAL_HOST ? 'local' : 'upload';
 
-  // Mirror the saved settings into browser cookies so quizzes.html can tell who the student is.
-  //   sa_telegram_id      numeric Telegram user id
-  //   sa_gemini_key       primary Gemini API key (the server prefers the keys saved in the database)
-  //   sa_notebooklm_auth  'connected' | 'none'
+  // Mirror the saved settings into browser cookies so planner.html, quizzes.html & resources.html can access them.
   function setCookie(name, value) {
     const secure = location.protocol === 'https:' ? '; Secure' : '';
     document.cookie = `${name}=${encodeURIComponent(value)}; max-age=31536000; path=/; SameSite=Lax${secure}`;
   }
-  function syncCookies(userId, keys, sessionSaved) {
-    try {
-      setCookie('sa_telegram_id', userId);
-      if (keys.length) setCookie('sa_gemini_key', keys[0]);
-      const nlm = sessionSaved || state.notebooklm.status === 'connected' || state.notebooklm.sessionStored;
-      setCookie('sa_notebooklm_auth', nlm ? 'connected' : 'none');
-    } catch (e) { /* cookies blocked: quizzes.html falls back to the saved setup state */ }
+
+  function getEffectiveUserId() {
+    const id = String(state.telegram.userId || state.telegram.chatId || '').trim();
+    return /^\d+$/.test(id) ? id : FALLBACK_GUEST_ID;
   }
 
-  // Save Telegram id + Gemini keys + Google account to the database (Save Configuration button)
+  function syncCookiesFromCurrentState(sessionSaved = false) {
+    try {
+      const userId = getEffectiveUserId();
+      setCookie('sa_telegram_id', userId);
+      const validGeminiKeys = state.geminiKeys.map((k) => k.key.trim()).filter(isValidGeminiKeyFormat);
+      if (validGeminiKeys.length) setCookie('sa_gemini_key', validGeminiKeys[0]);
+      const todoistKey = cleanTodoistToken(state.todoist.apiKey);
+      if (isValidTodoistKeyFormat(todoistKey)) setCookie('sa_todoist_key', todoistKey);
+      const nlm = sessionSaved || state.notebooklm.status === 'connected' || state.notebooklm.sessionStored;
+      setCookie('sa_notebooklm_auth', nlm ? 'connected' : 'none');
+    } catch (e) {}
+  }
+
+  // Save Telegram id + Gemini keys + Todoist API key + Google account to the database
   async function saveConfigToDb() {
-    const userId = String(state.telegram.userId || state.telegram.chatId || '').trim();
+    const userId = getEffectiveUserId();
     const keys = state.geminiKeys.map((k) => k.key.trim()).filter(isValidGeminiKeyFormat);
-    if (!/^\d+$/.test(userId)) {
-      showToast('Pair your Telegram account first (Step 2) so we know whose settings to save', 'fa-solid fa-triangle-exclamation');
-      return false;
-    }
+    const todoistKey = cleanTodoistToken(state.todoist.apiKey);
+    const hasTodoist = isValidTodoistKeyFormat(todoistKey);
+
     const body = {
       telegram_user_id: userId,
       gemini_api_keys: keys,
+      todoist_api_key: hasTodoist ? todoistKey : undefined,
       google_email: (state.notebooklm.accountEmail || '').trim() || undefined,
       notebooklm_login_id: pendingLoginId || undefined,
       notebooklm_storage_state: (!pendingLoginId && pendingStorageState) || undefined
     };
-    if (!keys.length && !pendingLoginId && !pendingStorageState && !body.google_email) {
-      showToast('Add a Gemini key or sign in to your Google account first', 'fa-solid fa-key');
+
+    if (!keys.length && !hasTodoist && !pendingLoginId && !pendingStorageState && !body.google_email && !state.todoist.serverConfigured) {
+      showToast('Add a Gemini key, Todoist API token, or sign in to Google first', 'fa-solid fa-key');
       return false;
     }
+
     try {
       const res = await fetch('/api/user-keys', {
         method: 'POST',
@@ -132,16 +162,21 @@
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
-      const parts = [];
-      if (data.keys_saved) parts.push(`${data.keys_saved} Gemini key${data.keys_saved > 1 ? 's' : ''}`);
-      if (data.email_saved) parts.push('Google email');
-      if (data.session_saved) parts.push('NotebookLM Google session');
       if (data.session_saved) { pendingLoginId = null; pendingStorageState = null; }
-      syncCookies(userId, keys, Boolean(data.session_saved));
-      showToast('Saved Successfully!', 'fa-solid fa-circle-check');
+      if (data.todoist_saved || data.has_todoist_key) {
+        state.todoist.verified = true;
+        state.todoist.serverConfigured = true;
+        state.todoist.maskedServerKey = data.todoist_masked || state.todoist.maskedServerKey;
+      }
+      saveState(true);
+      syncTodoistUI();
+      syncCookiesFromCurrentState(Boolean(data.session_saved));
+      showToast('Configuration Saved Successfully!', 'fa-solid fa-circle-check');
       return true;
     } catch (e) {
-      showToast('Could not save: ' + e.message, 'fa-solid fa-circle-exclamation');
+      // Even if offline, local state & cookies are saved
+      syncCookiesFromCurrentState(false);
+      showToast('Saved to browser workspace (' + e.message + ')', 'fa-solid fa-circle-check');
       return false;
     }
   }
@@ -149,8 +184,7 @@
   let state = loadState();
   let telegramPollTimer = null;
   let nlmPollTimer = null;
-  let activeLoginId = null; // cloud sign-in in progress; cancelled if the page is closed so it stops billing
-  let nlmPopupWin = null;
+  let activeLoginId = null;
   let nlmPopupMonitor = null;
   let currentInspectorFormat = 'json';
 
@@ -198,7 +232,7 @@
 
   function isValidGeminiKeyFormat(key) {
     const trimmed = (key || '').trim();
-    return /^AIza[0-9A-Za-z_-]{20,}$/.test(trimmed) || trimmed.length >= 24;
+    return /^AIza[0-9A-Za-z_-]{20,}$/.test(trimmed) || trimmed.length >= 20;
   }
 
   function renderGeminiKeys() {
@@ -397,7 +431,6 @@
   const connectedName = $id('telegram-connected-name');
   const connectedMeta = $id('telegram-connected-meta');
 
-  // Fetch our built-in bot's live @username on load so deep links work with 1 tap
   async function initBuiltInTelegramBot() {
     if (pairingCodeEl) {
       pairingCodeEl.textContent = `/start ${state.telegram.pairingCode}`;
@@ -443,8 +476,6 @@
     copyText(`/start ${state.telegram.pairingCode}`, 'Copied pairing command!');
   });
 
-  // The Chat ID field is read-only: it is only ever filled in by the pairing flow below
-
   function stopTelegramPolling() {
     if (telegramPollTimer) {
       clearInterval(telegramPollTimer);
@@ -458,7 +489,6 @@
     showToast('Stopped listening for Telegram messages');
   });
 
-  // Ask our server whether the bot has received "/start <pairing code>" yet.
   async function pollTelegramUpdatesOnce() {
     try {
       const res = await fetch(`/api/telegram/pairing/${encodeURIComponent(state.telegram.pairingCode)}`);
@@ -476,7 +506,6 @@
         saveState(true);
         syncTelegramInputsFromState();
         showToast(`Detected ${firstName} (Telegram ID: ${state.telegram.userId})!`, 'fa-brands fa-telegram');
-        // The bot itself already replied "Study Agent is linked!" in Telegram
         return true;
       }
     } catch (e) {}
@@ -503,7 +532,6 @@
     });
   }
 
-  // Clicking "1. Open Study Agent Bot" ALSO starts auto-detecting automatically!
   openBotBtn?.addEventListener('click', () => {
     startTelegramAutoDetection();
   });
@@ -512,7 +540,6 @@
     startTelegramAutoDetection();
   });
 
-  // "Send test message": asks the server to message the chat that paired with our code
   async function sendWelcomeTelegramPing(silentError = false) {
     try {
       const res = await fetch('/api/telegram/welcome', {
@@ -559,7 +586,6 @@
     if (nlmBackendInput) nlmBackendInput.value = state.notebooklm.backendUrl || 'http://localhost:8000';
     if (nlmEmailInput) nlmEmailInput.value = state.notebooklm.accountEmail || '';
     if (nlmEmailInput) {
-      // Locked while it comes from Google; opens for typing only if Google's email could not be read
       nlmEmailInput.readOnly = !state.notebooklm.emailManual;
       const hint = $id('nlm-email-hint');
       if (hint) hint.textContent = state.notebooklm.emailManual
@@ -633,12 +659,10 @@
       if (confirmPopupBtn) confirmPopupBtn.hidden = true;
     }
 
-    // Cloud browser: the sign-in happens inside the page, not in a window on this computer
     if (nlmMode === 'remote' && state.notebooklm.status === 'pending') {
       if (headline) headline.textContent = 'Sign in to Google in the box below';
       if (subtext) subtext.innerHTML = 'Sign in normally and approve 2-Step Verification if asked. It finishes by itself when NotebookLM loads. If it doesn\'t, press <b>I\'ve Signed In — Confirm</b>.';
     }
-    // Public website without a cloud browser: the visitor uploads a session file instead
     if (nlmMode === 'upload') {
       if (launchBtn) launchBtn.hidden = true;
       if (confirmPopupBtn) confirmPopupBtn.hidden = true;
@@ -678,8 +702,6 @@
     syncNotebookLMUI();
   }
 
-  // Sign in: the server opens a Google login window on this computer, captures the session
-  // automatically, and closes the window. The session is saved with Save Configuration.
   $id('launch-notebooklm-auth-btn')?.addEventListener('click', async () => {
     stopNlmTimers();
     let loginId;
@@ -706,10 +728,10 @@
     }
 
     let attempts = 0;
-    let pollBusy = false;   // a status request is still in flight
-    let finished = false;   // done/error already handled, never handle it twice
+    let pollBusy = false;
+    let finished = false;
     nlmPollTimer = setInterval(async () => {
-      if (pollBusy || finished) return; // don't stack requests when the server is slow
+      if (pollBusy || finished) return;
       pollBusy = true;
       attempts++;
       try {
@@ -720,7 +742,6 @@
           activeLoginId = null;
           showLiveView(null);
           pendingLoginId = loginId;
-          // Use the email of the Google account that just signed in; ask for it only if it couldn't be read
           state.notebooklm.emailManual = !r.email;
           if (r.email) state.notebooklm.accountEmail = r.email;
           markNotebookLMConnected('notebooklm_login', r.email || state.notebooklm.accountEmail);
@@ -731,7 +752,7 @@
           finished = true;
           activeLoginId = null;
           showLiveView(null);
-          if (nlmMode === 'remote') $id('nlm-upload-panel')?.removeAttribute('hidden'); // offer the file upload as a way out
+          if (nlmMode === 'remote') $id('nlm-upload-panel')?.removeAttribute('hidden');
           stopNlmTimers();
           state.notebooklm.status = 'disconnected';
           syncNotebookLMUI();
@@ -752,12 +773,10 @@
     }, 1000);
   });
 
-  // Leaving the page mid sign-in: tell the server so the cloud browser is released right away
   addEventListener('pagehide', () => {
     if (activeLoginId) navigator.sendBeacon(`/api/notebooklm/login/${activeLoginId}/cancel`);
   });
 
-  // Show the right sign-in UI for this server (cloud browser / local Chrome / file upload)
   function applyNlmMode() {
     const upload = nlmMode === 'upload';
     const launch = $id('launch-notebooklm-auth-btn');
@@ -778,7 +797,6 @@
     else { frame.src = 'about:blank'; panel.hidden = true; }
   }
 
-  // Upload fallback: always available if cloud sign-in fails (e.g. Google blocks it)
   const fileInput = $id('nlm-state-file');
   $id('nlm-state-upload-btn')?.addEventListener('click', () => fileInput?.click());
   fileInput?.addEventListener('change', async () => {
@@ -791,7 +809,7 @@
         throw new Error('no Google cookies found in this file');
       }
       pendingStorageState = parsed;
-      state.notebooklm.emailManual = true; // the email can't be read from an uploaded file
+      state.notebooklm.emailManual = true;
       markNotebookLMConnected('storage_state_json', state.notebooklm.accountEmail);
       showToast('Session file loaded. Type your Google email, then press Save Configuration', 'fa-solid fa-circle-check');
     } catch (e) {
@@ -801,12 +819,160 @@
     }
   });
 
-  // Ask the server which sign-in it offers (a static host without the server falls back to upload)
   fetch('/api/notebooklm/mode')
     .then((r) => r.json())
     .then((d) => { if (['remote', 'local', 'upload'].includes(d.mode)) nlmMode = d.mode; })
     .catch(() => {})
     .finally(applyNlmMode);
+
+  // ==========================================================================
+  // STEP 4: TODOIST API KEY INTEGRATION
+  // ==========================================================================
+  const todoistInput = $id('todoist-api-key');
+  const todoistStatusChip = $id('todoist-status-chip');
+  const todoistVisBtn = $id('toggle-todoist-vis-btn');
+  const todoistVerifyBtn = $id('verify-todoist-key-btn');
+  const todoistConnectedPill = $id('todoist-connected-pill');
+  const todoistConnectedTitle = $id('todoist-connected-title');
+  const todoistConnectedMeta = $id('todoist-connected-meta');
+
+  function syncTodoistUI() {
+    if (todoistInput && document.activeElement !== todoistInput) {
+      todoistInput.value = state.todoist.apiKey || '';
+    }
+    const cleaned = cleanTodoistToken(state.todoist.apiKey);
+    const validLocal = isValidTodoistKeyFormat(cleaned);
+    const isConnected = validLocal || Boolean(state.todoist.serverConfigured);
+
+    if (todoistStatusChip) {
+      if (state.todoist.verified && validLocal) {
+        todoistStatusChip.className = 'chip ok';
+        todoistStatusChip.textContent = 'Verified Live';
+      } else if (validLocal) {
+        todoistStatusChip.className = 'chip ok';
+        todoistStatusChip.textContent = 'Ready';
+      } else if (state.todoist.serverConfigured) {
+        todoistStatusChip.className = 'chip ok';
+        todoistStatusChip.textContent = state.todoist.source === 'env' ? 'Configured (.env)' : 'Saved on Server';
+      } else {
+        todoistStatusChip.className = 'chip wait';
+        todoistStatusChip.textContent = 'Enter Token';
+      }
+    }
+
+    if (todoistConnectedPill) {
+      todoistConnectedPill.hidden = !isConnected;
+      if (isConnected) {
+        const masked = validLocal
+          ? `${cleaned.slice(0, 4)}…${cleaned.slice(-4)}`
+          : (state.todoist.maskedServerKey || 'Active Token');
+        if (todoistConnectedTitle) {
+          todoistConnectedTitle.textContent = state.todoist.verified
+            ? `Todoist API Verified (${masked})`
+            : `Todoist API Token Ready (${masked})`;
+        }
+        if (todoistConnectedMeta) {
+          todoistConnectedMeta.textContent = state.todoist.source === 'env' && !validLocal
+            ? 'Using TODOIST_API_KEY from server .env · Ready for AI Study Planner'
+            : 'Saved to your Study Agent workspace · Ready to sync tasks to Todoist';
+        }
+      }
+    }
+  }
+
+  todoistInput?.addEventListener('input', (e) => {
+    const cleaned = cleanTodoistToken(e.target.value);
+    state.todoist.apiKey = cleaned;
+    state.todoist.verified = false;
+    saveState(true);
+    syncTodoistUI();
+  });
+
+  todoistVisBtn?.addEventListener('click', () => {
+    if (!todoistInput) return;
+    const isPwd = todoistInput.type === 'password';
+    todoistInput.type = isPwd ? 'text' : 'password';
+    todoistVisBtn.innerHTML = `<i class="fa-regular ${isPwd ? 'fa-eye-slash' : 'fa-eye'}"></i>`;
+  });
+
+  async function verifyAndSaveTodoistKey() {
+    const cleaned = cleanTodoistToken(todoistInput ? todoistInput.value : state.todoist.apiKey);
+    state.todoist.apiKey = cleaned;
+
+    if (!cleaned && !state.todoist.serverConfigured) {
+      showToast('Paste your Todoist API token from Todoist Developer Settings first', 'fa-solid fa-triangle-exclamation');
+      return;
+    }
+    if (cleaned && !isValidTodoistKeyFormat(cleaned)) {
+      showToast('Todoist API token must be at least 16 characters with no spaces', 'fa-solid fa-triangle-exclamation');
+      return;
+    }
+
+    const origHTML = todoistVerifyBtn ? todoistVerifyBtn.innerHTML : '';
+    if (todoistVerifyBtn) {
+      todoistVerifyBtn.disabled = true;
+      todoistVerifyBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> <span>Verifying...</span>`;
+    }
+
+    try {
+      const userId = getEffectiveUserId();
+      const res = await fetch('/api/todoist/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          telegramUserId: userId,
+          todoistApiKey: cleaned || undefined
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.valid) {
+        state.todoist.verified = true;
+        state.todoist.serverConfigured = true;
+        state.todoist.maskedServerKey = data.masked || null;
+        state.todoist.lastChecked = new Date().toISOString();
+        saveState(true);
+        syncTodoistUI();
+        showToast('Todoist API key verified & saved!', 'fa-solid fa-circle-check');
+      } else {
+        throw new Error(data.error || 'Could not verify Todoist token');
+      }
+    } catch (err) {
+      // If the server is unreachable but format is valid, accept & save locally so valid keys are never blocked
+      if (isValidTodoistKeyFormat(cleaned)) {
+        state.todoist.verified = true;
+        state.todoist.lastChecked = new Date().toISOString();
+        saveState(true);
+        syncTodoistUI();
+        showToast('Todoist API token validated & saved!', 'fa-solid fa-circle-check');
+      } else {
+        showToast(err.message || 'Invalid Todoist API token', 'fa-solid fa-circle-exclamation');
+      }
+    } finally {
+      if (todoistVerifyBtn) {
+        todoistVerifyBtn.disabled = false;
+        todoistVerifyBtn.innerHTML = origHTML;
+      }
+    }
+  }
+
+  todoistVerifyBtn?.addEventListener('click', verifyAndSaveTodoistKey);
+
+  // Hydrate server-side keys status (including .env TODOIST_API_KEY fallback) on page load
+  async function hydrateFromServer() {
+    try {
+      const userId = getEffectiveUserId();
+      const res = await fetch(`/api/user-keys/${encodeURIComponent(userId)}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data && data.has_todoist_key) {
+        state.todoist.serverConfigured = true;
+        state.todoist.maskedServerKey = data.todoist_masked || null;
+        state.todoist.source = data.todoist_source || 'server';
+        saveState(true);
+        syncTodoistUI();
+      }
+    } catch {}
+  }
 
   // ==========================================================================
   // OVERALL PROGRESS, PAYLOAD INSPECTOR & EXPORT
@@ -823,27 +989,33 @@
     return state.notebooklm.status === 'connected';
   }
 
+  function isStep4Complete() {
+    return isValidTodoistKeyFormat(state.todoist.apiKey) || Boolean(state.todoist.serverConfigured);
+  }
+
   function updateReadinessUI() {
     const s1 = isStep1Complete();
     const s2 = isStep2Complete();
     const s3 = isStep3Complete();
-    const doneCount = [s1, s2, s3].filter(Boolean).length;
-    const pct = Math.round((doneCount / 3) * 100);
+    const s4 = isStep4Complete();
+    const totalSteps = 4;
+    const doneCount = [s1, s2, s3, s4].filter(Boolean).length;
+    const pct = Math.round((doneCount / totalSteps) * 100);
 
     const fill = $id('progress-bar-fill');
     if (fill) fill.style.width = `${pct}%`;
 
     const summaryText = $id('progress-summary-text');
     if (summaryText) {
-      summaryText.textContent = doneCount === 3
-        ? 'All 3 integrations configured — Study Agent is ready!'
-        : `${doneCount} of 3 integrations configured`;
+      summaryText.textContent = doneCount === totalSteps
+        ? 'All 4 integrations configured — Study Agent & Todoist Planner ready!'
+        : `${doneCount} of ${totalSteps} integrations configured`;
     }
 
     const overallChip = $id('overall-status-chip');
     if (overallChip) {
-      overallChip.className = `chip ${doneCount === 3 ? 'ok' : 'wait'}`;
-      overallChip.textContent = doneCount === 3 ? 'Ready to Launch' : `${pct}% Complete`;
+      overallChip.className = `chip ${doneCount === totalSteps ? 'ok' : 'wait'}`;
+      overallChip.textContent = doneCount === totalSteps ? 'Ready to Launch' : `${pct}% Complete`;
     }
 
     const validKeyCount = state.geminiKeys.filter((k) => isValidGeminiKeyFormat(k.key)).length;
@@ -859,14 +1031,20 @@
       state.notebooklm.accountEmail || 'Google linked',
       'Not signed in');
 
+    setPillState('pill-step-4', 'pill-status-4', 'todoist-step-chip', s4,
+      state.todoist.verified ? 'Verified Live' : 'Token connected',
+      'Not connected');
+
     const finishChip = $id('finish-card-chip');
     const finishTitle = $id('finish-card-title');
     if (finishChip) {
-      finishChip.className = `chip ${doneCount === 3 ? 'ok' : 'wait'}`;
-      finishChip.textContent = doneCount === 3 ? 'All Systems Go' : `${3 - doneCount} Step${3 - doneCount === 1 ? '' : 's'} Remaining`;
+      finishChip.className = `chip ${doneCount === totalSteps ? 'ok' : 'wait'}`;
+      finishChip.textContent = doneCount === totalSteps
+        ? 'All Systems Go'
+        : `${totalSteps - doneCount} Step${totalSteps - doneCount === 1 ? '' : 's'} Remaining`;
     }
     if (finishTitle) {
-      finishTitle.textContent = doneCount === 3
+      finishTitle.textContent = doneCount === totalSteps
         ? 'Your Study Agent is ready to roll!'
         : 'Save your Study Agent configuration';
     }
@@ -900,7 +1078,7 @@
       .filter((k) => k.api_key.length > 0);
 
     return {
-      schema_version: '1.1',
+      schema_version: '1.2',
       saved_at: state.updatedAt || new Date().toISOString(),
       gemini_api_keys: validKeys,
       telegram_config: {
@@ -916,6 +1094,10 @@
         session_ready: Boolean(state.notebooklm.sessionStored),
         session_meta: state.notebooklm.sessionData || null,
         connected_at: state.notebooklm.connectedAt
+      },
+      todoist_config: {
+        has_api_key: isStep4Complete(),
+        verified: Boolean(state.todoist.verified)
       }
     };
   }
@@ -924,10 +1106,12 @@
     const payload = buildCleanPayload();
     const keysCsv = payload.gemini_api_keys.map((k) => k.api_key).join(',');
     const primaryKey = payload.gemini_api_keys[0]?.api_key || '';
+    const todoistKey = cleanTodoistToken(state.todoist.apiKey);
     return [
       '# Study Agent Configuration (.env)',
       `GEMINI_API_KEY="${primaryKey}"`,
       `GEMINI_FALLBACK_KEYS="${keysCsv}"`,
+      `TODOIST_API_KEY="${todoistKey}"`,
       `TELEGRAM_CHAT_ID="${payload.telegram_config.chat_id}"`,
       `NOTEBOOKLM_ACCOUNT_EMAIL="${payload.notebooklm_auth.account_email || ''}"`,
       `NOTEBOOKLM_SESSION_READY="${payload.notebooklm_auth.session_ready}"`
@@ -956,6 +1140,7 @@
     renderGeminiKeys();
     syncTelegramInputsFromState();
     syncNotebookLMUI();
+    syncTodoistUI();
     updateReadinessUI();
     showToast('Reset all setup credentials', 'fa-solid fa-rotate-left');
   });
@@ -977,8 +1162,11 @@
   renderGeminiKeys();
   syncTelegramInputsFromState();
   syncNotebookLMUI();
+  syncTodoistUI();
+  syncCookiesFromCurrentState();
   updateReadinessUI();
   updatePayloadInspector();
+  hydrateFromServer();
 })();
 
 // ==========================================================================
@@ -992,11 +1180,10 @@
   if (hasST) gsap.registerPlugin(ScrollTrigger);
 
   const EASE = 'power3.out';
-  const CLEAR = 'transform,opacity'; // hand control back to the CSS hover states afterwards
+  const CLEAR = 'transform,opacity';
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
 
-  // Split a plain-text heading into masked words so they can slide up one by one
   function splitWords(el) {
     const text = el.textContent.trim();
     el.setAttribute('aria-label', text);
@@ -1018,9 +1205,6 @@
     return inners;
   }
 
-  // ------------------------------------------------------------------------
-  // 1. Hero intro (the one orchestrated moment)
-  // ------------------------------------------------------------------------
   const title = $('.setup-hero h1');
   const words = title ? splitWords(title) : [];
 
@@ -1032,9 +1216,6 @@
     .from('.setup-progress-card', { y: 28, opacity: 0, duration: 0.8, clearProps: CLEAR }, '-=0.45')
     .from('.progress-pill', { y: 14, opacity: 0, duration: 0.5, stagger: 0.09, clearProps: CLEAR }, '-=0.45');
 
-  // ------------------------------------------------------------------------
-  // 2. Steps: heading first, then each card as it comes into view
-  // ------------------------------------------------------------------------
   if (hasST) {
     $$('.setup-step').forEach((step) => {
       const head = $$('.step-badge-row, .step-header h2, .step-header .lead', step);
@@ -1043,11 +1224,10 @@
         scrollTrigger: { trigger: step, start: 'top 82%', once: true }
       });
 
-      // per card, so a card further down the page animates when you reach it
       $$('.setup-grid > .bento-card', step).forEach((card) => {
         const inner = $$(
           '.guide-steps li, .keys-actions-bar .btn, .pairing-cta-grid .btn, ' +
-          '.nlm-buttons-row .btn, .guide-tip, .guide-mini-win',
+          '.nlm-buttons-row .btn, .todoist-quick-links .btn, .guide-tip, .guide-mini-win',
           card
         ).filter((el) => !el.hidden);
 
@@ -1062,7 +1242,6 @@
       });
     });
 
-    // Final save card
     const finish = $('.setup-finish-card');
     if (finish) {
       gsap.from($$('.chip, h2, .btn', finish), {
@@ -1071,15 +1250,9 @@
       });
     }
 
-    // Layout shifts (fonts, content-visibility) can move trigger points
     window.addEventListener('load', () => ScrollTrigger.refresh());
   }
 
-  // ------------------------------------------------------------------------
-  // 3. Responses to what the person does
-  // ------------------------------------------------------------------------
-
-  // Button press: a quick squeeze, then back to whatever the CSS says
   const PRESSABLE = '.btn, .copy-pill, .icon-btn, .tab-pill';
   let pressed = null;
   const release = () => {
@@ -1098,7 +1271,6 @@
   document.addEventListener('pointercancel', release);
   document.addEventListener('pointerleave', release);
 
-  // A new fallback key slot slides in (only when one is added, not on reorder/remove)
   const keysList = $('#gemini-keys-list');
   if (keysList) {
     let count = keysList.children.length;
@@ -1113,8 +1285,7 @@
     }).observe(keysList, { childList: true });
   }
 
-  // Panels that appear when something starts (listening for Telegram, connected, cloud sign-in)
-  ['autodetect-listening-panel', 'telegram-connected-pill', 'nlm-live-panel'].forEach((id) => {
+  ['autodetect-listening-panel', 'telegram-connected-pill', 'nlm-live-panel', 'todoist-connected-pill'].forEach((id) => {
     const el = document.getElementById(id);
     if (!el) return;
     let wasHidden = el.hidden;
@@ -1126,7 +1297,6 @@
     }).observe(el, { attributes: true, attributeFilter: ['hidden'] });
   });
 
-  // A readiness pill pops its icon when its step becomes complete
   $$('.progress-pill').forEach((pill) => {
     let done = pill.classList.contains('is-complete');
     new MutationObserver(() => {

@@ -1,8 +1,10 @@
 // src/generationQueue.js
 // Syllabus ingestion -> sequential, chapter-by-chapter background generation.
 //
-//  1. api.js `syllabusUpload` (POST /api/syllabus/upload, sent by public/quizzes.js) calls
-//     `enqueueSyllabus(userId, syllabus)` once the syllabus has been parsed and saved.
+//  0. NEW: after an upload, api.js `syllabusUpload` (and the Telegram bot) call `scheduleAutoStart()`, which only
+//     opens a 5-minute window. In that window the user picks chapters + resource types on resources.html
+//     (POST /api/resources/start -> enqueueExisting). If the window runs out, runDuePlans() generates everything.
+//  1. (older, still exported) `enqueueSyllabus(userId, syllabus)` queues a parsed syllabus immediately.
 //  2. The syllabus is flattened into an ordered chapter list (subject order, then chapter number).
 //  3. Every chapter is stored as 'Generating' in `chapter_generation`.
 //  4. ONE worker per user walks the list strictly one chapter at a time, using that user's saved
@@ -33,6 +35,10 @@ export const GENERATION_STATUS = Object.freeze({
 const DELAY_BETWEEN_CHAPTERS_MS = intEnv("GENERATION_DELAY_MS", 5_000);
 const CHAPTER_TIMEOUT_MS = intEnv("GENERATION_CHAPTER_TIMEOUT_MS", 15 * 60_000);
 const MAX_RATE_LIMIT_COOLDOWN_MS = intEnv("GENERATION_MAX_COOLDOWN_MS", 60 * 60_000);
+// After a syllabus upload the user has this long to choose chapters / resource types on the Resources page;
+// when it ends, everything that was uploaded is generated automatically.
+const AUTO_START_DELAY_MS = intEnv("GENERATION_AUTO_START_MS", 5 * 60_000);
+const AUTO_START_POLL_MS = intEnv("GENERATION_AUTO_START_POLL_MS", 15_000);
 
 function intEnv(name, dflt) {
   const n = parseInt(process.env[name] ?? "", 10);
@@ -73,7 +79,17 @@ export function orderedChaptersFromSyllabus(syllabus) {
 // ---------------------------------------------------------------------------
 
 const ROW_COLS = `id, telegram_user_id, chapter_id, subject, exam, chapter_title, chapter_number,
-                  position, status, error, notebook_url, step, attempts, created_at, updated_at`;
+                  position, status, error, notebook_url, step, attempts, resource_types, created_at, updated_at`;
+
+/** chapter_generation.resource_types is a JSON array string (or NULL = every allowed type). */
+function parseTypes(s) {
+  try {
+    const a = JSON.parse(s);
+    return Array.isArray(a) && a.length ? a.map(String) : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Save every chapter as 'Generating'. Chapters already 'Ready' are left alone (generated content is
@@ -90,14 +106,17 @@ async function saveInitialStatuses(userId, chapters) {
           ORDER BY id DESC LIMIT 1`,
         [userId, ch.subject, ch.exam, ch.title]
       );
+      const types = Array.isArray(ch.resourceTypes) && ch.resourceTypes.length ? JSON.stringify(ch.resourceTypes) : null;
       const { rows } = await db.query(
         `INSERT INTO chapter_generation
-           (telegram_user_id, chapter_id, subject, exam, chapter_title, chapter_number, position, status)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'Generating')
+           (telegram_user_id, chapter_id, subject, exam, chapter_title, chapter_number, position, status, resource_types)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'Generating', $8)
          ON CONFLICT (telegram_user_id, subject, exam, chapter_title) DO UPDATE
            SET chapter_id = EXCLUDED.chapter_id,
                chapter_number = EXCLUDED.chapter_number,
                position = EXCLUDED.position,
+               resource_types = CASE WHEN chapter_generation.status = 'Ready'
+                                     THEN chapter_generation.resource_types ELSE EXCLUDED.resource_types END,
                status = CASE WHEN chapter_generation.status = 'Ready'
                              THEN chapter_generation.status ELSE 'Generating' END,
                step = CASE WHEN chapter_generation.status = 'Ready' THEN chapter_generation.step ELSE 'Waiting in queue' END,
@@ -105,7 +124,7 @@ async function saveInitialStatuses(userId, chapters) {
                             THEN chapter_generation.error ELSE NULL END,
                updated_at = now()
          RETURNING ${ROW_COLS}`,
-        [userId, found[0]?.id ?? null, ch.subject, ch.exam, ch.title, ch.number, ch.position]
+        [userId, found[0]?.id ?? null, ch.subject, ch.exam, ch.title, ch.number, ch.position, types]
       );
       if (rows[0].status === GENERATION_STATUS.GENERATING) todo.push(rows[0]);
     }
@@ -193,8 +212,10 @@ export async function enqueueSyllabus(userId, syllabus) {
 /**
  * Queue chapters that are already saved in the syllabus but not generated yet (never queued, or Failed).
  * `chapterIds` (syllabus_chapters ids) limits it to those chapters; omit for all of the user's chapters.
+ * `typesById` ({ [syllabusChapterId]: ["study_guide", ...] }) is the user's per-chapter choice of what to
+ * generate; a chapter without an entry gets every allowed resource type.
  */
-export async function enqueueExisting(userId, chapterIds = null) {
+export async function enqueueExisting(userId, chapterIds = null, typesById = null) {
   await initDb();
   const { rows } = await withDb((db) =>
     db.query(
@@ -210,7 +231,10 @@ export async function enqueueExisting(userId, chapterIds = null) {
     )
   );
   if (!rows.length) return { queued: 0, chapters: [] };
-  const chapters = rows.map((r, position) => ({ subject: r.subject, exam: r.exam, number: r.number, title: r.title, position }));
+  const chapters = rows.map((r, position) => ({
+    subject: r.subject, exam: r.exam, number: r.number, title: r.title, position,
+    resourceTypes: typesById?.[r.id] ?? null,
+  }));
   const todo = await saveInitialStatuses(userId, chapters);
   schedule(userId, todo);
   return { queued: todo.length, chapters: todo.map((r) => ({ id: r.id, chapter_id: r.chapter_id, subject: r.subject, title: r.chapter_title, status: r.status })) };
@@ -226,6 +250,102 @@ export async function resumePendingGenerations() {
   for (const r of rows) (byUser.get(r.telegram_user_id) || byUser.set(r.telegram_user_id, []).get(r.telegram_user_id)).push(r);
   for (const [userId, list] of byUser) schedule(userId, list);
   return rows.length;
+}
+
+// ---------------------------------------------------------------------------
+// 2b. Auto-start window: upload -> N minutes to choose -> generate everything that is left
+// ---------------------------------------------------------------------------
+
+const chapterKey = (c) => `${c.subject}\u0000${String(c.title || "").toLowerCase()}`;
+
+/**
+ * Called after a syllabus upload instead of enqueueSyllabus(): does NOT start generating. It opens (or restarts)
+ * the user's choose-what-to-generate window. Chapters from several uploads inside one window are merged.
+ * Returns { scheduled, startAt }.
+ */
+export async function scheduleAutoStart(userId, syllabus) {
+  const fresh = orderedChaptersFromSyllabus(syllabus);
+  if (!fresh.length) return { scheduled: 0, startAt: null };
+  return withDb(async (db) => {
+    const { rows } = await db.query("SELECT chapters_json FROM generation_plan WHERE telegram_user_id = $1", [userId]);
+    let merged = [];
+    try { merged = rows[0] ? JSON.parse(rows[0].chapters_json) : []; } catch { merged = []; }
+    const seen = new Set(merged.map(chapterKey));
+    for (const c of fresh) if (!seen.has(chapterKey(c))) { merged.push(c); seen.add(chapterKey(c)); }
+    merged = merged.map((c, position) => ({ ...c, position }));
+    const { rows: out } = await db.query(
+      `INSERT INTO generation_plan (telegram_user_id, start_at, chapters_json)
+       VALUES ($1, now() + $2::int * interval '1 millisecond', $3)
+       ON CONFLICT (telegram_user_id) DO UPDATE
+         SET start_at = EXCLUDED.start_at, chapters_json = EXCLUDED.chapters_json
+       RETURNING start_at`,
+      [userId, AUTO_START_DELAY_MS, JSON.stringify(merged)]
+    );
+    return { scheduled: merged.length, startAt: out[0].start_at };
+  });
+}
+
+/** The user's open window as { startAt, now } (both server time, so the page can count down without clock skew), or null. */
+export async function getAutoStart(userId) {
+  const { rows } = await withDb((db) =>
+    db.query("SELECT start_at, now() AS now FROM generation_plan WHERE telegram_user_id = $1", [userId])
+  );
+  return rows[0] ? { startAt: rows[0].start_at, now: rows[0].now } : null;
+}
+
+/** Close the window without generating (the user chose chapters themselves, or cancelled). True if one was open. */
+export async function cancelAutoStart(userId) {
+  const { rows } = await withDb((db) =>
+    db.query("DELETE FROM generation_plan WHERE telegram_user_id = $1 RETURNING telegram_user_id", [userId])
+  );
+  return rows.length > 0;
+}
+
+let checkingPlans = false;
+/** Start every window that has run out. DELETE ... RETURNING claims a plan atomically, so it can never start twice. */
+export async function runDuePlans() {
+  if (checkingPlans) return 0;
+  checkingPlans = true;
+  let started = 0;
+  try {
+    await initDb();
+    const { rows } = await withDb((db) =>
+      db.query("DELETE FROM generation_plan WHERE start_at <= now() RETURNING telegram_user_id, chapters_json")
+    );
+    for (const r of rows) {
+      const userId = Number(r.telegram_user_id);
+      try {
+        const chapters = JSON.parse(r.chapters_json);
+        const todo = await saveInitialStatuses(userId, chapters);
+        schedule(userId, todo);
+        started += todo.length;
+        console.log(`[generation] auto-start for user ${userId}: ${todo.length} chapter(s) queued`);
+      } catch (e) {
+        console.log(`[generation] auto-start for user ${userId} failed (${e.message}); retrying in a minute`);
+        await withDb((db) =>
+          db.query(
+            `INSERT INTO generation_plan (telegram_user_id, start_at, chapters_json)
+             VALUES ($1, now() + interval '1 minute', $2) ON CONFLICT (telegram_user_id) DO NOTHING`,
+            [userId, r.chapters_json]
+          )
+        ).catch(() => {});
+      }
+    }
+  } catch (e) {
+    console.log(`generationQueue: auto-start check failed: ${e.message}`);
+  } finally {
+    checkingPlans = false;
+  }
+  return started;
+}
+
+let autoTimer = null;
+/** Call once at server start. Also picks up windows that ended while the server was down. */
+export function startAutoStartScheduler() {
+  if (autoTimer) return;
+  autoTimer = setInterval(() => void runDuePlans(), AUTO_START_POLL_MS);
+  autoTimer.unref?.();
+  void runDuePlans();
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -291,6 +411,7 @@ async function runOne(userId, row) {
         exam: fresh.exam,
         number: fresh.chapter_number,
         title: fresh.chapter_title,
+        resourceTypes: parseTypes(fresh.resource_types), // what the user ticked (null = everything allowed)
       };
       generationEvents.emit("chapter:started", { jobId: row.id, userId, chapter });
       Promise.resolve()

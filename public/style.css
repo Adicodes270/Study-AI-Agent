@@ -1844,3 +1844,21 @@ html.light {
     transform: translateX(var(--tx, 0px));
   }
 }
+
+
+/* ==========================================================================
+   Desktop vs Mobile "Home" Link & Planner Navbar Rules
+   - Desktop (>768px): Hide "Home" link (clicking "Study Agent" brand logo goes Home)
+   - Mobile (<=768px): Keep "Home" link visible in mobile menu alongside "Planner"
+   ========================================================================== */
+.nav-home-mobile,
+.nav-links li.nav-home-mobile {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .nav-home-mobile,
+  .nav-links li.nav-home-mobile {
+    display: block;
+  }
+}
