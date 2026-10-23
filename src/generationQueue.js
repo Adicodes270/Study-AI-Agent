@@ -237,11 +237,21 @@ async function drain(userId) {
   try {
     while (q.jobs.length && generator) {
       const wait = (cooldownUntil.get(userId) || 0) - Date.now();
-      if (wait > 0) await sleep(wait);
+      if (wait > 0) {
+        // After a Google rate limit the whole queue pauses. Say so on the Resources page instead of
+        // leaving every waiting chapter on a silent "Waiting in queue".
+        const msg = `Paused after a Google rate limit, resuming in about ${Math.ceil(wait / 60_000)} min`;
+        console.log(`[generation] user ${userId}: ${msg}`);
+        await Promise.all(q.jobs.map((j) => setChapterStep(j.id, msg)));
+        await sleep(wait);
+      }
 
       const row = q.jobs[0];
       const outcome = await runOne(userId, row);
-      q.jobs.shift();
+      // Remove THIS job by id. schedule() re-sorts q.jobs while a chapter is running, so the head may
+      // now be a different, not-yet-run chapter; a bare shift() used to drop that one without running it.
+      const done = q.jobs.findIndex((j) => j.id === row.id);
+      if (done >= 0) q.jobs.splice(done, 1);
       if (outcome.rateLimited) {
         cooldownUntil.set(userId, Date.now() + Math.min(outcome.retryAfterMs || 15 * 60_000, MAX_RATE_LIMIT_COOLDOWN_MS));
       }
