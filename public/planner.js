@@ -1,8 +1,8 @@
 // ==========================================================================
 // planner.js — AI Study Planner & Todoist SDK Frontend Controller
 // Handles Syllabus & Quiz History Fallback, School (Mon-Sat) vs Sunday/Vacation
-// Scheduling, Pomodoro/Deep Work Intervals, Priority Tags, and Todoist Sync
-// (Server @doist/todoist-sdk + Direct Browser Todoist REST API Fallback).
+// Scheduling, Pomodoro/Deep Work Intervals, Priority Tags, Todoist Sync,
+// and Progressive Disclosure UI (Interactive Accordions, Config Tabs & Task Drawers).
 // ==========================================================================
 (() => {
   'use strict';
@@ -115,17 +115,14 @@
   }
 
   function getLocalTodoistKey() {
-    // 1. Check inline inputs if user just typed one in
     const step2Val = cleanTodoistToken($('step2-todoist-key-input')?.value || '');
     if (isValidTodoistToken(step2Val)) return step2Val;
     const topVal = cleanTodoistToken($('planner-todoist-key-input')?.value || '');
     if (isValidTodoistToken(topVal)) return topVal;
 
-    // 2. Check cookie
     const fromCookie = cleanTodoistToken(getCookie('sa_todoist_key'));
     if (isValidTodoistToken(fromCookie)) return fromCookie;
 
-    // 3. Check study_agent_config in localStorage across all possible key names
     const st = getSetupState();
     const candidates = [
       st?.todoist?.apiKey,
@@ -216,6 +213,19 @@
     plan: null,
     activeDayFilter: 'all',
     editorExpanded: false,
+    // Progressive disclosure UI states
+    step1Open: false,
+    step2Open: false,
+    activeConfigTab: 'hours',
+    showAllConfigPanels: false,
+    chaptersShowAll: false,
+    weakQueueOpen: false,
+    coachInsightsOpen: false,
+    subjectsBreakdownOpen: false,
+    expandedDays: new Set(),
+    expandedBlocks: new Set(),
+    allBlocksExpanded: false,
+    allDaysExpanded: false,
   };
 
   function showToast(message, iconClass = 'fa-solid fa-bolt') {
@@ -266,9 +276,183 @@
   }
 
   // ==========================================================================
+  // PROGRESSIVE DISCLOSURE & INTERACTIVE ACCORDION HELPERS
+  // ==========================================================================
+  function setSectionExpanded(stepNum, isOpen, scrollIntoView = false) {
+    if (stepNum === 1) {
+      state.step1Open = Boolean(isOpen);
+      const sec = $('syllabus-section');
+      const trig = $('step1-accordion-trigger');
+      const body = $('step1-accordion-body');
+      const lbl = $('step1-expand-label');
+      const pill = $('nav-pill-step1');
+      if (sec) sec.classList.toggle('is-collapsed', !state.step1Open);
+      if (trig) trig.setAttribute('aria-expanded', String(state.step1Open));
+      if (body) body.hidden = !state.step1Open;
+      if (lbl) lbl.textContent = state.step1Open ? 'Collapse' : 'Expand';
+      if (pill) pill.setAttribute('aria-expanded', String(state.step1Open));
+      if (scrollIntoView && state.step1Open && sec) {
+        sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    } else if (stepNum === 2) {
+      state.step2Open = Boolean(isOpen);
+      const sec = $('planner-config-section');
+      const trig = $('step2-accordion-trigger');
+      const body = $('step2-accordion-body');
+      const lbl = $('step2-expand-label');
+      const pill = $('nav-pill-step2');
+      if (sec) sec.classList.toggle('is-collapsed', !state.step2Open);
+      if (trig) trig.setAttribute('aria-expanded', String(state.step2Open));
+      if (body) body.hidden = !state.step2Open;
+      if (lbl) lbl.textContent = state.step2Open ? 'Collapse' : 'Customize';
+      if (pill) pill.setAttribute('aria-expanded', String(state.step2Open));
+      if (scrollIntoView && state.step2Open && sec) {
+        sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }
+  }
+
+  function initInteractiveAccordionsAndTabs() {
+    // Top workspace step pills
+    $('nav-pill-step1')?.addEventListener('click', () => {
+      setSectionExpanded(1, !state.step1Open, !state.step1Open);
+    });
+    $('nav-pill-step2')?.addEventListener('click', () => {
+      setSectionExpanded(2, !state.step2Open, !state.step2Open);
+    });
+    $('nav-pill-step3')?.addEventListener('click', () => {
+      $('plan-summary-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+
+    // Step 1 Accordion Header
+    const s1Trig = $('step1-accordion-trigger');
+    s1Trig?.addEventListener('click', () => setSectionExpanded(1, !state.step1Open));
+    s1Trig?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        setSectionExpanded(1, !state.step1Open);
+      }
+    });
+
+    // Step 2 Accordion Header
+    const s2Trig = $('step2-accordion-trigger');
+    s2Trig?.addEventListener('click', () => setSectionExpanded(2, !state.step2Open));
+    s2Trig?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        setSectionExpanded(2, !state.step2Open);
+      }
+    });
+
+    // Step 1: Compact / Show All chapters toggle
+    $('toggle-chapters-collapse-btn')?.addEventListener('click', () => {
+      state.chaptersShowAll = !state.chaptersShowAll;
+      const list = $('detected-chapters-list');
+      const txt = $('toggle-chapters-collapse-text');
+      if (list) list.classList.toggle('is-compact', !state.chaptersShowAll);
+      if (txt) txt.textContent = state.chaptersShowAll ? 'Show Less' : `Show All (${state.chapters.length})`;
+    });
+
+    // Step 1: Weak quiz topics queue toggle
+    $('toggle-weak-queue-btn')?.addEventListener('click', () => {
+      state.weakQueueOpen = !state.weakQueueOpen;
+      const list = $('quiz-weak-list');
+      const txt = $('toggle-weak-queue-text');
+      const icon = $('toggle-weak-queue-icon');
+      if (list) list.hidden = !state.weakQueueOpen;
+      if (txt) txt.textContent = state.weakQueueOpen ? 'Hide Queue' : 'Show Queue';
+      if (icon) icon.style.transform = state.weakQueueOpen ? 'rotate(180deg)' : '';
+    });
+
+    // Step 2: Configuration Category Sub-Tabs
+    document.querySelectorAll('#config-category-tabs .pl-config-tab').forEach((tabBtn) => {
+      tabBtn.addEventListener('click', () => {
+        const targetTab = tabBtn.dataset.configTab || 'hours';
+        state.activeConfigTab = targetTab;
+        state.showAllConfigPanels = false;
+        updateConfigTabsUI();
+      });
+    });
+
+    // Step 2: Toggle between Tabbed view (1 panel at a time) and All 4 Panels Bento view
+    $('toggle-all-config-panels-btn')?.addEventListener('click', () => {
+      state.showAllConfigPanels = !state.showAllConfigPanels;
+      updateConfigTabsUI();
+    });
+
+    // Step 3: Collapsible AI Coach Strategy & Tips Drawer
+    $('toggle-coach-insights-btn')?.addEventListener('click', () => {
+      state.coachInsightsOpen = !state.coachInsightsOpen;
+      const drawer = $('coach-insights-drawer');
+      const btn = $('toggle-coach-insights-btn');
+      const txt = $('toggle-coach-insights-text');
+      if (drawer) drawer.hidden = !state.coachInsightsOpen;
+      if (btn) btn.setAttribute('aria-expanded', String(state.coachInsightsOpen));
+      if (txt) txt.textContent = state.coachInsightsOpen ? 'Hide Strategy & Tips' : 'AI Strategy & Tips';
+    });
+
+    // Step 3: Collapsible Prioritized Subjects Breakdown Drawer
+    $('toggle-subjects-breakdown-btn')?.addEventListener('click', () => {
+      state.subjectsBreakdownOpen = !state.subjectsBreakdownOpen;
+      const drawer = $('subjects-breakdown-drawer');
+      const btn = $('toggle-subjects-breakdown-btn');
+      const txt = $('toggle-subjects-breakdown-text');
+      if (drawer) drawer.hidden = !state.subjectsBreakdownOpen;
+      if (btn) btn.setAttribute('aria-expanded', String(state.subjectsBreakdownOpen));
+      if (txt) txt.textContent = state.subjectsBreakdownOpen ? 'Hide Breakdown' : 'Show Breakdown';
+    });
+
+    // Step 3: Expand / Collapse All Study Task Blocks
+    $('toggle-all-blocks-btn')?.addEventListener('click', () => {
+      state.allBlocksExpanded = !state.allBlocksExpanded;
+      const planDays = state.plan?.days || [];
+      if (state.allBlocksExpanded) {
+        planDays.forEach((d) => {
+          state.expandedDays.add(d.date);
+          (d.studyBlocks || []).forEach((b) => state.expandedBlocks.add(b.id));
+        });
+        state.allDaysExpanded = true;
+      } else {
+        state.expandedBlocks.clear();
+      }
+      renderPlanSummary();
+    });
+
+    // Step 3: Expand / Collapse All Day Cards
+    $('toggle-all-days-btn')?.addEventListener('click', () => {
+      state.allDaysExpanded = !state.allDaysExpanded;
+      const planDays = state.plan?.days || [];
+      if (state.allDaysExpanded) {
+        planDays.forEach((d) => state.expandedDays.add(d.date));
+      } else {
+        state.expandedDays.clear();
+      }
+      renderPlanSummary();
+    });
+  }
+
+  function updateConfigTabsUI() {
+    const bento = $('planner-config-bento');
+    const toggleTxt = $('toggle-all-config-panels-text');
+    if (bento) {
+      bento.classList.toggle('is-tabbed-mode', !state.showAllConfigPanels);
+    }
+    if (toggleTxt) {
+      toggleTxt.textContent = state.showAllConfigPanels ? 'Use Compact Tabs' : 'Show All 4 Panels';
+    }
+    document.querySelectorAll('#config-category-tabs .pl-config-tab').forEach((btn) => {
+      const isAct = !state.showAllConfigPanels && btn.dataset.configTab === state.activeConfigTab;
+      btn.classList.toggle('is-active', isAct);
+      btn.setAttribute('aria-selected', String(isAct));
+    });
+    document.querySelectorAll('#planner-config-bento .pl-field-box').forEach((panel) => {
+      const match = panel.dataset.configPanel === state.activeConfigTab;
+      panel.classList.toggle('is-active-panel', match);
+    });
+  }
+
+  // ==========================================================================
   // CLIENT-SIDE SCHEDULING ENGINE & DIRECT TODOIST REST API FALLBACK
-  // Ensures schedule generation and Todoist task pushing work 100% of the time
-  // even if backend DB/server routes are offline or unreachable.
   // ==========================================================================
   const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const SHORT_DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -652,7 +836,7 @@
   }
 
   /**
-   * Direct Browser-to-Todoist API sync fallback (used automatically if the server endpoint is unreachable or returns an error).
+   * Direct Browser-to-Todoist API sync fallback
    */
   async function syncPlanDirectlyFromBrowser({ token, plan, onlyDate = null, maxDays = null }) {
     const cleanToken = cleanTodoistToken(token);
@@ -690,10 +874,10 @@
             const fbBody = { ...body, due_date: payload.dueDate };
             delete fbBody.due_string;
             const retryRes = await fetch(ep, {
-              method: "POST",
+              method: 'POST',
               headers: {
                 Authorization: `Bearer ${cleanToken}`,
-                "Content-Type": "application/json",
+                'Content-Type': 'application/json',
               },
               body: JSON.stringify(fbBody),
             });
@@ -852,10 +1036,8 @@
     }
 
     try {
-      // Save locally first so it is immediately available
       persistTodoistKeyLocally(raw);
 
-      // Also save on backend if available
       const res = await fetch('/api/todoist/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -909,17 +1091,25 @@
     const detectedSummary = $('detected-chapters-summary');
     const textareaLabel = $('syllabus-textarea-label');
     const saveBtnLabel = $('save-pasted-syllabus-label');
+    const collapseChaptersBtn = $('toggle-chapters-collapse-btn');
+    const collapseChaptersTxt = $('toggle-chapters-collapse-text');
+    const step1Sub = $('nav-pill-step1-sub');
 
     const syllabusChapters = state.chapters.filter((c) => !c.is_custom);
     const hasSyl = syllabusChapters.length > 0;
     state.hasSyllabus = hasSyl;
 
+    const subjectsCount = new Set(syllabusChapters.map((c) => c.subject)).size;
     if (syllabusBadge) {
-      const subjectsCount = new Set(syllabusChapters.map((c) => c.subject)).size;
       syllabusBadge.className = `chip ${hasSyl ? 'ok' : 'wait'}`;
       syllabusBadge.textContent = hasSyl
         ? `${syllabusChapters.length} Chapters · ${subjectsCount} Subjects`
-        : 'No Telegram Syllabus Yet';
+        : 'Default CBSE Plan Active';
+    }
+    if (step1Sub) {
+      step1Sub.textContent = hasSyl
+        ? `${syllabusChapters.length} chapters (${subjectsCount} subjects)`
+        : 'Add or paste syllabus';
     }
 
     if (noSylPrompt) noSylPrompt.hidden = hasSyl;
@@ -935,11 +1125,20 @@
         detectedSummary.textContent = `Loaded ${syllabusChapters.length} chapter(s) across ${subjects.join(', ')}`;
       }
 
+      if (collapseChaptersBtn) {
+        const hasOverflow = syllabusChapters.length > 8;
+        collapseChaptersBtn.hidden = !hasOverflow;
+        if (collapseChaptersTxt) {
+          collapseChaptersTxt.textContent = state.chaptersShowAll ? 'Show Less' : `Show All (${syllabusChapters.length})`;
+        }
+      }
+
       if (detectedList) {
+        detectedList.classList.toggle('is-compact', !state.chaptersShowAll);
         detectedList.innerHTML = '';
-        syllabusChapters.forEach((ch) => {
+        syllabusChapters.forEach((ch, idx) => {
           const pill = document.createElement('span');
-          pill.className = 'pl-ch-pill';
+          pill.className = `pl-ch-pill ${idx >= 8 ? 'is-overflow-pill' : ''}`;
           const pctBadge = ch.result && typeof ch.result.percentage === 'number'
             ? ` · ${ch.result.percentage}%`
             : '';
@@ -1051,7 +1250,6 @@
         await triggerGeneratePlan(false);
         showToast('Syllabus saved & AI Study Plan updated!', 'fa-solid fa-circle-check');
       } else {
-        // Local fallback syllabus parsing
         const localChapters = parseSyllabusTextLocally(text);
         if (localChapters.length) {
           state.chapters = [...state.chapters, ...localChapters];
@@ -1225,6 +1423,10 @@
     const balanceChip = $('schedule-balance-chip');
     if (balanceChip) {
       balanceChip.textContent = `${cfg.dailyStudyHours}h Study · ${cfg.dailySleepHours}h Sleep · ${schoolCount} School Day${schoolCount === 1 ? '' : 's'}/wk`;
+    }
+    const step2Sub = $('nav-pill-step2-sub');
+    if (step2Sub) {
+      step2Sub.textContent = `${cfg.dailyStudyHours}h study · ${cfg.dailySleepHours}h sleep · ${cfg.planDays || 7}d`;
     }
 
     renderExamDatesList();
@@ -1438,6 +1640,15 @@
     }
     const plan = state.plan;
 
+    // Ensure Day 1 and its first study block are expanded on initial load so the user sees immediate interactive value without clutter
+    if (state.expandedDays.size === 0 && plan.days.length > 0 && !state.allDaysExpanded) {
+      state.expandedDays.add(plan.days[0].date);
+      const firstBlock = plan.days[0].studyBlocks?.[0];
+      if (firstBlock && state.expandedBlocks.size === 0) {
+        state.expandedBlocks.add(firstBlock.id);
+      }
+    }
+
     if ($('plan-coach-headline')) $('plan-coach-headline').textContent = plan.coachHeadline || 'Your AI Study Plan';
     if ($('plan-coach-summary')) $('plan-coach-summary').textContent = plan.coachSummary || '';
     if ($('plan-style-badge')) $('plan-style-badge').textContent = plan.sessionStyleLabel || 'Pomodoro 25 / 5';
@@ -1496,11 +1707,22 @@
         ? `${plan.todoistSync.parentTasksCreated} parent + ${plan.todoistSync.subTasksCreated} sub-tasks`
         : 'Click "Sync / Push to Todoist"';
     }
+    if ($('nav-pill-step3-sub')) {
+      $('nav-pill-step3-sub').textContent = `${plan.days.length} days · ${m.totalBlocks || 0} study blocks`;
+    }
+
+    const subjList = plan.prioritizedSubjects || [];
+    if ($('subjects-summary-count-label')) {
+      const names = subjList.slice(0, 4).map((s) => s.subject).join(', ');
+      $('subjects-summary-count-label').textContent = subjList.length
+        ? `${subjList.length} subjects (${names}${subjList.length > 4 ? '…' : ''})`
+        : 'Ordered by priority, exam proximity & quiz scores';
+    }
 
     const subjGrid = $('prioritized-subjects-grid');
     if (subjGrid) {
       subjGrid.innerHTML = '';
-      (plan.prioritizedSubjects || []).forEach((s) => {
+      subjList.forEach((s) => {
         const card = document.createElement('div');
         card.className = 'pl-subj-card';
         const weakHtml = s.weakSubtopics?.length
@@ -1543,10 +1765,18 @@
         btn.textContent = `Day ${d.dayIndex} · ${d.shortDay}`;
         btn.addEventListener('click', () => {
           state.activeDayFilter = d.date;
+          state.expandedDays.add(d.date);
           renderPlanSummary();
         });
         tabsEl.appendChild(btn);
       });
+    }
+
+    if ($('toggle-all-blocks-text')) {
+      $('toggle-all-blocks-text').textContent = state.allBlocksExpanded ? 'Collapse All Tasks' : 'Expand All Tasks';
+    }
+    if ($('toggle-all-days-text')) {
+      $('toggle-all-days-text').textContent = state.allDaysExpanded ? 'Collapse All Days' : 'Expand All Days';
     }
 
     const daysContainer = $('daily-schedule-container');
@@ -1557,12 +1787,17 @@
         : plan.days.filter((d) => d.date === state.activeDayFilter);
 
       filteredDays.forEach((day) => {
-        const allDaySynced = (day.studyBlocks || []).every((b) => b.synced);
+        const blocks = day.studyBlocks || [];
+        const allDaySynced = blocks.length > 0 && blocks.every((b) => b.synced);
+        const doneBlocksCount = blocks.filter((b) => b.completed).length;
+        const isDayExpanded = state.activeDayFilter !== 'all' || state.expandedDays.has(day.date);
+
         const dayCard = document.createElement('article');
-        dayCard.className = `pl-day-card ${day.dayType !== 'school_day' ? 'is-full-day' : ''}`;
+        dayCard.className = `pl-day-card ${day.dayType !== 'school_day' ? 'is-full-day' : ''} ${!isDayExpanded ? 'is-day-collapsed' : ''}`;
         dayCard.innerHTML = `
-          <div class="pl-day-card-head">
+          <div class="pl-day-card-head" role="button" tabindex="0" aria-expanded="${isDayExpanded}">
             <div class="pl-day-title-group">
+              <span class="pl-day-chevron" aria-hidden="true"><i class="fa-solid fa-chevron-down"></i></span>
               <h4>Day ${day.dayIndex} — ${escapeHtml(day.dayLabel)}</h4>
               <span class="pl-day-type-pill ${escapeHtml(day.dayType)}">
                 <i class="fa-solid ${day.dayType === 'school_day' ? 'fa-school' : 'fa-sun'}"></i>
@@ -1572,66 +1807,106 @@
             <div class="pl-day-Allocation">
               <span>📚 ${day.studyHours}h Study</span>
               <span>😴 ${day.sleepHours}h Sleep</span>
-              <span>🎮 ${day.freePlayHours}h Free</span>
+              <span class="pl-day-progress-pill">${doneBlocksCount}/${blocks.length} Tasks</span>
               <button type="button" class="btn btn-ghost btn-sm pl-push-day-btn" data-date="${escapeHtml(day.date)}">
                 <i class="fa-solid ${allDaySynced ? 'fa-check' : 'fa-cloud-arrow-up'}"></i>
-                <span>${allDaySynced ? 'Day Synced' : 'Push Day to Todoist'}</span>
+                <span>${allDaySynced ? 'Day Synced' : 'Push Day'}</span>
               </button>
             </div>
           </div>
           <div class="pl-blocks-grid"></div>
         `;
 
-        dayCard.querySelector('.pl-push-day-btn')?.addEventListener('click', () => {
+        // Toggle day expansion when clicking header (except when clicking the Push Day button)
+        const dayHead = dayCard.querySelector('.pl-day-card-head');
+        dayHead?.addEventListener('click', (e) => {
+          if (e.target.closest('.pl-push-day-btn')) return;
+          if (state.expandedDays.has(day.date)) {
+            state.expandedDays.delete(day.date);
+          } else {
+            state.expandedDays.add(day.date);
+          }
+          dayCard.classList.toggle('is-day-collapsed', !state.expandedDays.has(day.date));
+          dayHead.setAttribute('aria-expanded', String(state.expandedDays.has(day.date)));
+        });
+
+        dayCard.querySelector('.pl-push-day-btn')?.addEventListener('click', (e) => {
+          e.stopPropagation();
           triggerSyncTodoist({ onlyDate: day.date });
         });
 
         const blocksGrid = dayCard.querySelector('.pl-blocks-grid');
-        (day.studyBlocks || []).forEach((block) => {
+        blocks.forEach((block) => {
+          const isBlockExpanded = state.expandedBlocks.has(block.id);
+          const subtasks = block.subtasks || [];
+          const doneSubs = subtasks.filter((s) => s.completed).length;
+
           const bCard = document.createElement('div');
-          bCard.className = `pl-block-card ${block.completed ? 'is-completed' : ''}`;
+          bCard.className = `pl-block-card ${block.completed ? 'is-completed' : ''} ${!isBlockExpanded ? 'is-block-collapsed' : ''}`;
           const quizBadge = block.quizPercentage != null
             ? `<span class="chip ${block.quizPercentage >= 80 ? 'ok' : 'wait'}">Quiz: ${block.quizPercentage}%</span>`
             : '';
           const syncBadge = block.synced
-            ? `<span class="chip ok"><i class="fa-solid fa-check"></i> Synced to Todoist</span>`
-            : `<span class="chip wait">Local Plan</span>`;
+            ? `<span class="chip ok"><i class="fa-solid fa-check"></i> Synced</span>`
+            : `<span class="chip wait">Local</span>`;
 
           bCard.innerHTML = `
             <div class="pl-block-top">
               <div class="pl-block-check-title">
                 <input type="checkbox" class="pl-parent-check" ${block.completed ? 'checked' : ''} title="Mark study block completed in Todoist">
-                <div>
-                  <span class="pl-block-time">${escapeHtml(block.startTime)} – ${escapeHtml(block.endTime)} (${block.durationMins}m · ${escapeHtml(block.period)})</span>
+                <div class="pl-block-title-stack">
+                  <span class="pl-block-time">${escapeHtml(block.startTime)}–${escapeHtml(block.endTime)} · ${block.durationMins}m</span>
                   <div class="pl-block-title">[${escapeHtml(block.subject)}] ${escapeHtml(block.title)}</div>
                 </div>
               </div>
               <div class="pl-block-badges">
                 <span class="pl-prio-badge ${escapeHtml(block.priority || 'Medium')}">${escapeHtml(block.priority || 'Medium')}</span>
+                ${subtasks.length ? `<span class="pl-subtask-count-pill">${doneSubs}/${subtasks.length} steps</span>` : ''}
                 ${quizBadge}
                 ${syncBadge}
+                <button type="button" class="pl-block-expand-btn" aria-expanded="${isBlockExpanded}">
+                  <span>Details</span>
+                  <i class="fa-solid fa-chevron-down"></i>
+                </button>
               </div>
             </div>
 
-            <div class="pl-break-strip">
-              <i class="fa-solid fa-mug-hot"></i>
-              <span><b>${escapeHtml(block.sessionPatternLabel || plan.sessionStyleLabel)}:</b> ${escapeHtml(block.breakIntervalText)}</span>
-            </div>
-
-            <p class="pl-block-strategy">💡 ${escapeHtml(block.strategyNote || block.focusType)}</p>
-
-            <ul class="pl-subtasks-list"></ul>
-
-            <div class="pl-block-foot">
-              <div class="pl-block-links">
-                ${block.pdfUrl ? `<a href="${escapeHtml(block.pdfUrl)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-file-pdf"></i> NCERT Chapter PDF</a>` : ''}
-                ${block.youtubeUrl ? `<a href="${escapeHtml(block.youtubeUrl)}" target="_blank" rel="noopener noreferrer"><i class="fa-brands fa-youtube"></i> Watch Tutorial</a>` : ''}
-                <a href="quizzes.html"><i class="fa-solid fa-circle-question"></i> Take Chapter Quiz</a>
-                ${block.todoistUrl ? `<a href="${escapeHtml(block.todoistUrl)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-list-check"></i> Open in Todoist</a>` : ''}
+            <div class="pl-block-details">
+              <div class="pl-break-strip">
+                <i class="fa-solid fa-mug-hot"></i>
+                <span><b>${escapeHtml(block.sessionPatternLabel || plan.sessionStyleLabel)}:</b> ${escapeHtml(block.breakIntervalText)}</span>
               </div>
-              <span style="color:var(--text-muted);font-family:'JetBrains Mono',monospace;">Due: ${escapeHtml(block.todoistDueString)}</span>
+
+              <p class="pl-block-strategy">💡 ${escapeHtml(block.strategyNote || block.focusType)}</p>
+
+              <ul class="pl-subtasks-list"></ul>
+
+              <div class="pl-block-foot">
+                <div class="pl-block-links">
+                  ${block.pdfUrl ? `<a href="${escapeHtml(block.pdfUrl)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-file-pdf"></i> NCERT Chapter PDF</a>` : ''}
+                  ${block.youtubeUrl ? `<a href="${escapeHtml(block.youtubeUrl)}" target="_blank" rel="noopener noreferrer"><i class="fa-brands fa-youtube"></i> Watch Tutorial</a>` : ''}
+                  <a href="quizzes.html"><i class="fa-solid fa-circle-question"></i> Take Chapter Quiz</a>
+                  ${block.todoistUrl ? `<a href="${escapeHtml(block.todoistUrl)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-list-check"></i> Open in Todoist</a>` : ''}
+                </div>
+                <span style="color:var(--text-muted);font-family:'JetBrains Mono',monospace;">Due: ${escapeHtml(block.todoistDueString)}</span>
+              </div>
             </div>
           `;
+
+          // Toggle individual block details drawer
+          const blockTop = bCard.querySelector('.pl-block-top');
+          const expandBtn = bCard.querySelector('.pl-block-expand-btn');
+          blockTop?.addEventListener('click', (e) => {
+            if (e.target.closest('input[type="checkbox"]')) return;
+            const nowOpen = !state.expandedBlocks.has(block.id);
+            if (nowOpen) {
+              state.expandedBlocks.add(block.id);
+            } else {
+              state.expandedBlocks.delete(block.id);
+            }
+            bCard.classList.toggle('is-block-collapsed', !nowOpen);
+            expandBtn?.setAttribute('aria-expanded', String(nowOpen));
+          });
 
           const parentCheck = bCard.querySelector('.pl-parent-check');
           parentCheck?.addEventListener('change', (e) => {
@@ -1644,7 +1919,7 @@
           });
 
           const subList = bCard.querySelector('.pl-subtasks-list');
-          (block.subtasks || []).forEach((sub) => {
+          subtasks.forEach((sub) => {
             const li = document.createElement('li');
             li.className = `pl-subtask-item ${sub.completed ? 'is-done' : ''}`;
             li.innerHTML = `
@@ -1671,7 +1946,6 @@
   }
 
   async function refreshPlannerState() {
-    // 1. Load local cache immediately so UI is responsive right away
     const cached = loadLocalPlannerCache();
     if (cached?.config) state.config = { ...state.config, ...cached.config };
     if (Array.isArray(cached?.chapters) && cached.chapters.length) state.chapters = cached.chapters;
@@ -1685,7 +1959,6 @@
     syncConfigControlsFromState();
     renderPlanSummary();
 
-    // 2. Fetch live server state from /api/planner/state
     try {
       const res = await fetch(`/api/planner/state?telegramUserId=${encodeURIComponent(state.telegramUserId)}`, {
         cache: 'no-store',
@@ -1719,7 +1992,6 @@
       }
     } catch {}
 
-    // 3. Fallback if /api/planner/state returned 404/500: check /api/quizzes/chapters and /api/user-keys
     try {
       const [chRes, keyRes] = await Promise.all([
         fetch(`/api/quizzes/chapters?telegramUserId=${encodeURIComponent(state.telegramUserId)}`).catch(() => null),
@@ -1781,6 +2053,8 @@
             state.editorExpanded = false;
           }
           state.plan = data.plan;
+          state.expandedDays.clear();
+          state.expandedBlocks.clear();
           if (Array.isArray(data.chapters) && data.chapters.length) state.chapters = data.chapters;
           if (data.quiz_history) state.quizHistory = data.quiz_history;
           saveLocalPlannerCache();
@@ -1795,7 +2069,6 @@
         }
       }
 
-      // Client-side fallback generator
       if (inlineText.length >= 3) {
         const extra = parseSyllabusTextLocally(inlineText);
         if (extra.length) state.chapters = [...state.chapters, ...extra];
@@ -1803,6 +2076,8 @@
         state.editorExpanded = false;
       }
       state.plan = generateLocalStudyPlan(state.chapters, state.config);
+      state.expandedDays.clear();
+      state.expandedBlocks.clear();
       saveLocalPlannerCache();
       renderSyllabusAndQuizFallback();
       syncConfigControlsFromState();
@@ -1854,7 +2129,6 @@
     }
 
     try {
-      // 1. Try server-side @doist/todoist-sdk endpoint first (supports server .env TODOIST_API_KEY as well as user key)
       let syncedResult = null;
       try {
         const res = await fetch('/api/planner/sync-todoist', {
@@ -1873,7 +2147,7 @@
         if (res.ok && data && data.ok) {
           syncedResult = data;
         } else if (res.status === 400 && /No.*Todoist API key/i.test(data.error || '') && !localKey) {
-          // Prompt user right inside Step 2 to paste their Todoist key
+          setSectionExpanded(2, true);
           const promptBox = $('step2-todoist-prompt');
           if (promptBox) {
             promptBox.hidden = false;
@@ -1889,7 +2163,6 @@
         if (!localKey) throw serverErr;
       }
 
-      // 2. If server endpoint failed/404'd and we have a Todoist token in the browser, push directly to Todoist REST API!
       if (!syncedResult && localKey) {
         syncedResult = await syncPlanDirectlyFromBrowser({
           token: localKey,
@@ -1968,7 +2241,6 @@
       }
     } catch {}
 
-    // Direct browser fallback for closing/reopening task in Todoist
     if (!updatedServer && todoistTaskId && localKey) {
       const action = completed ? 'close' : 'reopen';
       try {
@@ -1988,6 +2260,7 @@
   $('sync-todoist-btn')?.addEventListener('click', () => triggerSyncTodoist());
   $('top-sync-todoist-btn')?.addEventListener('click', () => triggerSyncTodoist());
 
+  initInteractiveAccordionsAndTabs();
   renderTodoistStatus();
   syncConfigControlsFromState();
   refreshPlannerState();
