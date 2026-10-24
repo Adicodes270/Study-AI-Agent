@@ -1896,3 +1896,34 @@ html.light {
 .gen .fa-youtube {
   color: var(--accent-danger);
 }
+/* ---- Active page indicator in the navbar ---- */
+.nav-links a.active {
+  position: relative;
+  color: var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+  font-weight: 700;
+}
+
+.nav-links a.active::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 2px;
+  width: 18px;
+  height: 3px;
+  border-radius: 3px;
+  background: var(--accent-primary);
+  transform: translateX(-50%);
+}
+
+@media (max-width: 900px) {
+  .nav-links a.active {
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+    background: color-mix(in srgb, var(--accent-primary) 16%, var(--bg-elevated));
+  }
+
+  .nav-links a.active::after {
+    display: none;
+  }
+}

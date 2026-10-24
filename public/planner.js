@@ -541,8 +541,11 @@
         }
       : SESSION_STYLE_PRESETS[cfg.sessionStyle] || SESSION_STYLE_PRESETS.pomodoro_25_5;
 
-    const baseDate = new Date();
-    const todayYmd = formatDateYMD(baseDate);
+    const today = new Date();
+    const todayYmd = formatDateYMD(today);
+    // Day 1 is always a Monday: today if it is Monday, otherwise the coming Monday.
+    const baseDate = new Date(today);
+    baseDate.setDate(today.getDate() + ((8 - today.getDay()) % 7));
 
     const units = [];
     (chaptersInput || []).forEach((ch, idx) => {

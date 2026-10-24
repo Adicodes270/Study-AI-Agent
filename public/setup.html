@@ -636,6 +636,10 @@
                         </li>
                     </ol>
 
+                    <div class="guide-tip">
+                        <i class="fa-regular fa-lightbulb"></i>
+                        <span><b>Server fallback supported:</b> You can also set <code>TODOIST_API_KEY</code> in your <code>.env</code> file as a default fallback.</span>
+                    </div>
                 </aside>
             </div>
         </section>
@@ -713,6 +717,15 @@
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
     <script defer src="./script.js"></script>
     <script defer src="./setup.js"></script>
+<script>
+  // Mark the open page in the navbar and keep it visible in the scrolling mobile menu
+  (function () {
+    document.querySelectorAll('.nav-links a.active').forEach(function (a) {
+      a.setAttribute('aria-current', 'page');
+      try { a.scrollIntoView({ block: 'nearest', inline: 'center' }); } catch (e) {}
+    });
+  })();
+</script>
 </body>
 
 </html>

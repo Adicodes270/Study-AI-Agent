@@ -316,6 +316,15 @@
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
     <script defer src="./script.js"></script>
     <script defer src="./quizzes.js"></script>
+<script>
+  // Mark the open page in the navbar and keep it visible in the scrolling mobile menu
+  (function () {
+    document.querySelectorAll('.nav-links a.active').forEach(function (a) {
+      a.setAttribute('aria-current', 'page');
+      try { a.scrollIntoView({ block: 'nearest', inline: 'center' }); } catch (e) {}
+    });
+  })();
+</script>
 </body>
 
 </html>

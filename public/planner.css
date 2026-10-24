@@ -914,12 +914,20 @@
 }
 
 .pl-num-input {
-  width: 38px;
+  width: 3.4rem; /* room for values like 11.5 */
+  -moz-appearance: textfield;
+  appearance: textfield;
   background: transparent;
   border: 0;
   color: var(--text-primary);
   font: 700 0.82rem 'JetBrains Mono', monospace;
   text-align: right;
+}
+
+.pl-num-input::-webkit-outer-spin-button,
+.pl-num-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 
 .pl-num-input:focus {
