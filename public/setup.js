@@ -587,7 +587,66 @@
   let nlmPopupWindow = null;
   let activeLiveViewUrl = null;
 
+  // On phones/tablets window.open() becomes a separate browser tab, which pushes this page into the
+  // background and loses the sign-in. So on touch devices the cloud browser is shown INSIDE the page,
+  // right under the "Sign in with Google" buttons, and the rest of the page (footer included) stays put.
+  // The returned object mimics the bits of the Window API this file uses (closed / close / focus / location.replace).
+  const isMobileLike = () =>
+    window.matchMedia('(pointer: coarse)').matches || window.matchMedia('(max-width: 820px)').matches;
+
+  function openLiveViewOverlay(url) {
+    const anchor = $id('launch-notebooklm-auth-btn')?.closest('.nlm-buttons-row') || document.body;
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'margin-top:1rem;border:1px solid rgba(59,130,246,.35);border-radius:14px;overflow:hidden;background:#070b14;';
+    wrap.innerHTML = `
+      <div style="position:relative;height:min(75vh,640px);">
+        <div data-loading style="position:absolute;inset:0;display:grid;place-items:center;color:#94a3b8;font:.95rem sans-serif;">Starting secure sign-in…</div>
+        <iframe title="Google sign-in" allow="clipboard-read; clipboard-write; fullscreen" style="position:relative;width:100%;height:100%;border:0;background:#fff;"></iframe>
+      </div>
+      <form data-type style="display:flex;gap:.4rem;padding:.6rem;background:#0f172a;border-top:1px solid rgba(59,130,246,.35);">
+        <input data-text type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Tap the box above, then type here" style="flex:1;min-width:0;padding:.6rem .7rem;border-radius:10px;border:1px solid #334155;background:#020617;color:#f8fafc;font-size:16px;">
+        <button type="button" data-key="Backspace" aria-label="Backspace" style="padding:.5rem .7rem;border:1px solid #334155;border-radius:10px;background:transparent;color:#f8fafc;font:inherit;">⌫</button>
+        <button type="button" data-key="Tab" style="padding:.5rem .7rem;border:1px solid #334155;border-radius:10px;background:transparent;color:#f8fafc;font:inherit;">Tab</button>
+        <button type="submit" style="padding:.5rem .8rem;border:0;border-radius:10px;background:#2563eb;color:#fff;font:inherit;">Enter</button>
+      </form>`;
+    const frame = wrap.querySelector('iframe');
+    const loading = wrap.querySelector('[data-loading]');
+    const handle = {
+      __overlay: true,
+      closed: false,
+      focus() { try { wrap.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch {} },
+      close() { if (handle.closed) return; handle.closed = true; wrap.remove(); },
+      location: { replace(u) { loading.style.display = 'none'; frame.src = u; } },
+    };
+    const sendKeys = (body) => {
+      if (!activeLoginId) return;
+      fetch(`/api/notebooklm/login/${activeLoginId}/type`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      }).catch(() => {});
+    };
+    const textInput = wrap.querySelector('[data-text]');
+    wrap.querySelector('[data-type]').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const text = textInput.value;
+      textInput.value = '';
+      sendKeys({ text, key: 'Enter' });
+      textInput.focus();
+    });
+    wrap.addEventListener('click', (e) => {
+      const keyBtn = e.target?.closest?.('[data-key]');
+      if (!keyBtn) return;
+      const text = textInput.value;
+      textInput.value = '';
+      sendKeys({ text, key: keyBtn.dataset.key });
+    });
+    anchor.insertAdjacentElement('afterend', wrap);
+    handle.focus();
+    if (url && url !== 'about:blank') handle.location.replace(url);
+    return handle;
+  }
+
   function openCenteredPopupWindow(url, title = 'StudyAgentGoogleLogin') {
+    if (isMobileLike()) return openLiveViewOverlay(url);
     const width = 1040;
     const height = 740;
     const dualScreenLeft = window.screenLeft !== undefined ? window.screenLeft : window.screenX;
@@ -603,7 +662,7 @@
   }
 
   function writePopupLoadingScreen(win) {
-    if (!win || win.closed) return;
+    if (!win || win.closed || win.__overlay) return;
     try {
       win.document.open();
       win.document.write(`<!DOCTYPE html>
@@ -932,7 +991,8 @@
     }, 1000);
   });
 
-  addEventListener('pagehide', () => {
+  addEventListener('pagehide', (e) => {
+    if (e.persisted) return; // phone just backgrounded the page (bfcache) - keep the sign-in alive
     if (activeLoginId) navigator.sendBeacon(`/api/notebooklm/login/${activeLoginId}/cancel`);
     closeNlmPopupWindow();
   });

@@ -33,6 +33,21 @@ export function cancelLogin(loginId) {
   return false;
 }
 
+/** Phones can't raise the keyboard inside the cloud-browser view, so the page sends typing here instead. */
+export async function typeIntoLogin(loginId, { text, key } = {}) {
+  const s = sessions.get(loginId);
+  if (!s || s.status !== "waiting" || !s.browser) return false;
+  const ALLOWED_KEYS = new Set(["Enter", "Tab", "Backspace"]);
+  try {
+    const pages = (s.browser.contexts()[0]?.pages() || []).filter((p) => !p.isClosed());
+    const page = pages[pages.length - 1];
+    if (!page) return false;
+    if (typeof text === "string" && text) await page.keyboard.insertText(text.slice(0, 500));
+    if (ALLOWED_KEYS.has(key)) await page.keyboard.press(key);
+    return true;
+  } catch { return false; }
+}
+
 /** User pressed "I've signed in - Confirm": capture as soon as a Google sign-in cookie exists. */
 export function confirmLogin(loginId) {
   const s = sessions.get(loginId);
@@ -387,12 +402,13 @@ export async function startRemoteLogin(opts = {}) {
   if (acct.name === "backup") console.log("[notebooklm login] using the BACKUP Browserbase account");
 
   const loginId = crypto.randomBytes(18).toString("base64url");
-  const entry = { status: "waiting", at: Date.now() };
+  const entry = { status: "waiting", at: Date.now(), browser };
   sessions.set(loginId, entry);
 
   watchLogin({
     entry, browser, hostIs, url, cookieDomain, cookieNames, timeoutMs: REMOTE_LOGIN_TIMEOUT_MS,
     close: async () => {
+      entry.browser = null;
       try { await browser.close(); } catch {}
       await releaseBbSession(acct, session.id);
       activeRemote--;

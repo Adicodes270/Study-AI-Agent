@@ -6,6 +6,7 @@ import { ROOT } from "./config.js";
 import {
   cancelLogin,
   confirmLogin,
+  typeIntoLogin,
   getLoginStatus,
   remoteLoginEnabled,
   startLogin,
@@ -166,6 +167,11 @@ export function startWebServer(port = 3000) {
       }
       const parts = url.pathname.split("/");
       if (req.method === "POST" && parts[5] === "confirm") return json(200, { ok: confirmLogin(parts[4] || "") });
+      if (req.method === "POST" && parts[5] === "type") {
+        const body = await readJsonBody(req, res, 5_000);
+        if (!body) return;
+        return typeIntoLogin(parts[4] || "", body).then((ok) => json(200, { ok }));
+      }
       if (req.method === "POST" && parts[5] === "cancel") return json(200, { ok: cancelLogin(parts[4] || "") });
       return json(200, getLoginStatus(parts[4] || ""));
     }
