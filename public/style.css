@@ -1425,7 +1425,7 @@ html.lenis body {
     padding-left: calc(2rem - 0.25rem * var(--p, 0));
     padding-right: calc(2rem - 0.75rem * var(--p, 0));
     border: 1px solid color-mix(in srgb, var(--text-primary) calc(14% * var(--p, 0)), transparent);
-    border-radius: 34px;
+    border-radius: 14px;
     background: color-mix(in srgb, var(--nav-glass-bg) calc(100% * var(--p, 0)), transparent);
     backdrop-filter: blur(calc(18px * var(--p, 0)));
     -webkit-backdrop-filter: blur(calc(18px * var(--p, 0)));
