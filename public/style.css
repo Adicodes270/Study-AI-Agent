@@ -1420,7 +1420,7 @@ html.lenis body {
   .nav {
     pointer-events: auto;
     max-width: none;
-    width: calc(min(100%, 1400px) * (1 - var(--p, 0)) + 720px * var(--p, 0));
+    width: calc(min(100%, 1400px) * (1 - var(--p, 0)) + 650px * var(--p, 0));
     padding-block: calc(1.1rem - 0.5rem * var(--p, 0));
     padding-left: calc(2rem - 0.25rem * var(--p, 0));
     padding-right: calc(2rem - 0.75rem * var(--p, 0));
@@ -1433,8 +1433,12 @@ html.lenis body {
   }
 
   .nav-links {
-    padding-block: calc(0.8rem - 0.4rem * var(--p, 0));
-  }
+  padding-block: calc(0.8rem - 0.4rem * var(--p, 0));
+  /* as the bar shrinks, the list takes the spare space and keeps its links on the right */
+  flex-grow: var(--p, 0);
+  justify-content: flex-end;
+  padding-right: calc(0.8rem * (1 - var(--p, 0)));
+}
 
   /* Setup Telegram / Start slide away; padding + negative margin keep the
      magnetic button's lean from being clipped while they are visible */
