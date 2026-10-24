@@ -464,19 +464,21 @@
                                 <span>Sign in with Google</span>
                             </button>
 
+                            <button type="button" class="btn btn-ghost btn-sm" id="reopen-popup-login-btn" hidden>
+                                <i class="fa-solid fa-up-right-from-square"></i>
+                                <span>Open / Focus Login Window</span>
+                            </button>
+
                             <button type="button" class="btn btn-ghost btn-sm" id="confirm-popup-login-btn" hidden>
                                 <i class="fa-solid fa-check-double"></i>
                                 <span>I've Signed In — Confirm</span>
                             </button>
 
+                            <button type="button" class="btn btn-ghost btn-sm btn-danger-outline" id="cancel-popup-login-btn" hidden>
+                                <i class="fa-solid fa-xmark"></i>
+                                <span>Cancel</span>
+                            </button>
                         </div>
-                    </div>
-
-
-                    <!-- Cloud browser (Browserbase): the user signs in to Google inside this frame -->
-                    <div class="nlm-live-panel" id="nlm-live-panel" hidden>
-                        <iframe id="nlm-live-frame" title="Google sign-in" sandbox="allow-same-origin allow-scripts"
-                            allow="clipboard-read; clipboard-write"></iframe>
                     </div>
                 </div>
 

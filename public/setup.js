@@ -575,12 +575,96 @@
   });
 
   // ==========================================================================
-  // STEP 3: NOTEBOOKLM (notebooklm-py) SEAMLESS POPUP + LOCAL BRIDGE AUTH
+  // STEP 3: NOTEBOOKLM (notebooklm-py) SEPARATE POPUP WINDOW AUTH (BROWSERBASE + LOCAL)
   // ==========================================================================
   const nlmBackendInput = $id('nlm-backend-url');
   const nlmEmailInput = $id('nlm-account-label');
   const confirmPopupBtn = $id('confirm-popup-login-btn');
+  const reopenPopupBtn = $id('reopen-popup-login-btn');
+  const cancelPopupBtn = $id('cancel-popup-login-btn');
   const nlmModeBadge = $id('nlm-mode-badge');
+
+  let nlmPopupWindow = null;
+  let activeLiveViewUrl = null;
+
+  function openCenteredPopupWindow(url, title = 'StudyAgentGoogleLogin') {
+    const width = 1040;
+    const height = 740;
+    const dualScreenLeft = window.screenLeft !== undefined ? window.screenLeft : window.screenX;
+    const dualScreenTop = window.screenTop !== undefined ? window.screenTop : window.screenY;
+    const w = window.innerWidth || document.documentElement.clientWidth || screen.width;
+    const h = window.innerHeight || document.documentElement.clientHeight || screen.height;
+    const left = Math.max(0, Math.round(dualScreenLeft + (w - width) / 2));
+    const top = Math.max(0, Math.round(dualScreenTop + (h - height) / 2));
+    const features = `popup=yes,width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes,status=no,toolbar=no,menubar=no,location=yes`;
+    const win = window.open(url, title, features);
+    try { win?.focus(); } catch {}
+    return win;
+  }
+
+  function writePopupLoadingScreen(win) {
+    if (!win || win.closed) return;
+    try {
+      win.document.open();
+      win.document.write(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Connecting to Google NotebookLM — Study Agent</title>
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #070b14;
+      color: #f8fafc;
+      font-family: -apple-system, BlinkMacSystemFont, "Plus Jakarta Sans", "Segoe UI", sans-serif;
+      text-align: center;
+    }
+    .box {
+      max-width: 420px;
+      padding: 2rem;
+      border-radius: 18px;
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid rgba(59, 130, 246, 0.35);
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+    }
+    .spinner {
+      width: 44px;
+      height: 44px;
+      margin: 0 auto 1.25rem;
+      border: 3px solid rgba(59, 130, 246, 0.25);
+      border-top-color: #38bdf8;
+      border-radius: 50%;
+      animation: spin 0.85s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    h2 { margin: 0 0 0.5rem; font-size: 1.2rem; }
+    p { margin: 0; font-size: 0.9rem; color: #94a3b8; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <div class="spinner"></div>
+    <h2>Starting Google NotebookLM Sign-In…</h2>
+    <p>Preparing your isolated sign-in browser window. You'll be redirected to Google Sign-In in just a moment.</p>
+  </div>
+</body>
+</html>`);
+      win.document.close();
+    } catch {}
+  }
+
+  function closeNlmPopupWindow() {
+    if (nlmPopupWindow && !nlmPopupWindow.closed) {
+      try { nlmPopupWindow.close(); } catch {}
+    }
+    nlmPopupWindow = null;
+    activeLiveViewUrl = null;
+    if (reopenPopupBtn) reopenPopupBtn.hidden = true;
+    if (cancelPopupBtn) cancelPopupBtn.hidden = true;
+  }
 
   function syncNotebookLMUI() {
     if (nlmBackendInput) nlmBackendInput.value = state.notebooklm.backendUrl || 'http://localhost:8000';
@@ -623,6 +707,8 @@
         launchBtn.innerHTML = `<i class="fa-solid fa-rotate"></i> <span class="btn-txt">Switch / Reconnect Google Account</span>`;
       }
       if (confirmPopupBtn) confirmPopupBtn.hidden = true;
+      if (reopenPopupBtn) reopenPopupBtn.hidden = true;
+      if (cancelPopupBtn) cancelPopupBtn.hidden = true;
     } else if (state.notebooklm.status === 'pending') {
       s1?.classList.add('is-done');
       s2?.classList.add('is-current');
@@ -633,11 +719,13 @@
         nlmModeBadge.className = 'chip wait';
         nlmModeBadge.textContent = 'Signing In...';
       }
-      if (headline) headline.textContent = 'Waiting for you to sign in...';
+      if (headline) headline.textContent = 'Waiting for you to sign in in the popup window...';
       if (subtext) {
-        subtext.innerHTML = 'Sign in to your Google account in the window that just opened on this computer. It closes by itself once you are signed in. If it stays open after you reach NotebookLM, press <b>I\'ve Signed In — Confirm</b>.';
+        subtext.innerHTML = 'Sign in to your Google account in the separate browser window that opened. It will close automatically once NotebookLM loads, or you can click <b>I\'ve Signed In — Confirm</b> below.';
       }
       if (confirmPopupBtn) confirmPopupBtn.hidden = false;
+      if (reopenPopupBtn) reopenPopupBtn.hidden = !activeLiveViewUrl;
+      if (cancelPopupBtn) cancelPopupBtn.hidden = false;
     } else {
       s1?.classList.add('is-current');
       s1?.classList.remove('is-done');
@@ -647,25 +735,25 @@
       if (icon) icon.innerHTML = `<i class="fa-brands fa-google"></i>`;
       if (nlmModeBadge) {
         nlmModeBadge.className = 'chip wait';
-        nlmModeBadge.textContent = 'One-Click Auth';
+        nlmModeBadge.textContent = 'Popup Window Auth';
       }
       if (headline) headline.textContent = 'Ready to connect your Google Account';
       if (subtext) {
-        subtext.innerHTML = 'Click <b>Sign in with Google</b> below to open the NotebookLM login window and link your Google account.';
+        subtext.innerHTML = 'Click <b>Sign in with Google</b> below to open a separate login window and link your Google account.';
       }
       if (launchBtn) {
         launchBtn.innerHTML = `<i class="fa-brands fa-google"></i> <span class="btn-txt">Sign in with Google</span>`;
       }
       if (confirmPopupBtn) confirmPopupBtn.hidden = true;
+      if (reopenPopupBtn) reopenPopupBtn.hidden = true;
+      if (cancelPopupBtn) cancelPopupBtn.hidden = true;
     }
 
-    if (nlmMode === 'remote' && state.notebooklm.status === 'pending') {
-      if (headline) headline.textContent = 'Sign in to Google in the box below';
-      if (subtext) subtext.innerHTML = 'Sign in normally and approve 2-Step Verification if asked. It finishes by itself when NotebookLM loads. If it doesn\'t, press <b>I\'ve Signed In — Confirm</b>.';
-    }
     if (nlmMode === 'upload') {
       if (launchBtn) launchBtn.hidden = true;
       if (confirmPopupBtn) confirmPopupBtn.hidden = true;
+      if (reopenPopupBtn) reopenPopupBtn.hidden = true;
+      if (cancelPopupBtn) cancelPopupBtn.hidden = true;
       if (state.notebooklm.status !== 'connected') {
         if (nlmModeBadge) nlmModeBadge.textContent = 'Upload Session';
         if (headline) headline.textContent = 'Upload your NotebookLM session file';
@@ -692,6 +780,7 @@
 
   function markNotebookLMConnected(method, email, sessionData = null) {
     stopNlmTimers();
+    closeNlmPopupWindow();
     state.notebooklm.status = 'connected';
     state.notebooklm.authMethod = method;
     state.notebooklm.sessionStored = true;
@@ -702,8 +791,45 @@
     syncNotebookLMUI();
   }
 
+  reopenPopupBtn?.addEventListener('click', () => {
+    if (!activeLiveViewUrl) return;
+    if (nlmPopupWindow && !nlmPopupWindow.closed) {
+      try { nlmPopupWindow.focus(); return; } catch {}
+    }
+    nlmPopupWindow = openCenteredPopupWindow(activeLiveViewUrl);
+    if (!nlmPopupWindow) {
+      showToast('Popup was blocked by your browser—allow popups for this site and click again.', 'fa-solid fa-triangle-exclamation');
+    }
+  });
+
+  cancelPopupBtn?.addEventListener('click', () => {
+    if (activeLoginId) {
+      fetch(`/api/notebooklm/login/${activeLoginId}/cancel`, { method: 'POST' }).catch(() => {});
+      activeLoginId = null;
+    }
+    stopNlmTimers();
+    closeNlmPopupWindow();
+    state.notebooklm.status = 'disconnected';
+    syncNotebookLMUI();
+    showToast('Cancelled Google sign-in.', 'fa-solid fa-xmark');
+  });
+
   $id('launch-notebooklm-auth-btn')?.addEventListener('click', async () => {
     stopNlmTimers();
+    closeNlmPopupWindow();
+
+    // Open the popup window SYNCHRONOUSLY inside the user click handler so Chrome/Brave
+    // never blocks it when the async /api/notebooklm/login request finishes a few seconds later.
+    if (nlmMode === 'remote') {
+      nlmPopupWindow = openCenteredPopupWindow('about:blank');
+      if (nlmPopupWindow) {
+        writePopupLoadingScreen(nlmPopupWindow);
+      }
+    }
+
+    state.notebooklm.status = 'pending';
+    syncNotebookLMUI();
+
     let loginId;
     try {
       const res = await fetch('/api/notebooklm/login', { method: 'POST' });
@@ -711,20 +837,54 @@
       if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
       loginId = data.login_id;
       activeLoginId = loginId;
-      showLiveView(data.live_view_url || null);
+      activeLiveViewUrl = data.live_view_url || null;
+
+      if (activeLiveViewUrl) {
+        // Navigate the already-opened popup window to the Browserbase live view URL
+        if (nlmPopupWindow && !nlmPopupWindow.closed) {
+          nlmPopupWindow.location.replace(activeLiveViewUrl);
+          try { nlmPopupWindow.focus(); } catch {}
+        } else {
+          // Fallback if initial window was closed or blocked: try opening now and expose the manual button
+          nlmPopupWindow = openCenteredPopupWindow(activeLiveViewUrl);
+          if (!nlmPopupWindow) {
+            showToast('Click "Open / Focus Login Window" to launch the Google Sign-In window.', 'fa-solid fa-up-right-from-square');
+          }
+        }
+      } else {
+        // Local OS Chrome was spawned directly by the server, so we don't need an about:blank popup
+        closeNlmPopupWindow();
+      }
     } catch (e) {
+      closeNlmPopupWindow();
+      state.notebooklm.status = 'disconnected';
+      syncNotebookLMUI();
       showToast(e.message.startsWith('Failed') ? 'Could not reach the Study Agent server' : e.message, 'fa-solid fa-circle-exclamation');
       return;
     }
-    state.notebooklm.status = 'pending';
+
     syncNotebookLMUI();
-    showToast(nlmMode === 'remote' ? 'Sign in to Google in the box below' : 'A Google login window opened. Sign in there and it will close by itself', 'fa-brands fa-google');
+    showToast('Google login window opened! Sign in there and it will close automatically.', 'fa-brands fa-google');
+
     if (confirmPopupBtn) {
       confirmPopupBtn.hidden = false;
       confirmPopupBtn.onclick = () => {
         fetch(`/api/notebooklm/login/${loginId}/confirm`, { method: 'POST' }).catch(() => {});
         showToast('Checking your Google sign-in...', 'fa-brands fa-google');
       };
+    }
+
+    // Monitor if the user manually closes the Browserbase popup window:
+    // trigger a confirm check first so if they closed it right after logging in, their session is still captured!
+    if (activeLiveViewUrl) {
+      let popupCloseHandled = false;
+      nlmPopupMonitor = setInterval(() => {
+        if (popupCloseHandled || !activeLoginId || activeLoginId !== loginId) return;
+        if (nlmPopupWindow && nlmPopupWindow.closed) {
+          popupCloseHandled = true;
+          fetch(`/api/notebooklm/login/${loginId}/confirm`, { method: 'POST' }).catch(() => {});
+        }
+      }, 800);
     }
 
     let attempts = 0;
@@ -740,18 +900,17 @@
         if (r.status === 'done') {
           finished = true;
           activeLoginId = null;
-          showLiveView(null);
           pendingLoginId = loginId;
           state.notebooklm.emailManual = !r.email;
           if (r.email) state.notebooklm.accountEmail = r.email;
           markNotebookLMConnected('notebooklm_login', r.email || state.notebooklm.accountEmail);
-          showToast('Google account linked. Press Save Configuration to store it', 'fa-solid fa-circle-check');
+          showToast('Google account linked! Press Save Configuration to store it.', 'fa-solid fa-circle-check');
           return;
         }
         if (r.status === 'error' || r.status === 'none') {
           finished = true;
           activeLoginId = null;
-          showLiveView(null);
+          closeNlmPopupWindow();
           if (nlmMode === 'remote') $id('nlm-upload-panel')?.removeAttribute('hidden');
           stopNlmTimers();
           state.notebooklm.status = 'disconnected';
@@ -765,7 +924,7 @@
       }
       if (!finished && attempts > 620) {
         finished = true;
-        showLiveView(null);
+        closeNlmPopupWindow();
         stopNlmTimers();
         state.notebooklm.status = 'disconnected';
         syncNotebookLMUI();
@@ -775,6 +934,7 @@
 
   addEventListener('pagehide', () => {
     if (activeLoginId) navigator.sendBeacon(`/api/notebooklm/login/${activeLoginId}/cancel`);
+    closeNlmPopupWindow();
   });
 
   function applyNlmMode() {
@@ -782,19 +942,18 @@
     const launch = $id('launch-notebooklm-auth-btn');
     if (launch) launch.hidden = upload;
     if (upload && confirmPopupBtn) confirmPopupBtn.hidden = true;
+    if (upload && reopenPopupBtn) reopenPopupBtn.hidden = true;
+    if (upload && cancelPopupBtn) cancelPopupBtn.hidden = true;
     $id('nlm-flow-visual')?.toggleAttribute('hidden', upload);
     $id('nlm-local-guide')?.toggleAttribute('hidden', upload);
     $id('nlm-upload-panel')?.toggleAttribute('hidden', !upload);
-    if (nlmModeBadge) nlmModeBadge.textContent = upload ? 'Upload Session' : nlmMode === 'remote' ? 'Cloud Sign-In' : 'One-Click Auth';
+    if (nlmModeBadge) nlmModeBadge.textContent = upload ? 'Upload Session' : nlmMode === 'remote' ? 'Popup Window Auth' : 'One-Click Auth';
     syncNotebookLMUI();
   }
 
   function showLiveView(liveUrl) {
-    const panel = $id('nlm-live-panel');
-    const frame = $id('nlm-live-frame');
-    if (!panel || !frame) return;
-    if (liveUrl) { frame.src = liveUrl; panel.hidden = false; }
-    else { frame.src = 'about:blank'; panel.hidden = true; }
+    // Deprecated embedded iframe: Browserbase now opens in a standalone popup window
+    activeLiveViewUrl = liveUrl || null;
   }
 
   const fileInput = $id('nlm-state-file');

@@ -16,7 +16,7 @@ import {
 
 const NOTEBOOKLM_URL = "https://notebooklm.google.com/";
 const LOGIN_TIMEOUT_MS = 10 * 60 * 1000;            // Chrome on the user's own computer: no cost, be patient
-const REMOTE_LOGIN_TIMEOUT_MS = 2 * 60 * 1000;      // Browserbase cloud session: billed by the minute, so expire fast
+const REMOTE_LOGIN_TIMEOUT_MS = 3 * 60 * 1000;      // Browserbase cloud session: 3 minutes for popup window sign-in & 2FA
 const AUTH_SETTLE_MS = 10_000;                      // signed-in cookies this long = done, even if Google sits on a prompt page
 const expiredMessage = (ms) => `Session expired. Sign-in took longer than ${Math.round(ms / 60000)} minute${ms >= 120000 ? "s" : ""}. Press Sign in to start again.`;
 const sessions = new Map(); // loginId -> { status, state, error, at }
@@ -326,8 +326,8 @@ const createBbSession = (acct, proxies) =>
   bb(acct, "/sessions", {
     projectId: acct.project,
     timeout: Math.ceil(REMOTE_LOGIN_TIMEOUT_MS / 1000) + 30, // seconds; backstop so the cloud browser dies on its own if we crash
-    // Small viewport so the live view is scaled UP inside the page frame (bigger, readable text)
-    browserSettings: { viewport: { width: 800, height: 600 } },
+    // Crisp desktop viewport sized for a standalone popup browser window
+    browserSettings: { viewport: { width: 1280, height: 800 } },
     ...(proxies ? { proxies: true } : {}),
     ...(BROWSERBASE_REGION ? { region: BROWSERBASE_REGION } : {}),
   });
@@ -368,11 +368,7 @@ export async function startRemoteLogin(opts = {}) {
       liveViewUrl = live.toString();
       browser = await chromium.connectOverCDP(session.connectUrl);
       const context = browser.contexts()[0] || (await browser.newContext());
-      // Enlarge page text on every page of the cloud browser so the login form is easy to read
-      await context.addInitScript(() => {
-        const zoom = () => { if (document.documentElement) document.documentElement.style.zoom = "1.25"; };
-        zoom(); document.addEventListener("DOMContentLoaded", zoom);
-      }).catch(() => {});
+      // Keep natural 100% scale inside the standalone popup window
       const page = context.pages()[0] || (await context.newPage());
       page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 }).catch(() => {});
       acct = candidate;
