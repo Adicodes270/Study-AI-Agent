@@ -1862,3 +1862,33 @@ html.light {
     display: block;
   }
 }
+
+.gen {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.gen li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.65rem;
+  border-radius: 9999px;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.gen i {
+  color: var(--accent-primary);
+  font-size: 0.7rem;
+}
+
+.gen .fa-youtube {
+  color: var(--accent-danger);
+}

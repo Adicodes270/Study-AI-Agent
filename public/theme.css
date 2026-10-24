@@ -9,25 +9,37 @@
 
 :root {
   /* Core Backgrounds (Pitch Obsidian & Deep Midnight) */
-  --bg-primary: hsl(225, 40%, 4%);     /* Deepest obsidian midnight black */
-  --bg-surface: hsl(224, 38%, 9%);     /* Dark royal navy cards */
-  --bg-elevated: hsl(224, 35%, 15%);   /* Elevated interactive pills & chat bubbles */
+  --bg-primary: hsl(225, 40%, 4%);
+  /* Deepest obsidian midnight black */
+  --bg-surface: hsl(224, 38%, 9%);
+  /* Dark royal navy cards */
+  --bg-elevated: hsl(224, 35%, 15%);
+  /* Elevated interactive pills & chat bubbles */
 
   /* Hero Strips & Ambient 3D Atmosphere */
   --strip-hi: hsla(222, 95%, 62%, 0.22);
   --strip-lo: hsla(224, 38%, 15%, 0.08);
   --strip-edge: hsla(225, 40%, 2%, 0.75);
-  --orb-primary: hsla(222, 95%, 62%, 0.32);   /* Glowing Royal Sapphire Blue orb */
-  --orb-secondary: hsla(215, 85%, 48%, 0.18); /* Deep imperial navy ambient wash */
+  --orb-primary: hsla(222, 95%, 62%, 0.32);
+  /* Glowing Royal Sapphire Blue orb */
+  --orb-secondary: hsla(215, 85%, 48%, 0.18);
+  /* Deep imperial navy ambient wash */
 
   /* Typography */
-  --text-primary: hsl(220, 30%, 97%);  /* Pure ice white for crisp contrast */
-  --text-secondary: hsl(218, 25%, 72%);/* Soft cool slate for descriptions */
-  --text-muted: hsl(220, 18%, 48%);    /* Subdued navy-slate for labels */
+  --text-primary: hsl(220, 30%, 97%);
+  /* Pure ice white for crisp contrast */
+  --text-secondary: hsl(218, 25%, 72%);
+  /* Soft cool slate for descriptions */
+  --text-muted: hsl(220, 18%, 48%);
+  /* Subdued navy-slate for labels */
 
   /* Royal Blue Accents & Interactive Highlights */
-  --accent-primary: hsl(222, 95%, 62%);   /* Radiant Royal Blue for buttons & main accents */
-  --accent-secondary: hsl(190, 95%, 52%); /* Electric Cyan-Blue secondary highlight */
+  --accent-primary: hsl(222, 95%, 62%);
+  /* Radiant Royal Blue for buttons & main accents */
+  --accent-secondary: hsl(190, 95%, 52%);
+  --accent-success: hsl(145, 63%, 49%);
+  --accent-success-soft: hsla(145, 63%, 49%, 0.14);
+  /* Electric Cyan-Blue secondary highlight */
   --accent-warning: hsl(38, 92%, 50%);
   --accent-danger: hsl(0, 84%, 60%);
 
@@ -60,11 +72,14 @@ html.light {
   --orb-primary: hsla(222, 85%, 52%, 0.16);
   --orb-secondary: hsla(215, 80%, 40%, 0.08);
 
-  --text-primary: hsl(224, 45%, 12%);  /* Deep navy-black headings */
-  --text-secondary: hsl(220, 20%, 38%);/* Balanced slate body text */
+  --text-primary: hsl(224, 45%, 12%);
+  /* Deep navy-black headings */
+  --text-secondary: hsl(220, 20%, 38%);
+  /* Balanced slate body text */
   --text-muted: hsl(220, 15%, 56%);
 
-  --accent-primary: hsl(222, 85%, 52%);   /* Bold Royal Blue */
+  --accent-primary: hsl(222, 85%, 52%);
+  /* Bold Royal Blue */
   --accent-secondary: hsl(190, 90%, 40%);
   --accent-warning: hsl(38, 92%, 45%);
   --accent-danger: hsl(0, 84%, 55%);
@@ -83,5 +98,3 @@ html.light {
 
   --shadow-window: 0 30px 60px -34px hsla(222, 85%, 35%, 0.2);
 }
-
-
