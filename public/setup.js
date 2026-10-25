@@ -11,6 +11,7 @@
   const defaultState = () => ({
     version: '1.2.0',
     updatedAt: null,
+    classLevel: '',
     geminiKeys: [
       { id: cryptoId(), label: 'Primary Key', key: '', verified: false, lastChecked: null }
     ],
@@ -140,8 +141,11 @@
     const todoistKey = cleanTodoistToken(state.todoist.apiKey);
     const hasTodoist = isValidTodoistKeyFormat(todoistKey);
 
+    const classLevel = /^\d{1,2}$/.test(String(state.classLevel || '')) ? Number(state.classLevel) : undefined;
+
     const body = {
       telegram_user_id: userId,
+      class_level: classLevel,
       gemini_api_keys: keys,
       todoist_api_key: hasTodoist ? todoistKey : undefined,
       google_email: (state.notebooklm.accountEmail || '').trim() || undefined,
@@ -149,8 +153,8 @@
       notebooklm_storage_state: (!pendingLoginId && pendingStorageState) || undefined
     };
 
-    if (!keys.length && !hasTodoist && !pendingLoginId && !pendingStorageState && !body.google_email && !state.todoist.serverConfigured) {
-      showToast('Add a Gemini key, Todoist API token, or sign in to Google first', 'fa-solid fa-key');
+    if (!keys.length && !classLevel && !hasTodoist && !pendingLoginId && !pendingStorageState && !body.google_email && !state.todoist.serverConfigured) {
+      showToast('Add a Gemini key, choose your class, Todoist API token, or sign in to Google first', 'fa-solid fa-key');
       return false;
     }
 
@@ -163,6 +167,7 @@
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
       if (data.session_saved) { pendingLoginId = null; pendingStorageState = null; }
+      if (data.class_level) { state.classLevel = String(data.class_level); syncClassUI(); }
       if (data.todoist_saved || data.has_todoist_key) {
         state.todoist.verified = true;
         state.todoist.serverConfigured = true;
@@ -1176,6 +1181,24 @@
 
   todoistVerifyBtn?.addEventListener('click', verifyAndSaveTodoistKey);
 
+  // ---- Class selector (saved per user with "Save Configuration") ----
+  const classSelect = $id('class-level-select');
+  const classChip = $id('class-status-chip');
+  function syncClassUI() {
+    if (classSelect && document.activeElement !== classSelect) classSelect.value = state.classLevel || '';
+    if (classChip) {
+      const has = Boolean(state.classLevel);
+      classChip.className = has ? 'chip ok' : 'chip wait';
+      classChip.textContent = has ? 'Class ' + state.classLevel : 'Choose class';
+    }
+  }
+  classSelect?.addEventListener('change', () => {
+    state.classLevel = classSelect.value || '';
+    saveState(true);
+    syncClassUI();
+  });
+  syncClassUI();
+
   // Hydrate server-side keys status (including .env TODOIST_API_KEY fallback) on page load
   async function hydrateFromServer() {
     try {
@@ -1183,6 +1206,11 @@
       const res = await fetch(`/api/user-keys/${encodeURIComponent(userId)}`);
       if (!res.ok) return;
       const data = await res.json();
+      if (data && data.class_level) {
+        state.classLevel = String(data.class_level);
+        saveState(true);
+        syncClassUI();
+      }
       if (data && data.has_todoist_key) {
         state.todoist.serverConfigured = true;
         state.todoist.maskedServerKey = data.todoist_masked || null;

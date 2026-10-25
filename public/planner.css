@@ -2125,9 +2125,12 @@
 .pl-view-toggles .btn { padding: 0.35rem 0.7rem; font-size: 0.78rem; }
 .pl-hero-left { gap: 0.5rem; }
 
-/* Whole-schedule expand / collapse (headline + toggle stay visible) */
-#plan-coach-headline { cursor: pointer; }
-#toggle-plan-schedule-btn .pl-mini-chevron { transition: transform 0.2s ease; }
-#toggle-plan-schedule-btn[aria-expanded="false"] .pl-mini-chevron { transform: rotate(-90deg); }
-#plan-summary-section.is-plan-collapsed .pl-summary-hero-card > :not(.pl-summary-top),
-#plan-summary-section.is-plan-collapsed > .pl-subsection { display: none; }
+/* Expandable plan headline: short by default, click for the full text */
+#plan-coach-headline.is-expandable { cursor: pointer; display: inline-flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; }
+#plan-coach-headline.is-expandable::after { content: '▾'; font-size: 0.8em; color: var(--text-secondary); }
+#plan-coach-headline.is-expandable.is-open::after { content: '▴'; }
+#plan-coach-headline.is-expandable:hover { color: var(--accent, #6ea8ff); }
+
+/* Day 1 / start-date control and the "plan started earlier" notice */
+.pl-horizon-inline { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.pl-stale-banner { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; padding: 0.6rem 1rem; margin: 0.75rem 0; border-radius: 12px; border: 1px solid #d9822b55; background: #d9822b14; font-size: 0.85rem; }

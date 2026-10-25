@@ -191,11 +191,11 @@
 
         // Page state. sel: chapterId (string) -> Set of ticked resource-type ids. A chapter that is in sel is "ticked".
         const state = { chapters: [], types: [], sel: new Map(), deadline: null, sig: '', reloading: false };
-        // Only used if an older server does not send the list (infographics and reports are never offered)
+        // Only used if an older server does not send the list (NotebookLM Studio options; infographics and reports are never offered)
         const FALLBACK_TYPES = [
-            { id: 'audio_overview', label: 'Audio Overview' }, { id: 'study_guide', label: 'Study Guide' },
-            { id: 'briefing_doc', label: 'Briefing Doc' }, { id: 'faq', label: 'FAQ' }, { id: 'timeline', label: 'Timeline' },
-            { id: 'flashcards', label: 'Flashcards' }, { id: 'mind_map', label: 'Mind Map' }, { id: 'slide_deck', label: 'Slide Deck' },
+            { id: 'audio_overview', label: 'Audio Overview' }, { id: 'video_overview', label: 'Video Overview' },
+            { id: 'mind_map', label: 'Mind Map' }, { id: 'flashcards', label: 'Flashcards' },
+            { id: 'quiz', label: 'Quiz' }, { id: 'slide_deck', label: 'Slide Deck' }, { id: 'data_table', label: 'Data Table' },
         ];
 
         const getCookie = (name) => {

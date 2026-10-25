@@ -2,7 +2,7 @@
 // Question-count heuristic (AI default min 10, max 50), Gemini open-ended quiz generation
 // (with fresh question sets on Requiz), and book-grounded AI answer verification.
 import { GoogleGenAI, Type } from "@google/genai";
-import { DEFAULT_CLASS_LEVEL, GEMINI_API_KEY, GEMINI_MODEL } from "./config.js";
+import { GEMINI_API_KEY, GEMINI_MODEL } from "./config.js";
 
 export const MIN_QUESTIONS = 10;
 export const MAX_QUESTIONS = 50;
@@ -178,7 +178,7 @@ const GRAMMAR = /grammar|tense|modal|determiner|preposition|conjunction|article|
 export const isGrammarChapter = (ch) => /english|hindi|sanskrit/i.test(String(ch.subject ?? "")) && GRAMMAR.test(`${ch.title ?? ""} ${ch.note ?? ""}`);
 
 export function buildPrompt(ch, count, options = {}) {
-  const cls = ch.class ?? DEFAULT_CLASS_LEVEL;
+  const cls = ch.class ?? null;
   const level = cls ? `Class ${cls}` : "school (class not known: keep it at an average middle/secondary-school level)";
   const code = bookCode(ch.pdf_url);
   const matched = ch.match_status === "matched" || Boolean(ch.pdf_url);
@@ -363,7 +363,7 @@ export async function grade(questions, answers, apiKeys = [], chapter = null) {
   const keys = [...new Set([].concat(apiKeys || [], GEMINI_API_KEY).filter(Boolean))];
 
   if (keys.length && normalizedAnswers.some((a) => a.length > 0)) {
-    const cls = chapter?.class ?? DEFAULT_CLASS_LEVEL;
+    const cls = chapter?.class ?? null;
     const level = cls ? `Class ${cls}` : "CBSE Secondary School";
     const itemsToVerify = questions.map((q, index) => ({
       index,

@@ -45,6 +45,8 @@
 
   function classifyGranularSubjectClient(rawSubject, title = '', pdfUrl = '', bookCode = '', chNum = null) {
     const subj = String(rawSubject || '').trim();
+    // The subject saved for a chapter comes from the database (ncert_chapters): never re-guess it from the title or number.
+    if (subj) return subj;
     const text = `${title || ''} ${subj}`.toLowerCase();
     const urlMatch = /\/([a-z]{4,5}\d)(\d{2})\.pdf$/i.exec(String(pdfUrl || ''));
     const code = (bookCode || (urlMatch ? urlMatch[1] : '')).toLowerCase().trim();
@@ -837,7 +839,7 @@
   async function sendSyllabus(payload, buttons) {
     buttons.forEach((b) => { if (b) b.disabled = true; });
     if ($('gate-ready-box')) $('gate-ready-box').hidden = true;
-    sylStatus('AI is reading your chapter & calculating the optimal question count…');
+    sylStatus('Finding which chapter this is…');
     const geminiKey = getCookie('sa_gemini_key') || undefined;
 
     if (!gateCountManuallyEdited) {
@@ -914,7 +916,8 @@
         const readyBox = $('gate-ready-box');
         const readyTitle = $('gate-ready-title');
         if (readyTitle) {
-          readyTitle.textContent = `✓ Loaded “${targetChapter.title}” (${targetChapter.subject}) — AI set ${aiCount} questions by default (editable above, max 50).`;
+          const chNo = targetChapter.number != null ? `Chapter ${targetChapter.number} · ` : '';
+          readyTitle.textContent = `✓ Loaded ${chNo}${targetChapter.subject} · “${targetChapter.title}” — ${aiCount} questions by default (editable above, max 50).`;
         }
         if (readyBox) readyBox.hidden = false;
       } else {

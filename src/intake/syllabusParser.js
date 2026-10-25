@@ -1,7 +1,7 @@
 // src/intake/syllabusParser.js
 import { GoogleGenAI, Type } from "@google/genai";
 
-import { DEFAULT_CLASS_LEVEL, GEMINI_API_KEY, GEMINI_MODEL } from "../config.js";
+import { GEMINI_API_KEY, GEMINI_MODEL } from "../config.js";
 import { Syllabus } from "./models.js";
 
 const clients = new Map();
@@ -73,7 +73,10 @@ export function classifyGranularSubject(rawSubject, title = "", pdfUrl = "", boo
   const text = `${title || ""} ${subj}`.toLowerCase();
   const urlCodeMatch = /\/([a-z]{4,5}\d)(\d{2})\.pdf$/i.exec(String(pdfUrl || ""));
   const code = (bookCode || (urlCodeMatch ? urlCodeMatch[1] : "")).toLowerCase().trim();
-  const num = chNum || (urlCodeMatch ? parseInt(urlCodeMatch[2], 10) : null);
+  // The number inside the NCERT link is the number in the NCERT book. The caller's chNum is often the chapter's
+  // position in the syllabus (e.g. "Biology ch 2"), which is a different number, so the link wins when the book matches.
+  const urlNum = urlCodeMatch && (!bookCode || String(bookCode).toLowerCase().trim() === urlCodeMatch[1].toLowerCase()) ? parseInt(urlCodeMatch[2], 10) : null;
+  const num = urlNum || chNum || (urlCodeMatch ? parseInt(urlCodeMatch[2], 10) : null);
 
   // 1. Check exact NCERT book code + chapter number
   if (code === "iess1" || code === "jess1" || code === "fess2" || code === "gess2" || code === "hess2") {
@@ -464,7 +467,6 @@ The document may be EITHER:
 (A) A school syllabus / portion sheet listing multiple subjects and chapters, OR
 (B) An actual NCERT textbook chapter PDF, textbook unit, study notes PDF, or worksheet for a single chapter/topic!
 
-${DEFAULT_CLASS_LEVEL ? `Note: If the document does not mention the class/grade level, assume Class ${DEFAULT_CLASS_LEVEL}.` : ""}
 
 ${CLASS_9_AND_10_NCERT_REFERENCE}
 
@@ -559,7 +561,7 @@ const UNMATCHED_RESOLVER_SCHEMA = {
  * then enforces granular subject splitting (History/Civics/Geography/Economics & Physics/Chemistry/Biology).
  */
 async function resolveUnmatchedChapters(syllabus, apiKey) {
-  const classLevel = syllabus.class_level || DEFAULT_CLASS_LEVEL || 9;
+  const classLevel = syllabus.class_level || 9;
   const unmatchedRefs = [];
 
   for (const subject of syllabus.subjects) {

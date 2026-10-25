@@ -1,13 +1,14 @@
 // src/intake/telegramBot.js
 import { Bot, HttpError } from "grammy";
 
-import { DEFAULT_CLASS_LEVEL, GEMINI_API_KEY, GEMINI_MODEL, TELEGRAM_BOT_TOKEN } from "../config.js";
+import { GEMINI_API_KEY, GEMINI_MODEL, TELEGRAM_BOT_TOKEN } from "../config.js";
 import { initDb, savePairing } from "../db.js";
 import { saveSyllabus } from "./storage.js";
 import { enqueueSyllabus } from "../generationQueue.js";
 import { splitSyllabusIntoGranularSubjects } from "./syllabusParser.js";
-import { deleteUserKey, getUserKeys, isValidKey, saveUserKey } from "./userKeys.js";
-import { inferNcertFromFilename, parseSyllabus, parseSyllabusPdf } from "./syllabusParser.js";
+import { deleteUserKey, getUserClass, getUserKeys, isValidKey, saveUserKey } from "./userKeys.js";
+import { identifyChaptersFromPdf, syllabusFromNcertRows } from "./chapterIdentifier.js";
+import { inferNcertFromFilename, parseSyllabus } from "./syllabusParser.js";
 
 const MAX_PDF_BYTES = 20 * 1024 * 1024; // Telegram bots can't download files over 20 MB
 
@@ -117,7 +118,7 @@ async function processSyllabus(ctx, parseFn, payload, hintText, fileName = "") {
         ? String(fileName).replace(/\.pdf$/i, "").trim()
         : String(hintText || "Uploaded Study Material").split("\n")[0].slice(0, 60).trim();
       syllabus = {
-        class_level: DEFAULT_CLASS_LEVEL,
+        class_level: null,
         exam: "Custom Source",
         subjects: [
           {
@@ -194,7 +195,44 @@ async function handlePdf(ctx) {
     return;
   }
 
-  await processSyllabus(ctx, parseSyllabusPdf, pdfBytes, hint, doc.file_name || "");
+  await processPdf(ctx, pdfBytes, doc.file_name || "");
+}
+
+/** PDF: no syllabus parser. Find the chapter in ncert_chapters and show its number, subject and link from there. */
+async function processPdf(ctx, pdfBytes, fileName) {
+  const group = inGroup(ctx);
+  const apiKeys = await getUserKeys(ctx.from.id);
+  const classLevel = await getUserClass(ctx.from.id);
+  if (!group) {
+    await ctx.reply("Got it, finding which chapter this is...");
+    await ctx.replyWithChatAction("typing");
+  }
+
+  let found;
+  try {
+    found = await identifyChaptersFromPdf({ pdfBytes, fileName, classLevel, apiKeys });
+  } catch (e) {
+    console.log(`Identify error: ${e.message}`);
+    if (!group) await ctx.reply(`Sorry, I couldn't look that up: ${e.message}`);
+    return;
+  }
+  if (!found.rows.length) {
+    if (!group) {
+      await ctx.reply(
+        classLevel
+          ? `I couldn't match that PDF to a Class ${classLevel} chapter.`
+          : "I couldn't match that PDF to a chapter. Choose your class on the setup page and send it again."
+      );
+    }
+    return;
+  }
+
+  const syllabus = syllabusFromNcertRows(found.rows, classLevel);
+  await saveSyllabus(ctx.chat.id, syllabus);
+  await enqueueSyllabus(ctx.chat.id, syllabus).catch((e) => console.log(`Could not queue chapter generation: ${e.message}`));
+
+  const lines = found.rows.map((r) => `Ch ${r.number} · ${syllabus.subjects.find((s) => s.chapters.some((c) => c.ncert_id === r.id))?.name} · ${r.title}`);
+  await ctx.reply("Done!\n" + lines.join("\n"));
 }
 
 function onError(err) {

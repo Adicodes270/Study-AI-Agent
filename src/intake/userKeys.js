@@ -28,6 +28,13 @@ export const isValidTodoistKey = (k) => {
   return TODOIST_KEY_RE.test(cleaned);
 };
 
+/** Class 1..12 as an integer, or null when it isn't a valid class. */
+export function normalizeClassLevel(raw) {
+  if (raw === null || raw === undefined || raw === "") return null;
+  const n = parseInt(String(raw).replace(/^class\s*/i, ""), 10);
+  return Number.isInteger(n) && n >= 1 && n <= 12 ? n : null;
+}
+
 /** Check a Playwright storage_state object; returns a summary or throws. */
 export function inspectStorageState(state, domainPart = "google") {
   const cookies = Array.isArray(state?.cookies) ? state.cookies : [];
@@ -43,8 +50,9 @@ export function inspectStorageState(state, domainPart = "google") {
  */
 export async function saveUserConfig(
   telegramUserId,
-  { keys = [], notebooklmState = null, email = null, todoistKey = undefined } = {}
+  { keys = [], notebooklmState = null, email = null, todoistKey = undefined, classLevel = undefined } = {}
 ) {
+  const cls = normalizeClassLevel(classLevel);
   const clean = [...new Set((Array.isArray(keys) ? keys : []).map((k) => String(k).trim()).filter(isValidKey))];
   const [primary = "", ...fallbacks] = clean;
 
@@ -78,6 +86,7 @@ export async function saveUserConfig(
   if (email) {
     prev.google_email = email;
   }
+  if (cls) prev.class_level = cls;
   if (notebooklmState) {
     prev.has_session = true;
     prev.notebooklm_saved_at = new Date().toISOString();
@@ -123,6 +132,12 @@ export async function saveUserConfig(
             [email, telegramUserId]
           );
         }
+        if (cls) {
+          await db.query(
+            "UPDATE users SET class_level = $1, updated_at = now() WHERE telegram_user_id = $2",
+            [cls, telegramUserId]
+          );
+        }
         if (notebooklmState) {
           await db.query(
             "UPDATE users SET notebooklm_state = $1, notebooklm_saved_at = now(), " +
@@ -141,11 +156,29 @@ export async function saveUserConfig(
     session: Boolean(notebooklmState),
     email: Boolean(email),
     todoist: Boolean(validTodoist),
+    class_level: cls,
   };
 }
 
 export const saveUserKeys = (id, keys) => saveUserConfig(id, { keys });
 export const saveTodoistKey = (id, todoistKey) => saveUserConfig(id, { todoistKey });
+export const saveUserClass = (id, classLevel) => saveUserConfig(id, { classLevel });
+
+/** This student's class (1..12) as saved on the setup page, or null if they haven't chosen one yet. Never read from .env. */
+export async function getUserClass(telegramUserId) {
+  if (hasDatabaseUrl()) {
+    try {
+      const v = await withDb(async (db) => {
+        const { rows } = await db.query("SELECT class_level FROM users WHERE telegram_user_id = $1", [telegramUserId]);
+        return rows[0]?.class_level ?? null;
+      });
+      const n = normalizeClassLevel(v);
+      if (n) return n;
+    } catch {}
+  }
+  const store = readLocalStore();
+  return normalizeClassLevel(store.users?.[String(telegramUserId)]?.class_level);
+}
 
 export async function getUserProfile(telegramUserId) {
   const store = readLocalStore();
@@ -155,7 +188,7 @@ export async function getUserProfile(telegramUserId) {
     try {
       const dbRow = await withDb(async (db) => {
         const { rows } = await db.query(
-          "SELECT google_email, todoist_api_key, (notebooklm_state IS NOT NULL) AS has_session, notebooklm_saved_at " +
+          "SELECT google_email, todoist_api_key, class_level, (notebooklm_state IS NOT NULL) AS has_session, notebooklm_saved_at " +
             "FROM users WHERE telegram_user_id = $1",
           [telegramUserId]
         );
@@ -164,6 +197,7 @@ export async function getUserProfile(telegramUserId) {
       if (dbRow) {
         return {
           ...dbRow,
+          class_level: normalizeClassLevel(dbRow.class_level) || normalizeClassLevel(localUser?.class_level),
           todoist_api_key: dbRow.todoist_api_key || localUser?.todoist_api_key || store.default_todoist_api_key || null,
         };
       }
@@ -175,6 +209,7 @@ export async function getUserProfile(telegramUserId) {
       google_email: localUser.google_email || null,
       todoist_api_key: localUser.todoist_api_key || store.default_todoist_api_key || null,
       has_session: Boolean(localUser.has_session),
+      class_level: normalizeClassLevel(localUser.class_level),
       notebooklm_saved_at: localUser.notebooklm_saved_at || null,
     };
   }

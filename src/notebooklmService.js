@@ -3,7 +3,7 @@
 //
 //   1. create a NotebookLM notebook for the chapter (user's saved Google session, via notebooklm-py)
 //   2. try to add the chapter's source URL
-//   3. if that throws / is rejected / ends in an error status: look the chapter up in ncertCatalog.js,
+//   3. if that throws / is rejected / ends in an error status: look the chapter up in the ncert_chapters table,
 //      download the NCERT PDF to a temp file, upload it to the same notebook, delete the temp file
 //   4. trigger the study resources (never infographics or reports)
 //   5. return { notebookUrl, ... } -> the queue stores status 'Ready' + notebook_url, or 'Failed' if this throws
@@ -12,9 +12,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { NOTEBOOKLM_RESOURCE_TYPES, EXCLUDED_RESOURCE_TYPES } from "./api.js";
-import { DEFAULT_CLASS_LEVEL } from "./config.js";
-import { getChapterForUser } from "./db.js";
-import { buildNcertPdfUrl, findNcertChapter } from "./intake/ncertCatalog.js";
+import { getChapterForUser, getNcertPdfUrls } from "./db.js";
 import { registerChapterGenerator, setChapterStep } from "./generationQueue.js";
 
 const MAX_PDF_BYTES = 40 * 1024 * 1024;
@@ -55,19 +53,12 @@ async def trigger(client, nb_id, r_type, title, src_ids, ReportFormat):
     a = client.artifacts
     if r_type == "audio_overview":
         st = await a.generate_audio(nb_id, source_ids=ids)
-    elif r_type == "study_guide":
-        if hasattr(a, "generate_study_guide"):
-            st = await a.generate_study_guide(nb_id, source_ids=ids)
-        else:
-            st = await a.generate_report(nb_id, report_format=ReportFormat.STUDY_GUIDE, source_ids=ids)
-    elif r_type == "briefing_doc":
-        st = await a.generate_report(nb_id, report_format=ReportFormat.BRIEFING_DOC, source_ids=ids)
-    elif r_type == "faq":
-        st = await a.generate_report(nb_id, report_format=ReportFormat.CUSTOM, source_ids=ids,
-            custom_prompt=f"Create a comprehensive exam FAQ with questions and model answers for {title}.")
-    elif r_type == "timeline":
-        st = await a.generate_report(nb_id, report_format=ReportFormat.CUSTOM, source_ids=ids,
-            custom_prompt=f"Create a detailed chronological timeline and sequential process breakdown for {title}.")
+    elif r_type == "video_overview":
+        st = await a.generate_video(nb_id, source_ids=ids)
+    elif r_type == "quiz":
+        st = await a.generate_quiz(nb_id, source_ids=ids)
+    elif r_type == "data_table":
+        st = await a.generate_data_table(nb_id, source_ids=ids)
     elif r_type == "flashcards":
         st = await a.generate_flashcards(nb_id, source_ids=ids)
     elif r_type == "mind_map":
@@ -91,6 +82,34 @@ async def trigger(client, nb_id, r_type, title, src_ids, ReportFormat):
     if not task_id:
         raise RuntimeError("NotebookLM returned no task id, so the resource was not started")
     return task_id
+
+def kind_of(art):
+    """Map a notebook artifact to one of our resource ids (None if unknown)."""
+    k = str(getattr(art, "kind", "") or "").lower().split(".")[-1]
+    for needle, rid in (("audio", "audio_overview"), ("video", "video_overview"), ("flash", "flashcards"), ("quiz", "quiz"),
+                        ("slide", "slide_deck"), ("data", "data_table"), ("mind", "mind_map")):
+        if needle in k:
+            return rid
+    return None
+
+async def existing_kinds(client, nb_id):
+    """Resource types this notebook already has (finished or still being made), so a retry never makes a second copy."""
+    have = set()
+    try:
+        for art in await client.artifacts.list(nb_id):
+            if getattr(art, "is_failed", False):
+                continue
+            rid = kind_of(art)
+            if rid:
+                have.add(rid)
+    except Exception:
+        pass
+    try:
+        if hasattr(client.notes, "list_mind_maps") and await client.notes.list_mind_maps(nb_id):
+            have.add("mind_map")
+    except Exception:
+        pass
+    return have
 
 async def verify(client, nb_id, task_id):
     """Ask NotebookLM whether the task really exists: pending / in_progress / completed => True."""
@@ -121,8 +140,12 @@ async def run():
                 nb = next((n for n in await client.notebooks.list() if getattr(n, "title", "") == title), None)
                 if nb is not None:
                     existing = [s for s in await client.sources.list(nb.id) if getattr(s, "id", None) and not bad_status(s)]
-                    if existing:  # a previous attempt already loaded a good source: reuse it
-                        print(json.dumps({"ok": True, "notebook_id": nb.id, "source_ok": True, "source_id": existing[0].id, "reused": True})); return
+                    right = [s for s in existing if (getattr(s, "url", None) or "").rstrip("/") == p["url"].rstrip("/")]
+                    if right:  # a previous attempt already loaded this exact link: reuse it
+                        print(json.dumps({"ok": True, "notebook_id": nb.id, "source_ok": True, "source_id": right[0].id, "reused": True})); return
+                    for s in existing:  # a source from a wrong/old link would make the notebook open the wrong chapter
+                        try: await client.sources.delete(nb.id, s.id)
+                        except Exception: pass
                 if nb is None:
                     nb = await client.notebooks.create(title)
                 out = {"ok": True, "notebook_id": nb.id, "source_ok": False}
@@ -150,8 +173,12 @@ async def run():
                 if not src_ids:
                     raise RuntimeError("the notebook has no usable source")
                 results = {}
+                have = await existing_kinds(client, nb_id)
                 for r_type in p["resource_types"]:
                     if r_type.lower() in EXCLUDED:
+                        continue
+                    if r_type in have:  # already generated / generating in this notebook: do not make another one
+                        results[r_type] = {"ok": True, "state": "already_exists"}
                         continue
                     try:
                         tid = await trigger(client, nb_id, r_type, p["title"], src_ids, ReportFormat)
@@ -201,16 +228,17 @@ function pyError(res, what) {
 // NCERT fallback: resolve -> download -> temp file
 // ---------------------------------------------------------------------------
 
-/** Candidate NCERT PDF URLs for a chapter, best first (its own NCERT link, then the catalog match). */
-export function resolveNcertPdfUrls(chapter) {
+/** Candidate NCERT PDF URLs for a chapter, best first (its own NCERT link, then links stored in ncert_chapters). */
+export async function resolveNcertPdfUrls(chapter, { lookup = getNcertPdfUrls } = {}) {
   const urls = [];
   const own = String(chapter.pdf_url || "");
   if (/^https?:\/\/(www\.)?ncert\.nic\.in\//i.test(own)) urls.push(own);
-  const hit = findNcertChapter({ classLevel: chapter.class ?? DEFAULT_CLASS_LEVEL, subject: chapter.subject, title: chapter.title });
-  if (hit) urls.push(hit.pdf_url);
-  // single-book subjects keep the same code, so an explicit book code + number in the saved URL also works
-  const m = /\/([a-z]{4}\d)(\d{2})\.pdf$/i.exec(own);
-  if (m) urls.push(buildNcertPdfUrl(m[1], parseInt(m[2], 10)));
+  try {
+    const stored = await lookup({ ncertId: chapter.ncert_id ?? null, classLevel: chapter.class ?? null, title: chapter.title });
+    urls.push(...stored);
+  } catch (e) {
+    console.log(`⚠️  ncert_chapters lookup failed: ${e.message}`);
+  }
   return [...new Set(urls)];
 }
 
@@ -232,7 +260,7 @@ export async function downloadNcertPdf(urls, { fetchImpl = fetch, timeoutMs = 60
       errors.push(`${url}: ${e.message}`);
     }
   }
-  throw new Error(`NCERT download failed (${errors.join("; ") || "no matching NCERT chapter found"})`);
+  throw new Error(`NCERT download failed (${errors.join("; ") || "no NCERT link found in ncert_chapters"})`);
 }
 
 // ---------------------------------------------------------------------------
@@ -254,6 +282,19 @@ export async function createChapterNotebook({ jobId, userId, chapter, sessionFil
   if (chapter.id != null && !deps.skipDb) {
     const row = await getChapterForUser(userId, chapter.id).catch(() => null);
     if (row) full = { ...row, ...chapter, pdf_url: row.pdf_url, class: row.class };
+  }
+  // The link Gemini saved on the syllabus chapter can point at the wrong NCERT chapter. ncert_chapters is the
+  // source of truth: find this chapter there by title (class first) and use that row's pdf_url instead.
+  if (!sourceUrl && !deps.skipDb) {
+    try {
+      const [best] = await (deps.lookupNcert || getNcertPdfUrls)({ ncertId: full.ncert_id ?? null, classLevel: full.class ?? null, title: full.title });
+      if (best && best !== full.pdf_url) {
+        console.log(`[notebooklm] "${full.title}": using ncert_chapters link ${best} (saved link was ${full.pdf_url || "none"})`);
+        full = { ...full, pdf_url: best };
+      }
+    } catch (e) {
+      console.log(`⚠️  ncert_chapters lookup failed for "${full.title}": ${e.message}`);
+    }
   }
   const url = (sourceUrl || full.pdf_url || "").trim();
   const title = `Study Agent — ${full.subject}: ${full.title}`;
@@ -277,7 +318,7 @@ export async function createChapterNotebook({ jobId, userId, chapter, sessionFil
     let tmp = null;
     try {
       await step("Source link failed, downloading the NCERT chapter instead");
-      tmp = await download(resolveNcertPdfUrls(full));
+      tmp = await download(await resolveNcertPdfUrls(full));
       await step("Uploading the NCERT chapter to NotebookLM");
       const up = await py({ action: "add_file", storage_path: sessionFile, notebook_id: notebookId, file_path: tmp.file }, 240_000);
       if (!up?.ok) throw pyError(up || {}, "NotebookLM rejected the NCERT file");

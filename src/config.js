@@ -18,8 +18,7 @@ export const GEMINI_MODEL = (process.env.GEMINI_MODEL ?? "").trim() || "gemini-3
 // Optional fallback Todoist API key from .env
 export const TODOIST_API_KEY = (process.env.TODOIST_API_KEY ?? "").trim();
 
-const _class = (process.env.CLASS_LEVEL ?? "").trim();
-export const DEFAULT_CLASS_LEVEL = /^\d+$/.test(_class) ? parseInt(_class, 10) : null;
+// The student's class is NOT read from .env: each user picks it on the setup page (users.class_level).
 
 // Browserbase: a cloud Chrome the user signs in to through the setup page (works on a public site).
 // Leave the key empty to keep the old "open Chrome on this computer" sign-in for localhost.

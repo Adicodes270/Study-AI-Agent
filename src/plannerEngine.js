@@ -2,9 +2,9 @@
 // AI Study Planner & Todoist SDK Integration (@doist/todoist-sdk)
 import { TodoistApi } from "@doist/todoist-sdk";
 import { GoogleGenAI, Type } from "@google/genai";
-import { DEFAULT_CLASS_LEVEL, GEMINI_API_KEY, GEMINI_MODEL } from "./config.js";
+import { GEMINI_API_KEY, GEMINI_MODEL } from "./config.js";
 import { cleanTodoistKey, isValidTodoistKey } from "./intake/userKeys.js";
-import { classifyGranularSubject } from "./intake/syllabusParser.js";
+import { storedSubject } from "./db.js";
 import { revisionFor } from "./quizEngine.js";
 
 // ---------------------------------------------------------------------------
@@ -28,6 +28,7 @@ export const DEFAULT_PLANNER_CONFIG = {
   customBreakMins: 10,
   examDates: [],      // [{ id, subject, examName, date }]
   vacationRanges: [], // [{ id, label, startDate, endDate }]
+  startDate: "", // "" = Day 1 is the day the student opens the planner; otherwise a YYYY-MM-DD start date
   subjectPriorities: {}, // { [subject]: 'High' | 'Medium' | 'Low' }
   includeQuizRevision: true,
 };
@@ -107,6 +108,7 @@ export function normalizePlannerConfig(raw = {}) {
     ? raw.sessionStyle
     : DEFAULT_PLANNER_CONFIG.sessionStyle;
 
+  const startDate = /^\d{4}-\d{2}-\d{2}$/.test(String(raw.startDate || "")) ? String(raw.startDate) : "";
   const customFocusMins = Math.max(10, Math.min(180, parseInt(raw.customFocusMins, 10) || 45));
   const customBreakMins = Math.max(2, Math.min(60, parseInt(raw.customBreakMins, 10) || 10));
 
@@ -160,6 +162,7 @@ export function normalizePlannerConfig(raw = {}) {
     sessionStyle,
     customFocusMins,
     customBreakMins,
+    startDate,
     examDates,
     vacationRanges,
     subjectPriorities,
@@ -760,7 +763,7 @@ export function buildPrioritizedStudyQueue({ chapters = [], config = {}, todayYm
   const normalizedChapters = [];
 
   for (const ch of chapters) {
-    const subject = classifyGranularSubject(ch.subject, ch.title, ch.pdf_url, "", ch.number);
+    const subject = storedSubject(ch.subject, ch.title, ch.pdf_url, "", ch.number);
     const res = ch.result || null;
     const pct = res?.percentage != null ? Number(res.percentage) : null;
     const tierInfo = pct != null ? revisionFor(pct) : null;
@@ -832,7 +835,7 @@ export function buildPrioritizedStudyQueue({ chapters = [], config = {}, todayYm
   if (!normalizedChapters.length) {
     if (Array.isArray(config.examDates) && config.examDates.length) {
       config.examDates.forEach((ex, i) => {
-        const subject = classifyGranularSubject(ex.subject, ex.examName, "", "", i + 1);
+        const subject = storedSubject(ex.subject, ex.examName, "", "", i + 1);
         const priority = config.subjectPriorities?.[subject] || "High";
         normalizedChapters.push({
           id: `exam-unit-${i + 1}`,
@@ -927,11 +930,20 @@ export async function generateAiStudyPlan({
   config: rawConfig = {},
   geminiKeys = [],
   startDate = null,
+  classLevel = null, // the student's class from the setup page
 }) {
+  const studentClass = classLevel ?? chapters.find((c) => c?.class)?.class ?? null;
+  const classLabel = studentClass ? `Class ${studentClass}` : "school";
   const config = normalizePlannerConfig(rawConfig);
   const preset = getSessionPreset(config);
-  const baseDate = startDate ? new Date(`${startDate}T00:00:00`) : new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
-  const todayYmd = formatDateYMD(baseDate);
+  // Day 1 is the day the student opened the planner (today, in India), unless they picked a later start date.
+  const istNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+  const realTodayYmd = formatDateYMD(istNow);
+  const realTomorrowYmd = formatDateYMD(new Date(istNow.getFullYear(), istNow.getMonth(), istNow.getDate() + 1));
+  const requestedStart = String(startDate || config.startDate || "");
+  const planStartYmd = /^\d{4}-\d{2}-\d{2}$/.test(requestedStart) && requestedStart >= realTodayYmd ? requestedStart : realTodayYmd;
+  const baseDate = new Date(`${planStartYmd}T00:00:00`);
+  const todayYmd = planStartYmd;
 
   const prioritizedUnits = buildPrioritizedStudyQueue({
     chapters,
@@ -951,7 +963,7 @@ export async function generateAiStudyPlan({
       examDate: u.examDate,
     }));
 
-    const prompt = `You are an expert CBSE & NCERT AI Study Coach designing a ${config.planDays}-day Todoist study schedule for a student (Class ${DEFAULT_CLASS_LEVEL || 10}).
+    const prompt = `You are an expert CBSE & NCERT AI Study Coach designing a ${config.planDays}-day Todoist study schedule for a ${classLabel} student.
 
 Student Configuration:
 - Daily Study Goal: ${config.dailyStudyHours} hours/day
@@ -1097,10 +1109,10 @@ Provide:
             : `Complete ${slot.breakIntervalText} and test recall immediately after.`);
 
       const relativeDuePrefix =
-        dOffset === 0 ? "today" : dOffset === 1 ? "tomorrow" : dateYmd;
+        dateYmd === realTodayYmd ? "today" : dateYmd === realTomorrowYmd ? "tomorrow" : dateYmd;
       const todoistDueString = `${relativeDuePrefix} at ${format12hDueTime(slot.startTime)}`;
 
-      const ytQuery = encodeURIComponent(`${chosenUnit.subject} ${chosenUnit.title} Class ${DEFAULT_CLASS_LEVEL || 10} NCERT`);
+      const ytQuery = encodeURIComponent(`${chosenUnit.subject} ${chosenUnit.title}${studentClass ? ` Class ${studentClass}` : ""} NCERT`);
 
       studyBlocks.push({
         id: `block_${dateYmd}_${sIdx + 1}`,
@@ -1154,9 +1166,9 @@ Provide:
       shortDay: SHORT_DAY_NAMES[dow],
       displayDate: `${SHORT_DAY_NAMES[dow]}, ${SHORT_MONTHS[dateObj.getMonth()]} ${dateObj.getDate()}`,
       dayLabel:
-        dOffset === 0
+        dateYmd === realTodayYmd
           ? `Today (${SHORT_DAY_NAMES[dow]}, ${SHORT_MONTHS[dateObj.getMonth()]} ${dateObj.getDate()})`
-          : dOffset === 1
+          : dateYmd === realTomorrowYmd
             ? `Tomorrow (${SHORT_DAY_NAMES[dow]}, ${SHORT_MONTHS[dateObj.getMonth()]} ${dateObj.getDate()})`
             : `${DAY_NAMES[dow]}, ${SHORT_MONTHS[dateObj.getMonth()]} ${dateObj.getDate()}`,
       dayType,
@@ -1173,7 +1185,7 @@ Provide:
       wakeTime: layout.wakeTime,
       studyShortfallMins,
       totalBreakMins,
-      todoistDueString: `${dOffset === 0 ? "today" : dOffset === 1 ? "tomorrow" : dateYmd} at 6pm`,
+      todoistDueString: `${dateYmd === realTodayYmd ? "today" : dateYmd === realTomorrowYmd ? "tomorrow" : dateYmd} at 6pm`,
       studyBlocks,
     });
   }
@@ -1232,6 +1244,7 @@ Provide:
 
   return {
     generatedAt: new Date().toISOString(),
+    startDate: planStartYmd,
     hasSyllabus: chapters.length > 0,
     usedQuizHistoryFallback: chapters.some((c) => Boolean(c.result)),
     sessionStyleId: preset.id,

@@ -199,6 +199,7 @@
       dailySleepHours: 8,
       dailyFreeHours: 2,
       planDays: 7,
+      startDate: '', // '' = Day 1 is the day the planner is opened; otherwise a YYYY-MM-DD the student picked
       schoolDays: [1, 2, 3, 4, 5, 6],
       schoolStartTime: '08:00',
       schoolEndTime: '14:30',
@@ -223,7 +224,6 @@
     chaptersShowAll: false,
     weakQueueOpen: false,
     coachInsightsOpen: false,
-    planScheduleOpen: true,
     subjectsBreakdownOpen: false,
     expandedDays: new Set(),
     expandedBlocks: new Set(),
@@ -281,6 +281,51 @@
   // ==========================================================================
   // PROGRESSIVE DISCLOSURE & INTERACTIVE ACCORDION HELPERS
   // ==========================================================================
+  // The plan headline is long ("Balanced 7-Day Study & Todoist Schedule (5h/day · Pomodoro ...)"),
+  // so show the short part and let the student click to see the rest, and click again to fold it.
+  let headlineFull = '';
+  let headlineOpen = false;
+  function paintCoachHeadline() {
+    const el = $('plan-coach-headline');
+    if (!el) return;
+    const cut = headlineFull.indexOf(' (');
+    const expandable = cut > 0;
+    el.textContent = expandable && !headlineOpen ? headlineFull.slice(0, cut) : headlineFull;
+    el.classList.toggle('is-expandable', expandable);
+    el.classList.toggle('is-open', expandable && headlineOpen);
+    if (expandable) {
+      el.setAttribute('role', 'button');
+      el.setAttribute('tabindex', '0');
+      el.setAttribute('aria-expanded', String(headlineOpen));
+      el.title = headlineOpen ? 'Click to show less' : 'Click to show details';
+    } else {
+      el.removeAttribute('role');
+      el.removeAttribute('tabindex');
+      el.removeAttribute('aria-expanded');
+      el.removeAttribute('title');
+    }
+  }
+  function renderCoachHeadline(text) {
+    headlineFull = String(text || '');
+    paintCoachHeadline();
+  }
+  (function bindCoachHeadline() {
+    const el = $('plan-coach-headline');
+    if (!el) return;
+    const toggle = () => {
+      if (!el.classList.contains('is-expandable')) return;
+      headlineOpen = !headlineOpen;
+      paintCoachHeadline();
+    };
+    el.addEventListener('click', toggle);
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        toggle();
+      }
+    });
+  })();
+
   // One step at a time: opening a step folds the other one away, and the step pills show which
   // step you are on (the plan, step 3, is the "home" step when nothing is open).
   function setSectionExpanded(stepNum, isOpen, scrollIntoView = false) {
@@ -400,20 +445,6 @@
       state.showAllConfigPanels = !state.showAllConfigPanels;
       updateConfigTabsUI();
     });
-
-    // Step 3: Expand / Collapse the whole schedule (headline stays visible)
-    const applyPlanScheduleOpen = () => {
-      $('plan-summary-section')?.classList.toggle('is-plan-collapsed', !state.planScheduleOpen);
-      $('toggle-plan-schedule-btn')?.setAttribute('aria-expanded', String(state.planScheduleOpen));
-      const t = $('toggle-plan-schedule-text');
-      if (t) t.textContent = state.planScheduleOpen ? 'Collapse Schedule' : 'Expand Schedule';
-    };
-    const togglePlanSchedule = () => {
-      state.planScheduleOpen = !state.planScheduleOpen;
-      applyPlanScheduleOpen();
-    };
-    $('toggle-plan-schedule-btn')?.addEventListener('click', togglePlanSchedule);
-    $('plan-coach-headline')?.addEventListener('click', togglePlanSchedule);
 
     // Step 3: Collapsible AI Coach Strategy & Tips Drawer
     $('toggle-coach-insights-btn')?.addEventListener('click', () => {
@@ -565,6 +596,14 @@
     return new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
   }
 
+  // The date Day 1 falls on: the day the planner is opened (today in India), or the start date the
+  // student chose - but never a date in the past.
+  function effectiveStartYmd(cfg) {
+    const todayYmd = formatDateYMD(nowIST());
+    const picked = String((cfg && cfg.startDate) || '');
+    return /^\d{4}-\d{2}-\d{2}$/.test(picked) && picked >= todayYmd ? picked : todayYmd;
+  }
+
   function formatDateYMD(d) {
     const yr = d.getFullYear();
     const mo = String(d.getMonth() + 1).padStart(2, '0');
@@ -627,9 +666,11 @@
 
     const today = nowIST();
     const todayYmd = formatDateYMD(today);
-    // Day 1 is always a Monday: today if it is Monday, otherwise the coming Monday.
-    const baseDate = new Date(today);
-    baseDate.setDate(today.getDate() + ((8 - today.getDay()) % 7));
+    // Day 1 is the day the student opened the planner (today, in India), unless they picked a later start date.
+    const tomorrowYmd = formatDateYMD(new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1));
+    const startYmd = effectiveStartYmd(cfg);
+    const [sy, sm, sd] = startYmd.split('-').map(Number);
+    const baseDate = new Date(sy, sm - 1, sd);
 
     const units = [];
     (chaptersInput || []).forEach((ch, idx) => {
@@ -761,7 +802,7 @@
         usedToday.add(chosen.subject);
 
         const sIdx = studyBlocks.length + 1;
-        const duePrefix = dOffset === 0 ? 'today' : dOffset === 1 ? 'tomorrow' : dateYmd;
+        const duePrefix = dateYmd === todayYmd ? 'today' : dateYmd === tomorrowYmd ? 'tomorrow' : dateYmd;
         const todoistDueString = `${duePrefix} at ${format12hDueTime(startTime)}`;
         const ytQuery = encodeURIComponent(`${chosen.subject} ${chosen.title} Class 10 NCERT`);
 
@@ -829,9 +870,9 @@
         shortDay: SHORT_DAY_NAMES[dow],
         displayDate: `${SHORT_DAY_NAMES[dow]}, ${SHORT_MONTHS[dateObj.getMonth()]} ${dateObj.getDate()}`,
         dayLabel:
-          dOffset === 0
+          dateYmd === todayYmd
             ? `Today (${SHORT_DAY_NAMES[dow]}, ${SHORT_MONTHS[dateObj.getMonth()]} ${dateObj.getDate()})`
-            : dOffset === 1
+            : dateYmd === tomorrowYmd
               ? `Tomorrow (${SHORT_DAY_NAMES[dow]}, ${SHORT_MONTHS[dateObj.getMonth()]} ${dateObj.getDate()})`
               : `${DAY_NAMES[dow]}, ${SHORT_MONTHS[dateObj.getMonth()]} ${dateObj.getDate()}`,
         dayType,
@@ -845,7 +886,7 @@
         freeBlock: layout.freeBlock,
         wakeTime: layout.wakeTime,
         studyShortfallMins,
-        todoistDueString: `${dOffset === 0 ? 'today' : dOffset === 1 ? 'tomorrow' : dateYmd} at 6pm`,
+        todoistDueString: `${dateYmd === todayYmd ? 'today' : dateYmd === tomorrowYmd ? 'tomorrow' : dateYmd} at 6pm`,
         studyBlocks,
       });
     }
@@ -1566,6 +1607,7 @@
     }
 
     if ($('plan-days-select')) $('plan-days-select').value = String(cfg.planDays || 7);
+    if (typeof syncStartDateControl === 'function') syncStartDateControl();
     if ($('school-start-time')) $('school-start-time').value = cfg.schoolStartTime || '08:00';
     if ($('school-end-time')) $('school-end-time').value = cfg.schoolEndTime || '14:30';
     if ($('include-quiz-revision-toggle')) $('include-quiz-revision-toggle').checked = cfg.includeQuizRevision !== false;
@@ -1639,6 +1681,37 @@
     state.config.planDays = parseInt(e.target.value, 10) || 7;
     saveLocalPlannerCache();
     triggerGeneratePlan(false, true);
+  });
+
+  // Start date: empty means "from today"; the picker never allows a past date.
+  function syncStartDateControl() {
+    const input = $('plan-start-date');
+    if (!input) return;
+    const today = formatDateYMD(nowIST());
+    input.min = today;
+    input.value = effectiveStartYmd(state.config);
+    const reset = $('plan-start-today-btn');
+    if (reset) reset.hidden = !state.config.startDate || state.config.startDate <= today;
+  }
+  $('plan-start-date')?.addEventListener('change', (e) => {
+    const today = formatDateYMD(nowIST());
+    const v = e.target.value;
+    state.config.startDate = v && v > today ? v : '';
+    syncStartDateControl();
+    saveLocalPlannerCache();
+    triggerGeneratePlan(false, true);
+  });
+  $('plan-start-today-btn')?.addEventListener('click', () => {
+    state.config.startDate = '';
+    syncStartDateControl();
+    saveLocalPlannerCache();
+    triggerGeneratePlan(false, true);
+  });
+  $('plan-stale-restart-btn')?.addEventListener('click', () => {
+    state.config.startDate = '';
+    syncStartDateControl();
+    saveLocalPlannerCache();
+    triggerGeneratePlan(false);
   });
 
   $('school-start-time')?.addEventListener('change', (e) => {
@@ -1819,13 +1892,24 @@
     }
     const plan = state.plan;
 
+    // A plan saved on an earlier day starts in the past: offer to start it from today instead.
+    const staleBanner = $('plan-stale-banner');
+    if (staleBanner) {
+      const firstDate = plan.days[0]?.date || '';
+      const stale = Boolean(firstDate) && firstDate < effectiveStartYmd(state.config);
+      staleBanner.hidden = !stale;
+      if (stale && $('plan-stale-text')) {
+        $('plan-stale-text').textContent = `This plan's Day 1 was ${plan.days[0].displayDate || firstDate}. Today is ${formatDateYMD(nowIST())}.`;
+      }
+    }
+
     // Ensure Day 1 and its first study block are expanded on initial load so the user sees immediate interactive value without clutter
     if (state.expandedDays.size === 0 && plan.days.length > 0 && !state.allDaysExpanded) {
       state.expandedDays.add(plan.days[0].date);
       // Task cards start folded: one clean row each (time, subject, priority); click to open.
     }
 
-    if ($('plan-coach-headline')) $('plan-coach-headline').textContent = plan.coachHeadline || 'Your AI Study Plan';
+    renderCoachHeadline(plan.coachHeadline || 'Your AI Study Plan');
     if ($('plan-coach-summary')) $('plan-coach-summary').textContent = plan.coachSummary || '';
     if ($('plan-style-badge')) $('plan-style-badge').textContent = plan.sessionStyleLabel || 'Pomodoro 25 / 5';
 

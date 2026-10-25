@@ -394,6 +394,9 @@
                                     <span>Daily Study, Free Time &amp; Sleep</span>
                                 </span>
                                 <div class="pl-horizon-inline">
+                                    <label for="plan-start-date" class="pl-sub-label-inline">Day 1:</label>
+                                    <input type="date" id="plan-start-date" class="pl-select pl-select-compact" title="Day 1 is the day you open the planner. Pick a later date to start then.">
+                                    <button type="button" class="pl-link-btn" id="plan-start-today-btn" hidden>Today</button>
                                     <label for="plan-days-select" class="pl-sub-label-inline">Horizon:</label>
                                     <select id="plan-days-select" class="pl-select pl-select-compact">
                                         <option value="3">Next 3 Days</option>
@@ -665,11 +668,6 @@
                         <h2 id="plan-coach-headline">Your Adaptive AI Study Plan</h2>
                     </div>
                     <div class="pl-summary-badges">
-                        <button type="button" class="pl-drawer-pill-btn" id="toggle-plan-schedule-btn" aria-expanded="true" aria-controls="plan-summary-section" title="Expand or collapse the whole schedule">
-                            <i class="fa-solid fa-calendar-week"></i>
-                            <span id="toggle-plan-schedule-text">Collapse Schedule</span>
-                            <i class="fa-solid fa-chevron-down pl-mini-chevron"></i>
-                        </button>
                         <span class="chip ok" id="plan-style-badge">Pomodoro 25 / 5</span>
                         <span class="chip wait" id="plan-sync-status-chip">Ready to Sync</span>
                         <button type="button" class="pl-drawer-pill-btn" id="toggle-coach-insights-btn" aria-expanded="false">
@@ -741,6 +739,11 @@
                         <div class="pl-subjects-grid" id="prioritized-subjects-grid"></div>
                     </div>
                 </div>
+            </div>
+
+            <div class="pl-stale-banner" id="plan-stale-banner" hidden>
+                <span id="plan-stale-text">This plan started on an earlier day.</span>
+                <button type="button" class="btn btn-ghost btn-sm" id="plan-stale-restart-btn">Start from today</button>
             </div>
 
             <!-- Daily Study Schedule & Todoist Tasks -->

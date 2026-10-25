@@ -7,7 +7,6 @@ import { TodoistApi } from "@doist/todoist-sdk";
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import {
-  DEFAULT_CLASS_LEVEL,
   GEMINI_API_KEY,
   GEMINI_MODEL,
   TELEGRAM_BOT_TOKEN,
@@ -26,10 +25,13 @@ import {
   hasDatabaseUrl,
   hasQuizResult,
   initDb,
+  ncertSubjectName,
   readLocalStore,
+  relinkUserChapters,
   saveChapterResource,
   saveQuizProgress,
   saveStudyPlanForUser,
+  storedSubject,
   takeQuizSession,
   upsertQuizResult,
   withDb,
@@ -41,19 +43,21 @@ import {
   deleteUserKey,
   exportStorageStateFile,
   getTodoistKey,
+  getUserClass,
   getUserKeys,
   getUserProfile,
+  normalizeClassLevel,
   inspectStorageState,
   isValidTodoistKey,
   saveTodoistKey,
   saveUserConfig,
 } from "./intake/userKeys.js";
 import { saveSyllabus } from "./intake/storage.js";
+import { identifyChaptersFromPdf, syllabusFromNcertRows } from "./intake/chapterIdentifier.js";
 import { cancelAutoStart, enqueueExisting, getAutoStart, getGenerationStatus, scheduleAutoStart } from "./generationQueue.js";
 import {
   classifyGranularSubject,
   parseSyllabus,
-  parseSyllabusPdf,
   splitSyllabusIntoGranularSubjects,
 } from "./intake/syllabusParser.js";
 import {
@@ -136,14 +140,20 @@ export const saveKeys = safe(async (body = {}, hooks = {}) => {
     }
   }
 
+  let rawClass = body.class_level ?? body.classLevel;
+  if (rawClass !== undefined && rawClass !== null && String(rawClass).trim() !== "" && !normalizeClassLevel(rawClass)) {
+    return fail(400, "Class must be a number from 1 to 12.");
+  }
+
   const saved = await saveUserConfig(id, {
     keys,
     notebooklmState,
     email: rawEmail || null,
     todoistKey: rawTodoist,
+    classLevel: rawClass,
   });
 
-  if (!saved.keys && !saved.session && !saved.email && !saved.todoist && rawTodoist !== "") {
+  if (!saved.keys && !saved.session && !saved.email && !saved.todoist && !saved.class_level && rawTodoist !== "") {
     // Check if user already has keys saved so we don't error out on re-saving
     const existingKeys = await getUserKeys(id);
     const existingTodoist = await getTodoistKey(id);
@@ -163,6 +173,7 @@ export const saveKeys = safe(async (body = {}, hooks = {}) => {
     session_saved: saved.session,
     email_saved: saved.email,
     todoist_saved: saved.todoist,
+    class_level: await getUserClass(id),
     has_todoist_key: Boolean(activeTodoist),
     todoist_masked: activeTodoist ? `${activeTodoist.slice(0, 4)}…${activeTodoist.slice(-4)}` : null,
     google_email: rawEmail || null,
@@ -180,6 +191,7 @@ export const getKeys = safe(async (idRaw) => {
     telegram_user_id: id,
     google_email: profile?.google_email || null,
     notebooklm_session_saved: Boolean(profile?.has_session),
+    class_level: normalizeClassLevel(profile?.class_level) || (await getUserClass(id)),
     count: keys.length,
     masked: keys.map((k) => `AIza…${k.slice(-4)}`),
     has_todoist_key: Boolean(todoistKey),
@@ -244,7 +256,7 @@ export const getSyllabus = safe(async (chatIdRaw) => {
       [chatId]
     );
     for (const r of rows) {
-      const granular = classifyGranularSubject(r.subject, r.title, r.pdf_url, "", r.number);
+      const granular = storedSubject(r.subject, r.title, r.pdf_url, "", r.number);
       if (granular && granular !== r.subject) {
         r.subject = granular;
         await db.query("UPDATE syllabus_chapters SET subject = $1 WHERE id = $2", [granular, r.id]).catch(() => {});
@@ -321,7 +333,7 @@ export const quizChapters = safe(async (query = {}, ctx = {}) => {
     has_gemini_key: keys.length > 0 || Boolean(ctx?.cookies?.sa_gemini_key),
     chapters: rows.map((c) => ({
       id: c.id,
-      subject: classifyGranularSubject(c.subject, c.title, c.pdf_url, "", c.number),
+      subject: storedSubject(c.subject, c.title, c.pdf_url, "", c.number),
       exam: c.exam,
       number: c.number,
       title: c.title,
@@ -353,7 +365,7 @@ export const quizGenerate = safe(async (body = {}, ctx = {}) => {
         answers: existingSession.answers || existingSession.questions.map(() => ""),
         chapter: {
           id: ch.id,
-          subject: classifyGranularSubject(ch.subject, ch.title, ch.pdf_url, "", ch.number),
+          subject: storedSubject(ch.subject, ch.title, ch.pdf_url, "", ch.number),
           exam: ch.exam,
           number: ch.number,
           title: ch.title,
@@ -467,7 +479,7 @@ export const quizSubmit = safe(async (body = {}, ctx = {}) => {
     if (!session) return null;
 
     const ch = session.chapter;
-    ch.subject = classifyGranularSubject(ch.subject, ch.title, ch.pdf_url, "", ch.number);
+    ch.subject = storedSubject(ch.subject, ch.title, ch.pdf_url, "", ch.number);
 
     // Merge saved pending answers with submitted answers in order so no previous answer is ever lost
     const mergedAnswers = session.questions.map((_, idx) => {
@@ -615,7 +627,7 @@ Identify:
           chNum
         );
         return {
-          class_level: d.class_level || DEFAULT_CLASS_LEVEL,
+          class_level: d.class_level || null,
           exam: null,
           subjects: [
             {
@@ -645,7 +657,7 @@ Identify:
 /**
  * Deterministic multi-line text syllabus parser fallback (works even without a Gemini key or when offline).
  */
-export function parsePlainTextSyllabusHeuristic(rawText = "") {
+export function parsePlainTextSyllabusHeuristic(rawText = "", classLevel = null) {
   const lines = String(rawText || "")
     .split(/\r?\n/)
     .map((l) => l.trim())
@@ -707,7 +719,7 @@ export function parsePlainTextSyllabusHeuristic(rawText = "") {
 
   const subjects = [...bySubject.entries()].map(([name, chapters]) => ({ name, chapters }));
   return subjects.length
-    ? { class_level: DEFAULT_CLASS_LEVEL || 10, exam: "School Syllabus", subjects }
+    ? { class_level: classLevel, exam: "School Syllabus", subjects }
     : null;
 }
 
@@ -721,71 +733,85 @@ export const syllabusUpload = safe(async (body = {}, ctx = {}) => {
   const extra = [body.geminiKey, ctx?.cookies?.sa_gemini_key].filter((k) => typeof k === "string" && k.length >= 20);
   const keys = [...new Set([...saved, ...extra])];
 
-  let parseFn, payload;
+  const userClass = await getUserClass(id); // chosen on the setup page; never from .env
+
+  let syllabus = null;
+  let identified = null;
+
   if (body.kind === "pdf") {
+    // PDF upload: no syllabus parser. Work out which chapter(s) of ncert_chapters the PDF is, then take
+    // chapter number, subject and pdf_url straight from those table rows.
     const b64 = String(body.dataBase64 || "");
     if (!b64) return fail(400, "No file received");
     const bytes = new Uint8Array(Buffer.from(b64, "base64"));
     if (!bytes.length) return fail(400, "That file is empty");
     if (bytes.length > MAX_SYLLABUS_PDF_BYTES) return fail(413, "That PDF is over 20 MB, which is too big.");
     if (String.fromCharCode(...bytes.slice(0, 4)) !== "%PDF") return fail(400, "That file doesn't look like a PDF");
-    parseFn = parseSyllabusPdf;
-    payload = bytes;
+
+    if (!hasDatabaseUrl()) return fail(503, "Chapters are looked up in the ncert_chapters table, so DATABASE_URL must be set.");
+
+    identified = await identifyChaptersFromPdf({
+      pdfBytes: bytes,
+      fileName: body.fileName || "",
+      classLevel: userClass,
+      apiKeys: keys,
+    });
+    if (identified.empty) return fail(404, "The ncert_chapters table has no chapters with a pdf_url yet.");
+    if (!identified.rows.length) {
+      return fail(
+        422,
+        userClass
+          ? `Couldn't tell which Class ${userClass} chapter that PDF is. Check that it is an NCERT chapter of your class (and your class on the setup page).`
+          : "Couldn't tell which chapter that PDF is. Choose your class on the setup page, then upload it again."
+      );
+    }
+    syllabus = syllabusFromNcertRows(identified.rows, userClass);
   } else if (body.kind === "text") {
     const text = String(body.text || "").trim();
     if (text.length < 3) return fail(400, "Paste your syllabus text first");
     if (text.length > 100_000) return fail(413, "That text is too long. Paste just the portion you need.");
-    parseFn = parseSyllabus;
-    payload = text;
+
+    if (keys.length || GEMINI_API_KEY) {
+      try {
+        syllabus = await parseSyllabus(text, keys, body.fileName || "");
+      } catch (e) {
+        console.log(`Initial syllabus parse failed (${e.message}), trying single-chapter/heuristic extractor`);
+      }
+      if (!syllabus?.subjects?.length) {
+        syllabus = await extractSingleChapterFallback(body, keys);
+      }
+    }
+    if (!syllabus?.subjects?.length) {
+      syllabus = parsePlainTextSyllabusHeuristic(body.text, userClass);
+    }
+    if (!syllabus?.subjects?.length) {
+      const fallbackTitle = String(body.text || "Custom Study Topic").split("\n")[0].slice(0, 60).trim();
+      const inferredSubj = classifyGranularSubject("", fallbackTitle, "", "", 1);
+      syllabus = {
+        class_level: userClass,
+        exam: "Custom Source",
+        subjects: [
+          {
+            name: inferredSubj !== "General" ? inferredSubj : "Physics",
+            chapters: [
+              {
+                number: 1,
+                title: fallbackTitle || "Uploaded Study Material",
+                is_ncert: false,
+                ncert_book_code: null,
+                ncert_chapter_number: null,
+                pdf_url: null,
+                recommended_questions: 12,
+              },
+            ],
+          },
+        ],
+      };
+    }
+    syllabus = splitSyllabusIntoGranularSubjects(syllabus);
   } else {
     return fail(400, 'kind must be "pdf" or "text"');
   }
-
-  let syllabus = null;
-  if (keys.length || GEMINI_API_KEY) {
-    try {
-      syllabus = await parseFn(payload, keys, body.fileName || "");
-    } catch (e) {
-      console.log(`Initial syllabus parse failed (${e.message}), trying single-chapter/heuristic extractor`);
-    }
-    if (!syllabus?.subjects?.length) {
-      syllabus = await extractSingleChapterFallback(body, keys);
-    }
-  }
-
-  if (!syllabus?.subjects?.length && body.kind === "text") {
-    syllabus = parsePlainTextSyllabusHeuristic(body.text);
-  }
-
-  if (!syllabus?.subjects?.length) {
-    const fallbackTitle =
-      body.kind === "pdf"
-        ? String(body.fileName || "Uploaded Study PDF").replace(/\.pdf$/i, "").trim()
-        : String(body.text || "Custom Study Topic").split("\n")[0].slice(0, 60).trim();
-    const inferredSubj = classifyGranularSubject("", fallbackTitle, "", "", 1);
-    syllabus = {
-      class_level: DEFAULT_CLASS_LEVEL,
-      exam: "Custom Source",
-      subjects: [
-        {
-          name: inferredSubj !== "General" ? inferredSubj : "Physics",
-          chapters: [
-            {
-              number: 1,
-              title: fallbackTitle || "Uploaded Study Material",
-              is_ncert: false,
-              ncert_book_code: null,
-              ncert_chapter_number: null,
-              pdf_url: null,
-              recommended_questions: 12,
-            },
-          ],
-        },
-      ],
-    };
-  }
-
-  syllabus = splitSyllabusIntoGranularSubjects(syllabus);
 
   const firstSub = syllabus.subjects[0];
   const firstCh = firstSub?.chapters?.[0];
@@ -823,6 +849,21 @@ export const syllabusUpload = safe(async (body = {}, ctx = {}) => {
   return ok({
     ok: true,
     subjects: results,
+    identified: identified
+      ? {
+          method: identified.method,
+          class_level: userClass,
+          class_missing: !userClass,
+          chapters: identified.rows.map((r) => ({
+            ncert_id: r.id,
+            class: r.class,
+            subject: ncertSubjectName(r) || "General",
+            number: r.number,
+            title: r.title,
+            pdf_url: r.pdf_url,
+          })),
+        }
+      : null,
     ai_recommended_questions: aiRecommended,
     generation,
     chapters: allChapters,
@@ -902,7 +943,7 @@ export const plannerState = safe(async (query = {}, ctx = {}) => {
 
   const normalizedChapters = chapters.map((c) => ({
     id: c.id,
-    subject: classifyGranularSubject(c.subject, c.title, c.pdf_url, "", c.number),
+    subject: storedSubject(c.subject, c.title, c.pdf_url, "", c.number),
     exam: c.exam || "",
     number: c.number,
     title: c.title,
@@ -985,7 +1026,7 @@ export const plannerSyllabusSave = safe(async (body = {}, ctx = {}) => {
     const title = String(item?.title || "").trim();
     if (!title) continue;
     const rawSubject = String(item?.subject || "General").trim();
-    const gran = classifyGranularSubject(rawSubject, title, item?.pdf_url || "", "", item?.number);
+    const gran = storedSubject(rawSubject, title, item?.pdf_url || "", "", item?.number);
     if (!bySubject.has(gran)) bySubject.set(gran, []);
     const list = bySubject.get(gran);
     list.push({
@@ -1003,7 +1044,7 @@ export const plannerSyllabusSave = safe(async (body = {}, ctx = {}) => {
     const existing = await getChaptersWithResults(id);
     for (const ex of existing) {
       if (ex.is_custom) continue;
-      const gran = classifyGranularSubject(ex.subject, ex.title, ex.pdf_url, "", ex.number);
+      const gran = storedSubject(ex.subject, ex.title, ex.pdf_url, "", ex.number);
       if (!bySubject.has(gran)) bySubject.set(gran, []);
       const list = bySubject.get(gran);
       if (!list.some((c) => c.title.toLowerCase() === String(ex.title).toLowerCase())) {
@@ -1021,7 +1062,7 @@ export const plannerSyllabusSave = safe(async (body = {}, ctx = {}) => {
   }
 
   const syllabusObj = {
-    class_level: DEFAULT_CLASS_LEVEL || 10,
+    class_level: await getUserClass(id),
     exam: String(body.exam || ""),
     subjects: [...bySubject.entries()].map(([name, chapters]) => ({
       name,
@@ -1075,6 +1116,7 @@ export const plannerGenerate = safe(async (body = {}, ctx = {}) => {
     config,
     geminiKeys,
     startDate: body.startDate || null,
+    classLevel: await getUserClass(id),
   });
 
   let syncResult = null;
@@ -1127,7 +1169,7 @@ export const plannerSyncTodoist = safe(async (body = {}, ctx = {}) => {
   if (!planToSync || !Array.isArray(planToSync.days) || !planToSync.days.length) {
     const chapters = await getChaptersWithResults(id);
     const geminiKeys = await getUserKeys(id);
-    planToSync = await generateAiStudyPlan({ chapters, config, geminiKeys });
+    planToSync = await generateAiStudyPlan({ chapters, config, geminiKeys, classLevel: await getUserClass(id) });
   }
 
   try {
@@ -1228,10 +1270,14 @@ export const resourcesList = safe(async (query = {}, ctx = {}) => {
   const id = quizUserId(query.telegramUserId, ctx);
   if (Number.isNaN(id)) return fail(400, "Missing or invalid Telegram user id", { chapters: [] });
 
+  // subject, number and link come from ncert_chapters: re-link anything saved before that was in place
+  await relinkUserChapters(id).catch((e) => console.log(`[ncert] re-link failed: ${e.message}`));
+
   const { rows } = await withDb((db) =>
     db.query(
-      `SELECT sc.id, sc.subject, sc.number, sc.title, g.status, g.error, g.notebook_url, g.step, g.result_json
+      `SELECT sc.id, sc.subject, COALESCE(nc.number, sc.number) AS number, sc.title, g.status, g.error, g.notebook_url, g.step, g.result_json
          FROM syllabus_chapters sc
+         LEFT JOIN ncert_chapters nc ON nc.id = sc.ncert_id
          LEFT JOIN chapter_generation g
            ON g.telegram_user_id = sc.chat_id AND g.subject = sc.subject AND g.exam = sc.exam
           AND lower(g.chapter_title) = lower(sc.title)
@@ -1338,55 +1384,15 @@ export const quizGenerateCustom = syllabusUpload;
 // ---------------------------------------------------------------------------
 // NotebookLM Resource Generation Flow (public/resources.html)
 // ---------------------------------------------------------------------------
+// Exactly the tiles in NotebookLM's Studio panel, minus Reports and Infographic (never offered).
 export const NOTEBOOKLM_RESOURCE_TYPES = [
-  {
-    id: "audio_overview",
-    label: "Audio Overview",
-    icon: "fa-solid fa-headphones",
-    description: "Two-host AI deep-dive conversation unpacking the chapter's big ideas.",
-  },
-  {
-    id: "study_guide",
-    label: "Study Guide",
-    icon: "fa-solid fa-book-open-reader",
-    description: "Structured concept breakdown, glossary of key terms, and short-answer review.",
-  },
-  {
-    id: "briefing_doc",
-    label: "Briefing Doc",
-    icon: "fa-solid fa-file-lines",
-    description: "Executive summary of core principles, formulas, and high-yield exam takeaways.",
-  },
-  {
-    id: "faq",
-    label: "FAQ",
-    icon: "fa-solid fa-circle-question",
-    description: "Frequently asked exam questions with clear, step-by-step model explanations.",
-  },
-  {
-    id: "timeline",
-    label: "Timeline",
-    icon: "fa-solid fa-timeline",
-    description: "Sequential flow of events, scientific processes, or step-by-step derivations.",
-  },
-  {
-    id: "flashcards",
-    label: "Flashcards",
-    icon: "fa-solid fa-layer-group",
-    description: "Active-recall Q&A cards covering definitions, equations, and key distinctions.",
-  },
-  {
-    id: "mind_map",
-    label: "Mind Map",
-    icon: "fa-solid fa-diagram-project",
-    description: "Hierarchical topic tree mapping how every subtopic in the chapter connects.",
-  },
-  {
-    id: "slide_deck",
-    label: "Slide Deck",
-    icon: "fa-solid fa-chalkboard",
-    description: "Slide-by-slide visual revision outline for rapid pre-exam review.",
-  },
+  { id: "audio_overview", label: "Audio Overview", icon: "fa-solid fa-headphones", description: "Two-host AI deep-dive conversation unpacking the chapter's big ideas." },
+  { id: "video_overview", label: "Video Overview", icon: "fa-solid fa-video", description: "Narrated visual video summary of the chapter." },
+  { id: "mind_map", label: "Mind Map", icon: "fa-solid fa-diagram-project", description: "Hierarchical topic tree mapping how every subtopic in the chapter connects." },
+  { id: "flashcards", label: "Flashcards", icon: "fa-solid fa-layer-group", description: "Active-recall Q&A cards covering definitions, equations, and key distinctions." },
+  { id: "quiz", label: "Quiz", icon: "fa-solid fa-circle-question", description: "Multiple-choice quiz that tests the chapter's key ideas." },
+  { id: "slide_deck", label: "Slide Deck", icon: "fa-solid fa-chalkboard", description: "Slide-by-slide visual revision deck for rapid pre-exam review." },
+  { id: "data_table", label: "Data Table", icon: "fa-solid fa-table", description: "Key facts, terms and comparisons organised into a table." },
 ];
 
 export const EXCLUDED_RESOURCE_TYPES = new Set([
@@ -1494,30 +1500,14 @@ async def run():
             if r_type == "audio_overview":
                 st = await client.artifacts.generate_audio(nb.id, source_ids=src_ids or None)
                 task_id = getattr(st, "task_id", None)
-            elif r_type == "study_guide":
-                if hasattr(client.artifacts, "generate_study_guide"):
-                    st = await client.artifacts.generate_study_guide(nb.id, source_ids=src_ids or None)
-                else:
-                    st = await client.artifacts.generate_report(nb.id, report_format=ReportFormat.STUDY_GUIDE, source_ids=src_ids or None)
+            elif r_type == "video_overview":
+                st = await client.artifacts.generate_video(nb.id, source_ids=src_ids or None)
                 task_id = getattr(st, "task_id", None)
-            elif r_type == "briefing_doc":
-                st = await client.artifacts.generate_report(nb.id, report_format=ReportFormat.BRIEFING_DOC, source_ids=src_ids or None)
+            elif r_type == "quiz":
+                st = await client.artifacts.generate_quiz(nb.id, source_ids=src_ids or None)
                 task_id = getattr(st, "task_id", None)
-            elif r_type == "faq":
-                st = await client.artifacts.generate_report(
-                    nb.id,
-                    report_format=ReportFormat.CUSTOM,
-                    custom_prompt=f"Create a comprehensive exam FAQ with questions and model answers for {ch.get('title')}.",
-                    source_ids=src_ids or None,
-                )
-                task_id = getattr(st, "task_id", None)
-            elif r_type == "timeline":
-                st = await client.artifacts.generate_report(
-                    nb.id,
-                    report_format=ReportFormat.CUSTOM,
-                    custom_prompt=f"Create a detailed chronological timeline and sequential process breakdown for {ch.get('title')}.",
-                    source_ids=src_ids or None,
-                )
+            elif r_type == "data_table":
+                st = await client.artifacts.generate_data_table(nb.id, source_ids=src_ids or None)
                 task_id = getattr(st, "task_id", None)
             elif r_type == "flashcards":
                 st = await client.artifacts.generate_flashcards(nb.id, source_ids=src_ids or None)
@@ -1624,7 +1614,7 @@ const RESOURCE_RESPONSE_SCHEMA = {
 
 function buildResourcePrompt(chapter, resourceType) {
   const meta = RESOURCE_META_BY_ID.get(resourceType) || { label: resourceType };
-  const cls = chapter.class ?? DEFAULT_CLASS_LEVEL;
+  const cls = chapter.class ?? null; // the chapter row carries the student's class
   const level = cls ? `Class ${cls}` : "CBSE Secondary School";
   const chNum = chapter.number != null ? `Chapter ${chapter.number}: ` : "";
 
@@ -1633,18 +1623,15 @@ function buildResourcePrompt(chapter, resourceType) {
 - In "items", provide 8 to 12 conversational turns where label is "Host A (Alex)" or "Host B (Sam)", prompt is the subtopic being discussed, and detail is the spoken dialogue line.
 - In "sections", summarize the key takeaways and analogies discussed in the episode.
 - In "markdown", provide the full formatted transcript and show notes.`,
-    study_guide: `Create a comprehensive NotebookLM Study Guide for exam preparation.
-- In "sections", include: (1) Core Concepts & Big Picture, (2) Key Definitions & Formulas, (3) Common Exam Pitfalls, and (4) Short-Answer Review Prompts with Model Answers.
-- In "items", provide 6 to 8 key glossary terms where label is the term, prompt is its category/formula, and detail is its clear definition.`,
-    briefing_doc: `Create a concise NotebookLM Briefing Document.
-- In "sections", include: (1) Executive Overview, (2) Essential Principles & Mechanisms, (3) High-Yield Exam Takeaways, and (4) Quick Revision Checklist.
-- In "items", list 5 to 7 critical facts or principles (label = principle name, prompt = why it matters, detail = concise explanation).`,
-    faq: `Create a NotebookLM FAQ (Frequently Asked Questions) resource targeting high-probability exam questions.
-- In "items", provide 6 to 8 Q&A pairs where label is "Q1", "Q2", etc., prompt is the exact question a student or examiner asks, and detail is the complete, step-by-step model answer.
-- In "sections", group the themes covered by these FAQs.`,
-    timeline: `Create a NotebookLM Timeline / Sequential Process Breakdown for this chapter.
-- In "items", provide 6 to 9 ordered steps, stages, derivations, or chronological milestones where label is the Step/Stage/Year (e.g. "Stage 1", "Step 2"), prompt is the milestone title, and detail is what happens and why.
-- In "sections", explain how the sequence connects from start to finish.`,
+    video_overview: `Create a NotebookLM-style "Video Overview" script for this chapter.
+- In "items", provide 6 to 8 scenes where label is "Scene 1", "Scene 2", etc., prompt is the on-screen visual, and detail is the narration.
+- In "sections", summarize the key takeaways.`,
+    quiz: `Create a NotebookLM multiple-choice Quiz for this chapter.
+- In "items", provide 8 to 10 questions where label is "Q1", "Q2", etc., prompt is the question with four options A-D, and detail is the correct answer with a one-line explanation.
+- In "sections", group the questions by subtopic.`,
+    data_table: `Create a NotebookLM Data Table for this chapter.
+- In "items", provide 8 to 12 rows where label is the term or topic, prompt is its category, and detail is the key facts or values.
+- In "sections", describe what each column means.`,
     flashcards: `Create a deck of NotebookLM Active-Recall Flashcards for this chapter.
 - In "items", provide 8 to 10 flashcards where label is the subtopic tag (e.g. "Formula", "Definition", "Concept"), prompt is the Front of the card (question/term), and detail is the Back of the card (concise, accurate answer).
 - In "sections", provide quick memory hooks and mnemonics.`,
@@ -1847,7 +1834,7 @@ export const resourcesChapters = safe(async (query = {}, ctx = {}) => {
     chapters: rows.map((c) => ({
       id: c.id,
       class: c.class,
-      subject: classifyGranularSubject(c.subject, c.title, c.pdf_url, "", c.number),
+      subject: storedSubject(c.subject, c.title, c.pdf_url, "", c.number),
       exam: c.exam,
       number: c.number,
       title: c.title,

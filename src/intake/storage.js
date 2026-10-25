@@ -1,19 +1,13 @@
 // src/intake/storage.js
-import { DEFAULT_CLASS_LEVEL } from "../config.js";
-import { hasDatabaseUrl, readLocalStore, withDb, writeLocalStore } from "../db.js";
+import { hasDatabaseUrl, readLocalStore, withDb, writeLocalStore, pickNcertByTitle, ncertSubjectName } from "../db.js";
 import { questionCountFor } from "../quizEngine.js";
-import { classifyGranularSubject, splitSyllabusIntoGranularSubjects } from "./syllabusParser.js";
-
-function buildNcertPdfUrl(bookCode, chapterNumber) {
-  if (!bookCode || !chapterNumber) return null;
-  const cleanCode = bookCode.toLowerCase().trim();
-  const padded = String(chapterNumber).padStart(2, "0");
-  return `https://ncert.nic.in/textbook/pdf/${cleanCode}${padded}.pdf`;
-}
+import { getUserClass } from "./userKeys.js";
 
 /** Save each subject (always split into granular subjects: History, Civics, Geography, Economics, Physics, Chemistry, Biology). */
 export async function saveSyllabus(chatId, rawSyllabus, options = {}) {
-  const syllabus = splitSyllabusIntoGranularSubjects(rawSyllabus);
+  const syllabus = rawSyllabus; // subjects come from the database (ncert_chapters), not from the parser
+  // The student's class comes from the setup page (users.class_level), never from .env
+  const userClass = await getUserClass(chatId).catch(() => null);
   const exam = syllabus.exam || "";
   const results = {};
   const userQuestionCount =
@@ -32,11 +26,11 @@ export async function saveSyllabus(chatId, rawSyllabus, options = {}) {
     for (const subject of syllabus.subjects || []) {
       const label = syllabus.exam ? `${subject.name} (${syllabus.exam})` : subject.name;
       const prepared = (subject.chapters || []).map((c) => {
-        const bookCode = c.ncert_book_code ? c.ncert_book_code.toLowerCase().trim() : null;
-        const ncertChNum = c.ncert_chapter_number || c.number;
-        const pdfUrl = c.is_ncert
-          ? buildNcertPdfUrl(bookCode, ncertChNum) || c.pdf_url || null
-          : c.pdf_url || null;
+        // NEVER build PDF URLs from AI-provided ncert_book_code/ncert_chapter_number.
+        // Only use verified URLs from ncert_chapters table (looked up by title in the DB section below).
+        // For local store, we can't do DB lookups, so leave pdf_url null for NCERT chapters;
+        // the DB section will populate the correct URL when saving to Postgres.
+        const pdfUrl = c.is_ncert ? null : (c.pdf_url || null);
         const matchStatus = pdfUrl ? "matched" : "unmatched";
         const aiDefaultCount = questionCountFor({
           subject: subject.name,
@@ -46,7 +40,7 @@ export async function saveSyllabus(chatId, rawSyllabus, options = {}) {
         const recommendedQuestions = userQuestionCount || Math.max(10, Math.min(50, aiDefaultCount));
         return {
           id: nextId++,
-          class: syllabus.class_level || DEFAULT_CLASS_LEVEL,
+          class: userClass || syllabus.class_level || null,
           subject: subject.name,
           exam,
           number: c.number,
@@ -91,10 +85,10 @@ export async function saveSyllabus(chatId, rawSyllabus, options = {}) {
   }
 
   await withDb(async (db) => {
-    // Class priority: in the message > already saved > CLASS_LEVEL from .env
+    // Class priority: the one this student chose on the setup page > the syllabus itself > already saved on the chat
     const { rows: chatRows } = await db.query("SELECT class FROM chats WHERE chat_id = $1", [chatId]);
     const savedClass = chatRows[0] ? chatRows[0].class : null;
-    const classValue = syllabus.class_level || savedClass || DEFAULT_CLASS_LEVEL;
+    const classValue = userClass || syllabus.class_level || savedClass || null;
 
     await db.query(
       "INSERT INTO chats (chat_id, class) VALUES ($1, $2) " +
@@ -102,36 +96,35 @@ export async function saveSyllabus(chatId, rawSyllabus, options = {}) {
       [chatId, classValue]
     );
 
-    // Also migrate any legacy "Social Science" or "Science" rows in DB for this chat into granular subjects
-    const { rows: legacyRows } = await db.query(
-      "SELECT id, subject, exam, number, title, pdf_url FROM syllabus_chapters WHERE chat_id = $1",
-      [chatId]
-    );
-    for (const row of legacyRows) {
-      const granular = classifyGranularSubject(row.subject, row.title, row.pdf_url, "", row.number);
-      if (granular && granular !== row.subject) {
-        await db.query("UPDATE syllabus_chapters SET subject = $1 WHERE id = $2", [granular, row.id]);
-        await db
-          .query(
-            `UPDATE chapter_quiz_results
-                SET subject = $1
-              WHERE telegram_user_id = $2 AND subject = $3 AND exam = $4 AND chapter_title = $5`,
-            [granular, chatId, row.subject, row.exam || "", row.title]
-          )
-          .catch(() => {});
+    // Subject and link come from ncert_chapters (matched by chapter title and class). Chapters with no match
+    // keep what the upload gave them.
+    const { rows: ncertRows } = await db
+      .query("SELECT id, class, book, subject, number, title, pdf_url FROM ncert_chapters WHERE pdf_url IS NOT NULL")
+      .catch(() => ({ rows: [] }));
+    const rowFor = (c) => {
+      const id = c.ncert_id ?? c.ncertId;
+      return (id != null && ncertRows.find((r) => r.id === Number(id))) || pickNcertByTitle(ncertRows, c.title, classValue);
+    };
+    const grouped = new Map();
+    for (const sub of syllabus.subjects || []) {
+      for (const c of sub.chapters || []) {
+        const row = rowFor(c);
+        const name = (row && ncertSubjectName(row)) || sub.name;
+        const chapter = row ? { ...c, number: row.number, is_ncert: true, ncert_book_code: null, ncert_chapter_number: null, pdf_url: row.pdf_url } : c; // number = the one in ncert_chapters
+        if (!grouped.has(name)) grouped.set(name, { name, chapters: [] });
+        grouped.get(name).chapters.push(chapter);
       }
     }
+    const dbSubjects = [...grouped.values()];
 
-    for (const subject of syllabus.subjects) {
+    for (const subject of dbSubjects) {
       const label = syllabus.exam ? `${subject.name} (${syllabus.exam})` : subject.name;
 
       const preparedChapters = subject.chapters.map((c) => {
-        const bookCode = c.ncert_book_code ? c.ncert_book_code.toLowerCase().trim() : null;
-        const ncertChNum = c.ncert_chapter_number || c.number;
-        const pdfUrl =
-          c.is_ncert
-            ? buildNcertPdfUrl(bookCode, ncertChNum) || c.pdf_url || null
-            : c.pdf_url || null;
+        // NEVER build PDF URLs from AI-provided ncert_book_code/ncert_chapter_number.
+        // Only use verified URLs from ncert_chapters table (matched by title below).
+        // AI-provided book codes are NEVER trusted for URL construction.
+        const pdfUrl = c.is_ncert ? null : (c.pdf_url || null);
         const matchStatus = pdfUrl ? "matched" : "unmatched";
         const aiDefaultCount = questionCountFor({
           subject: subject.name,
@@ -143,8 +136,9 @@ export async function saveSyllabus(chatId, rawSyllabus, options = {}) {
         return {
           number: c.number,
           title: c.title,
-          bookCode,
-          ncertChNum,
+          ncertId: c.ncert_id ?? null,
+          bookCode: null,
+          ncertChNum: null,
           pdfUrl,
           matchStatus,
           recommendedQuestions,
@@ -212,16 +206,17 @@ export async function saveSyllabus(chatId, rawSyllabus, options = {}) {
 
       for (const c of finalChapters) {
         let ncertId = null;
+        let savePdfUrl = c.pdfUrl;
 
-        if (c.pdfUrl) {
-          const effectiveClass = classValue || 0;
-          const bookName = c.bookCode || subject.name;
-          const chNum = c.ncertChNum || c.number || 1;
-          const { rows: found } = await db.query(
-            "SELECT id, pdf_url FROM ncert_chapters WHERE class = $1 AND book = $2 AND number = $3",
-            [effectiveClass, bookName, chNum]
-          );
-          ncertId = found[0] ? found[0].id : null;
+        // ncert_chapters is the source of truth: match by title and take ITS link, not Gemini's guessed number
+        const byTitle = rowFor(c);
+        if (byTitle) {
+          ncertId = byTitle.id;
+          savePdfUrl = byTitle.pdf_url;
+        } else {
+          // NO fallback to AI-provided book codes. If no verified match, leave unmatched.
+          ncertId = null;
+          savePdfUrl = null;
         }
 
         await db.query(
@@ -235,7 +230,7 @@ export async function saveSyllabus(chatId, rawSyllabus, options = {}) {
             exam,
             c.number,
             c.title,
-            c.pdfUrl,
+            savePdfUrl,
             ncertId,
             c.matchStatus,
             c.recommendedQuestions,

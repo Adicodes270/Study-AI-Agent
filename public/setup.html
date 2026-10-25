@@ -261,6 +261,33 @@
                 </p>
             </div>
 
+            <!-- Student's class: saved per user (not read from .env). Used to find the right NCERT chapters. -->
+            <div class="bento-card setup-config-card" id="class-card" style="margin-bottom: 1.25rem;">
+                <div class="card-head-row">
+                    <div>
+                        <h3><i class="fa-solid fa-graduation-cap icon-accent"></i> Your Class</h3>
+                        <p>Used to pick the right NCERT chapter when you upload a PDF, and for your quizzes and study plan.</p>
+                    </div>
+                    <span class="chip wait" id="class-status-chip">Choose class</span>
+                </div>
+                <label for="class-level-select" class="field-label">Class / Grade</label>
+                <select id="class-level-select" class="setup-input" aria-describedby="class-status-chip">
+                    <option value="">Select your class…</option>
+                    <option value="1">Class 1</option>
+                    <option value="2">Class 2</option>
+                    <option value="3">Class 3</option>
+                    <option value="4">Class 4</option>
+                    <option value="5">Class 5</option>
+                    <option value="6">Class 6</option>
+                    <option value="7">Class 7</option>
+                    <option value="8">Class 8</option>
+                    <option value="9">Class 9</option>
+                    <option value="10">Class 10</option>
+                    <option value="11">Class 11</option>
+                    <option value="12">Class 12</option>
+                </select>
+            </div>
+
             <div class="setup-grid">
                 <!-- Left: One-Tap Bot Pairing & Auto-Detect Chat ID -->
                 <div class="bento-card setup-config-card">
