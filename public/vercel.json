@@ -1,6 +1,0 @@
-{
-  "cleanUrls": true,
-  "rewrites": [
-    { "source": "/api/:path*", "destination": "https://study-ai-agent.up.railway.app/api/:path*" }
-  ]
-}
