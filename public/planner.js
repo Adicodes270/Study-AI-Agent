@@ -1389,8 +1389,31 @@
     renderPlanSummary();
   }
 
+  // Limits: sleep is at least 7h, and study + sleep can never go past 24h in one day.
+  const MIN_SLEEP_HOURS = 7;
+  const MIN_STUDY_HOURS = 3;
+  const MAX_DAY_HOURS = 24;
+  function normalizeStudySleep(cfg, changed) {
+    let sleep = Math.max(MIN_SLEEP_HOURS, Math.min(12, Number(cfg.dailySleepHours) || 8));
+    let study = Math.max(MIN_STUDY_HOURS, Math.min(14, Number(cfg.dailyStudyHours) || 5));
+    if (study + sleep > MAX_DAY_HOURS) {
+      if (changed === 'dailySleepHours') sleep = Math.max(MIN_SLEEP_HOURS, MAX_DAY_HOURS - study);
+      else study = Math.max(MIN_STUDY_HOURS, MAX_DAY_HOURS - sleep);
+    }
+    cfg.dailySleepHours = sleep;
+    cfg.dailyStudyHours = study;
+  }
+
   function syncConfigControlsFromState() {
     const cfg = state.config;
+    normalizeStudySleep(cfg);
+    // The sliders themselves also stop at the allowed value
+    ['daily-study-hours-range', 'daily-study-hours-input'].forEach((id) => {
+      if ($(id)) { $(id).min = MIN_STUDY_HOURS; $(id).max = Math.min(14, MAX_DAY_HOURS - cfg.dailySleepHours); }
+    });
+    ['daily-sleep-hours-range', 'daily-sleep-hours-input'].forEach((id) => {
+      if ($(id)) { $(id).min = MIN_SLEEP_HOURS; $(id).max = Math.min(12, MAX_DAY_HOURS - cfg.dailyStudyHours); }
+    });
 
     if ($('daily-study-hours-input')) $('daily-study-hours-input').value = cfg.dailyStudyHours;
     if ($('daily-study-hours-range')) $('daily-study-hours-range').value = cfg.dailyStudyHours;
@@ -1441,10 +1464,11 @@
     const rangeEl = $(rangeId);
     const numEl = $(numId);
     const update = (val) => {
-      const n = Math.max(Number(rangeEl.min), Math.min(Number(rangeEl.max), parseFloat(val) || 5));
+      const n = Math.max(Number(rangeEl.min), Math.min(Number(rangeEl.max), parseFloat(val) || Number(rangeEl.min)));
       state.config[configKey] = n;
-      if (rangeEl) rangeEl.value = n;
-      if (numEl) numEl.value = n;
+      normalizeStudySleep(state.config, configKey);
+      if (rangeEl) rangeEl.value = state.config[configKey];
+      if (numEl) numEl.value = state.config[configKey];
       syncConfigControlsFromState();
       saveLocalPlannerCache();
     };
