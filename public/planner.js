@@ -223,6 +223,7 @@
     chaptersShowAll: false,
     weakQueueOpen: false,
     coachInsightsOpen: false,
+    planScheduleOpen: true,
     subjectsBreakdownOpen: false,
     expandedDays: new Set(),
     expandedBlocks: new Set(),
@@ -280,7 +281,13 @@
   // ==========================================================================
   // PROGRESSIVE DISCLOSURE & INTERACTIVE ACCORDION HELPERS
   // ==========================================================================
+  // One step at a time: opening a step folds the other one away, and the step pills show which
+  // step you are on (the plan, step 3, is the "home" step when nothing is open).
   function setSectionExpanded(stepNum, isOpen, scrollIntoView = false) {
+    if (isOpen) {
+      if (stepNum === 1 && state.step2Open) setSectionExpanded(2, false);
+      if (stepNum === 2 && state.step1Open) setSectionExpanded(1, false);
+    }
     if (stepNum === 1) {
       state.step1Open = Boolean(isOpen);
       const sec = $('syllabus-section');
@@ -312,6 +319,18 @@
         sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }
     }
+    $('nav-pill-step1')?.classList.toggle('is-active', state.step1Open);
+    $('nav-pill-step2')?.classList.toggle('is-active', state.step2Open);
+    $('nav-pill-step3')?.classList.toggle('is-active', !state.step1Open && !state.step2Open);
+  }
+
+  // After the student asks for a plan, fold the setup steps away and bring the plan into view.
+  async function generateThenShowPlan() {
+    await triggerGeneratePlan(false);
+    if (!state.plan) return;
+    setSectionExpanded(1, false);
+    setSectionExpanded(2, false);
+    $('plan-summary-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 
   function initInteractiveAccordionsAndTabs() {
@@ -381,6 +400,20 @@
       state.showAllConfigPanels = !state.showAllConfigPanels;
       updateConfigTabsUI();
     });
+
+    // Step 3: Expand / Collapse the whole schedule (headline stays visible)
+    const applyPlanScheduleOpen = () => {
+      $('plan-summary-section')?.classList.toggle('is-plan-collapsed', !state.planScheduleOpen);
+      $('toggle-plan-schedule-btn')?.setAttribute('aria-expanded', String(state.planScheduleOpen));
+      const t = $('toggle-plan-schedule-text');
+      if (t) t.textContent = state.planScheduleOpen ? 'Collapse Schedule' : 'Expand Schedule';
+    };
+    const togglePlanSchedule = () => {
+      state.planScheduleOpen = !state.planScheduleOpen;
+      applyPlanScheduleOpen();
+    };
+    $('toggle-plan-schedule-btn')?.addEventListener('click', togglePlanSchedule);
+    $('plan-coach-headline')?.addEventListener('click', togglePlanSchedule);
 
     // Step 3: Collapsible AI Coach Strategy & Tips Drawer
     $('toggle-coach-insights-btn')?.addEventListener('click', () => {
@@ -1562,7 +1595,7 @@
     }
     const step2Sub = $('nav-pill-step2-sub');
     if (step2Sub) {
-      step2Sub.textContent = `${cfg.dailyStudyHours}h study · ${cfg.dailySleepHours}h sleep · ${cfg.planDays || 7}d`;
+      step2Sub.textContent = `${cfg.dailyStudyHours}h study · ${cfg.dailyFreeHours}h free · ${cfg.dailySleepHours}h sleep`;
     }
 
     renderExamDatesList();
@@ -1789,10 +1822,7 @@
     // Ensure Day 1 and its first study block are expanded on initial load so the user sees immediate interactive value without clutter
     if (state.expandedDays.size === 0 && plan.days.length > 0 && !state.allDaysExpanded) {
       state.expandedDays.add(plan.days[0].date);
-      const firstBlock = plan.days[0].studyBlocks?.[0];
-      if (firstBlock && state.expandedBlocks.size === 0) {
-        state.expandedBlocks.add(firstBlock.id);
-      }
+      // Task cards start folded: one clean row each (time, subject, priority); click to open.
     }
 
     if ($('plan-coach-headline')) $('plan-coach-headline').textContent = plan.coachHeadline || 'Your AI Study Plan';
@@ -1951,9 +1981,7 @@
               </span>
             </div>
             <div class="pl-day-Allocation">
-              <span>📚 ${day.studyHours}h Study</span>
-              <span title="${escapeHtml(day.freeBlock ? `${day.freeBlock.startTime}–${day.freeBlock.endTime}` : '')}">🎮 ${day.freeHours ?? day.freePlayHours ?? 0}h Free</span>
-              <span title="${escapeHtml(day.sleepBlock ? `${day.sleepBlock.startTime}–${day.sleepBlock.endTime}` : '')}">😴 ${day.sleepHours}h Sleep</span>
+              <span class="pl-day-quiet" title="Free ${escapeHtml(day.freeBlock ? day.freeBlock.startTime + '–' + day.freeBlock.endTime : '')} · Sleep ${escapeHtml(day.sleepBlock ? day.sleepBlock.startTime + '–' + day.sleepBlock.endTime : '')}">${day.studyHours}h study · ${day.freeHours ?? 0}h free · ${day.sleepHours}h sleep</span>
               ${day.studyShortfallMins > 0 ? `<span class="pl-day-warn" title="Not enough open time to fit all study hours">⚠ ${(day.studyShortfallMins / 60).toFixed(1)}h didn't fit</span>` : ''}
               <span class="pl-day-progress-pill">${doneBlocksCount}/${blocks.length} Tasks</span>
               <button type="button" class="btn btn-ghost btn-sm pl-push-day-btn" data-date="${escapeHtml(day.date)}">
@@ -2403,8 +2431,8 @@
     }
   }
 
-  $('regenerate-plan-btn')?.addEventListener('click', () => triggerGeneratePlan(false));
-  $('top-regenerate-btn')?.addEventListener('click', () => triggerGeneratePlan(false));
+  $('regenerate-plan-btn')?.addEventListener('click', () => generateThenShowPlan());
+  $('top-regenerate-btn')?.addEventListener('click', () => generateThenShowPlan());
   $('sync-todoist-btn')?.addEventListener('click', () => triggerSyncTodoist());
   $('top-sync-todoist-btn')?.addEventListener('click', () => triggerSyncTodoist());
 

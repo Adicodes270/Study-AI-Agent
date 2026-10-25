@@ -82,18 +82,11 @@
         <section class="pl-hero">
             <div class="pl-hero-left">
                 <div class="pl-eyebrow-row">
-                    <span class="pl-eyebrow-badge">
-                        <i class="fa-solid fa-wand-magic-sparkles"></i>
-                        <span>AI Study Planner · Todoist SDK</span>
-                    </span>
                     <span class="chip wait" id="planner-todoist-badge">
                         <i class="fa-solid fa-circle-dot"></i> Checking Todoist…
                     </span>
                 </div>
                 <h1>Your Adaptive Study Schedule &amp; Todoist Hub</h1>
-                <p class="pl-hero-sub">
-                    Balances school hours, full-day Sundays &amp; holidays, sleep targets, exam countdowns, and past quiz weak spots—then syncs tasks and sub-tasks straight to Todoist.
-                </p>
 
                 <!-- Interactive Quick-Jump & Drawer Control Bar -->
                 <div class="pl-workspace-bar" role="navigation" aria-label="Planner Workspace Sections">
@@ -151,11 +144,6 @@
                 </div>
 
                 <div class="pl-hero-cta-grid">
-                    <a href="https://app.todoist.com/app/upcoming" target="_blank" rel="noopener noreferrer"
-                        class="btn btn-ghost" id="open-todoist-upcoming-btn">
-                        <i class="fa-solid fa-arrow-up-right-from-square"></i>
-                        <span>Open Todoist Upcoming</span>
-                    </a>
                     <button type="button" class="btn btn-solid" id="top-sync-todoist-btn">
                         <i class="fa-solid fa-cloud-arrow-up"></i>
                         <span id="top-sync-todoist-label">Sync / Push to Todoist</span>
@@ -167,6 +155,11 @@
                         <i class="fa-solid fa-rotate"></i>
                         <span>Regenerate Plan</span>
                     </button>
+                    <a href="https://app.todoist.com/app/upcoming" target="_blank" rel="noopener noreferrer"
+                        class="pl-link-btn" id="open-todoist-upcoming-btn">
+                        <i class="fa-solid fa-arrow-up-right-from-square"></i>
+                        <span>Open Todoist</span>
+                    </a>
                     <a href="setup.html#step-todoist" class="pl-link-btn">
                         <i class="fa-solid fa-gear"></i> Manage keys in Setup
                     </a>
@@ -413,7 +406,7 @@
                             </div>
 
                             <div class="pl-sliders-pair pl-sliders-triple">
-                                <div class="pl-slider-card">
+                                <div class="pl-slider-card" title="Default: 5 hours/day of focused study (minimum 3). Study is scheduled after school and outside your free time.">
                                     <div class="pl-slider-head">
                                         <label for="daily-study-hours-range" class="pl-label-sm">
                                             <i class="fa-solid fa-book-open-reader icon-accent"></i> Daily Study
@@ -424,10 +417,10 @@
                                         </div>
                                     </div>
                                     <input type="range" id="daily-study-hours-range" class="pl-range" min="3" max="14" step="0.5" value="5">
-                                    <small class="pl-field-hint">Default: 5 hours/day of focused study (minimum 3). Study is scheduled after school and outside your free time.</small>
+                                    
                                 </div>
 
-                                <div class="pl-slider-card">
+                                <div class="pl-slider-card" title="Default: 2 hours/day to relax, play or hang out. No study is scheduled in this block.">
                                     <div class="pl-slider-head">
                                         <label for="daily-free-hours-range" class="pl-label-sm">
                                             <i class="fa-solid fa-mug-hot icon-accent"></i> Daily Free Time
@@ -442,10 +435,10 @@
                                         <label for="free-start-time" class="pl-sub-label">Free time starts at</label>
                                         <input type="time" id="free-start-time" class="pl-input mono" value="14:30">
                                     </div>
-                                    <small class="pl-field-hint">Default: 2 hours/day to relax, play or hang out. No study is scheduled in this block.</small>
+                                    
                                 </div>
 
-                                <div class="pl-slider-card">
+                                <div class="pl-slider-card" title="Default: 8 hours/day protected for sleep (minimum 7). Bedtime is wake-up time minus sleep hours.">
                                     <div class="pl-slider-head">
                                         <label for="daily-sleep-hours-range" class="pl-label-sm">
                                             <i class="fa-solid fa-moon icon-accent"></i> Daily Sleep
@@ -460,17 +453,17 @@
                                         <label for="wake-up-time" class="pl-sub-label">Wake up at</label>
                                         <input type="time" id="wake-up-time" class="pl-input mono" value="07:00">
                                     </div>
-                                    <small class="pl-field-hint">Default: 8 hours/day protected for sleep (minimum 7). Bedtime is wake-up time minus sleep hours.</small>
+                                    
                                 </div>
                             </div>
 
                             <div class="pl-day-budget">
                                 <strong id="day-total-hours">5h study + 2h free + 8h sleep = 15h of 24h</strong>
-                                <small class="pl-field-hint">Study + free time + sleep can never add up to more than 24 hours, so the sliders stop at the limit. Bedtime works out to <b id="bedtime-readout">23:00</b> (wake-up time minus sleep hours).</small>
+                                <small class="pl-field-hint">Max 24h a day · bedtime <b id="bedtime-readout">23:00</b></small>
                                 <ul class="pl-day-balance-notes" id="day-balance-notes" hidden></ul>
                             </div>
 
-                            <div class="pl-style-block">
+                            <details class="pl-advanced"><summary><i class="fa-solid fa-stopwatch"></i> Focus style <span class="pl-advanced-hint">Pomodoro 25 / 5 · tap to change</span></summary><div class="pl-style-block">
                                 <span class="pl-label">
                                     <i class="fa-solid fa-stopwatch icon-accent"></i>
                                     <span>Study Session Style &amp; Break Intervals</span>
@@ -504,7 +497,7 @@
                                         <input type="number" id="custom-break-mins" class="pl-input" min="2" max="60" value="10">
                                     </div>
                                 </div>
-                            </div>
+                            </div></details>
                         </div>
 
                         <!-- PANEL 2: Weekly Schedule Categorization (Mon–Sat School · Sunday Full Day) -->
@@ -672,6 +665,11 @@
                         <h2 id="plan-coach-headline">Your Adaptive AI Study Plan</h2>
                     </div>
                     <div class="pl-summary-badges">
+                        <button type="button" class="pl-drawer-pill-btn" id="toggle-plan-schedule-btn" aria-expanded="true" aria-controls="plan-summary-section" title="Expand or collapse the whole schedule">
+                            <i class="fa-solid fa-calendar-week"></i>
+                            <span id="toggle-plan-schedule-text">Collapse Schedule</span>
+                            <i class="fa-solid fa-chevron-down pl-mini-chevron"></i>
+                        </button>
                         <span class="chip ok" id="plan-style-badge">Pomodoro 25 / 5</span>
                         <span class="chip wait" id="plan-sync-status-chip">Ready to Sync</span>
                         <button type="button" class="pl-drawer-pill-btn" id="toggle-coach-insights-btn" aria-expanded="false">

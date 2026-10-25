@@ -2074,3 +2074,60 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* --- decluttered preview --- */
+.pl-advanced { border: 1px solid var(--border-subtle); border-radius: 12px; background: var(--bg-surface); padding: 0.1rem 0.9rem; }
+.pl-advanced > summary { cursor: pointer; list-style: none; padding: 0.7rem 0; font-weight: 600; font-size: 0.85rem; display: flex; gap: 0.5rem; align-items: center; }
+.pl-advanced > summary::-webkit-details-marker { display: none; }
+.pl-advanced > summary::after { content: '▾'; margin-left: auto; color: var(--text-secondary); }
+.pl-advanced[open] > summary::after { content: '▴'; }
+.pl-advanced-hint { font-weight: 400; color: var(--text-secondary); font-size: 0.78rem; }
+.pl-advanced .pl-style-block { padding-bottom: 0.9rem; }
+.pl-day-budget { background: transparent; border: none; padding: 0.2rem 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.2rem 1rem; }
+.pl-day-quiet { color: var(--text-secondary); font-size: 0.74rem; }
+
+/* keep the three hour cards top-aligned even though the study card has no time box */
+.pl-sliders-triple { align-items: start; }
+
+/* ==========================================================================
+   Calm layout: fewer boxes, one line per idea
+   ========================================================================== */
+/* Header: short title, no intro paragraph, no step-pill row (the two step bars below do the same job) */
+.pl-hero { align-items: center; gap: 1rem; }
+.pl-hero h1 { font-size: clamp(1.4rem, 2.4vw, 1.9rem); }
+.pl-workspace-bar { display: none; }
+
+/* Todoist box: one compact card */
+.pl-hero-actions { padding: 0.9rem 1.1rem; gap: 0.6rem; }
+.pl-hero-actions .pl-card-kicker { display: none; }
+.pl-hero-actions strong { font-size: 0.92rem; }
+.pl-hero-cta-grid { grid-template-columns: 1fr; }
+.pl-hero-secondary-row { justify-content: flex-start; gap: 1rem; flex-wrap: wrap; }
+
+/* Step bars: slim, a title and one summary chip - no paragraph */
+.pl-accordion-sub { display: none; }
+.pl-accordion-trigger { padding: 0.8rem 1.25rem; }
+.pl-accordion-heading { font-size: 1rem; }
+
+/* Plan summary: one strip of numbers instead of four cards */
+.pl-summary-hero-card { padding-top: 0.9rem; padding-bottom: 0.9rem; gap: 0.6rem; }
+.pl-summary-top .pl-card-kicker { display: none; }
+#plan-coach-headline { font-size: 1.05rem; font-weight: 700; line-height: 1.3; }
+#plan-style-badge { display: none; }
+.pl-metrics-grid { display: flex; flex-wrap: wrap; gap: 0.35rem 1.4rem; }
+.pl-metric-card { background: none; border: none; padding: 0; display: block; }
+.pl-metric-label, .pl-metric-card small { display: none; }
+.pl-metric-card strong { font-size: 0.86rem; font-weight: 600; color: var(--text-secondary); }
+.pl-metric-card + .pl-metric-card::before { content: '·'; margin-right: 1.4rem; color: var(--text-muted); }
+
+/* Schedule: no helper sentence, tidier controls */
+.pl-schedule-toolbar .pl-sub-head p { display: none; }
+.pl-view-toggles .btn { padding: 0.35rem 0.7rem; font-size: 0.78rem; }
+.pl-hero-left { gap: 0.5rem; }
+
+/* Whole-schedule expand / collapse (headline + toggle stay visible) */
+#plan-coach-headline { cursor: pointer; }
+#toggle-plan-schedule-btn .pl-mini-chevron { transition: transform 0.2s ease; }
+#toggle-plan-schedule-btn[aria-expanded="false"] .pl-mini-chevron { transform: rotate(-90deg); }
+#plan-summary-section.is-plan-collapsed .pl-summary-hero-card > :not(.pl-summary-top),
+#plan-summary-section.is-plan-collapsed > .pl-subsection { display: none; }

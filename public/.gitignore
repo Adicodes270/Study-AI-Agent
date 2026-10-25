@@ -1,0 +1,11 @@
+# Node
+node_modules/
+npm-debug.log*
+
+# Secrets
+.env
+
+# User data and local databases
+data/
+*.db
+*.sqlite3
