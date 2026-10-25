@@ -352,11 +352,11 @@
                         <span class="pl-step-badge">Step 2</span>
                         <div>
                             <h2 class="pl-accordion-heading">Configure Your Study Routine</h2>
-                            <p class="pl-accordion-sub">Adjust daily study &amp; sleep hours, Pomodoro intervals, school timings, exams, and subject priorities.</p>
+                            <p class="pl-accordion-sub">Adjust daily study, free time &amp; sleep hours, free-time start, Pomodoro intervals, school timings, exams, and subject priorities.</p>
                         </div>
                     </div>
                     <div class="pl-accordion-meta">
-                        <span class="chip ok" id="schedule-balance-chip">5h Study · 8h Sleep · 6 School Days/wk</span>
+                        <span class="chip ok" id="schedule-balance-chip">5h Study · 2h Free · 8h Sleep · 6 School Days/wk</span>
                         <span class="pl-expand-btn-visual">
                             <span class="pl-expand-label" id="step2-expand-label">Customize</span>
                             <i class="fa-solid fa-chevron-down pl-accordion-chevron"></i>
@@ -398,7 +398,7 @@
                             <div class="pl-box-header">
                                 <span class="pl-label">
                                     <i class="fa-solid fa-clock icon-accent"></i>
-                                    <span>Daily Study &amp; Sleep Targets</span>
+                                    <span>Daily Study, Free Time &amp; Sleep</span>
                                 </span>
                                 <div class="pl-horizon-inline">
                                     <label for="plan-days-select" class="pl-sub-label-inline">Horizon:</label>
@@ -412,7 +412,7 @@
                                 </div>
                             </div>
 
-                            <div class="pl-sliders-pair">
+                            <div class="pl-sliders-pair pl-sliders-triple">
                                 <div class="pl-slider-card">
                                     <div class="pl-slider-head">
                                         <label for="daily-study-hours-range" class="pl-label-sm">
@@ -424,7 +424,25 @@
                                         </div>
                                     </div>
                                     <input type="range" id="daily-study-hours-range" class="pl-range" min="3" max="14" step="0.5" value="5">
-                                    <small class="pl-field-hint">Default: 5 hours/day of focused study (minimum 3).</small>
+                                    <small class="pl-field-hint">Default: 5 hours/day of focused study (minimum 3). Study is scheduled after school and outside your free time.</small>
+                                </div>
+
+                                <div class="pl-slider-card">
+                                    <div class="pl-slider-head">
+                                        <label for="daily-free-hours-range" class="pl-label-sm">
+                                            <i class="fa-solid fa-mug-hot icon-accent"></i> Daily Free Time
+                                        </label>
+                                        <div class="pl-num-pill">
+                                            <input type="number" id="daily-free-hours-input" class="pl-num-input" min="0.5" max="10" step="0.5" value="2">
+                                            <span>hrs/day</span>
+                                        </div>
+                                    </div>
+                                    <input type="range" id="daily-free-hours-range" class="pl-range" min="0.5" max="10" step="0.5" value="2">
+                                    <div class="pl-start-row">
+                                        <label for="free-start-time" class="pl-sub-label">Free time starts at</label>
+                                        <input type="time" id="free-start-time" class="pl-input mono" value="14:30">
+                                    </div>
+                                    <small class="pl-field-hint">Default: 2 hours/day to relax, play or hang out. No study is scheduled in this block.</small>
                                 </div>
 
                                 <div class="pl-slider-card">
@@ -438,8 +456,18 @@
                                         </div>
                                     </div>
                                     <input type="range" id="daily-sleep-hours-range" class="pl-range" min="7" max="12" step="0.5" value="8">
-                                    <small class="pl-field-hint">Default: 8 hours/day protected for sleep (minimum 7). Study + sleep can't exceed 24 hours.</small>
+                                    <div class="pl-start-row">
+                                        <label for="wake-up-time" class="pl-sub-label">Wake up at</label>
+                                        <input type="time" id="wake-up-time" class="pl-input mono" value="07:00">
+                                    </div>
+                                    <small class="pl-field-hint">Default: 8 hours/day protected for sleep (minimum 7). Bedtime is wake-up time minus sleep hours.</small>
                                 </div>
+                            </div>
+
+                            <div class="pl-day-budget">
+                                <strong id="day-total-hours">5h study + 2h free + 8h sleep = 15h of 24h</strong>
+                                <small class="pl-field-hint">Study + free time + sleep can never add up to more than 24 hours, so the sliders stop at the limit. Bedtime works out to <b id="bedtime-readout">23:00</b> (wake-up time minus sleep hours).</small>
+                                <ul class="pl-day-balance-notes" id="day-balance-notes" hidden></ul>
                             </div>
 
                             <div class="pl-style-block">
@@ -523,10 +551,6 @@
                                 <div class="pl-time-cell">
                                     <label for="school-end-time" class="pl-sub-label">School Ends</label>
                                     <input type="time" id="school-end-time" class="pl-input mono" value="14:30">
-                                </div>
-                                <div class="pl-time-cell">
-                                    <label for="wake-up-time" class="pl-sub-label">Wake-Up Time</label>
-                                    <input type="time" id="wake-up-time" class="pl-input mono" value="06:30">
                                 </div>
                             </div>
                         </div>
@@ -681,7 +705,7 @@
                 <div class="pl-metrics-grid">
                     <div class="pl-metric-card">
                         <span class="pl-metric-label">Daily Allocation</span>
-                        <strong id="metric-daily-split">5h Study · 8h Sleep</strong>
+                        <strong id="metric-daily-split">5h Study · 2h Free · 8h Sleep</strong>
                         <small id="metric-session-style">Pomodoro (25m / 5m)</small>
                     </div>
                     <div class="pl-metric-card">

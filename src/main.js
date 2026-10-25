@@ -1,4 +1,5 @@
 // src/main.js
+import "./tz.js"; // must be first: sets the process timezone to IST
 import { runBot } from "./intake/telegramBot.js";
 import { startWebServer } from "./webServer.js";
 import { registerNotebookLmGenerator } from "./notebooklmService.js";

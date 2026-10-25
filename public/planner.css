@@ -883,6 +883,46 @@
   min-width: 0;
 }
 
+.pl-sliders-triple {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.pl-start-row {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.pl-start-row .pl-input {
+  background: var(--bg-elevated);
+  padding: 0.45rem 0.55rem;
+}
+
+.pl-day-budget {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.7rem 0.95rem;
+  border-radius: 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+}
+
+.pl-day-budget strong {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.82rem;
+}
+
+.pl-day-balance-notes {
+  margin: 0.2rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: #d9822b;
+}
+
+.pl-day-warn {
+  color: #d9822b;
+}
+
 .pl-slider-card {
   padding: 0.85rem 0.95rem;
   border-radius: 12px;
@@ -1042,7 +1082,7 @@
 
 .pl-time-inputs-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.65rem;
   min-width: 0;
   margin-top: auto;
@@ -2022,6 +2062,7 @@
 
   .pl-hero-cta-grid,
   .pl-sliders-pair,
+  .pl-sliders-triple,
   .pl-style-pills,
   .pl-metrics-grid,
   .pl-quiz-kpis,

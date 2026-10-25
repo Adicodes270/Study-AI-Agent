@@ -13,12 +13,16 @@ import { revisionFor } from "./quizEngine.js";
 export const DEFAULT_PLANNER_CONFIG = {
   dailyStudyHours: 5,
   dailySleepHours: 8,
+  dailyFreeHours: 2,
   planDays: 7,
   // Monday (1) to Saturday (6) are School Days by default; Sunday (0) is a non-school / full day
   schoolDays: [1, 2, 3, 4, 5, 6],
   schoolStartTime: "08:00",
   schoolEndTime: "14:30",
-  wakeUpTime: "06:30",
+  // Daily time budget: study + sleep + free time can never add up to more than 24 hours.
+  // Free time has its own start time; bedtime is worked out from wake-up time minus sleep hours.
+  freeStartTime: "14:30",
+  wakeUpTime: "07:00",
   sessionStyle: "pomodoro_25_5", // 'pomodoro_25_5' | 'deep_50_10' | 'block_90_15' | 'custom'
   customFocusMins: 45,
   customBreakMins: 10,
@@ -64,8 +68,22 @@ export const SESSION_STYLE_PRESETS = {
 };
 
 export function normalizePlannerConfig(raw = {}) {
-  const dailyStudyHours = Math.max(1, Math.min(14, Number(raw.dailyStudyHours) || DEFAULT_PLANNER_CONFIG.dailyStudyHours));
-  const dailySleepHours = Math.max(4, Math.min(12, Number(raw.dailySleepHours) || DEFAULT_PLANNER_CONFIG.dailySleepHours));
+  const numOr = (v, d) => (v !== "" && v !== null && v !== undefined && Number.isFinite(Number(v)) ? Number(v) : d);
+  let dailyStudyHours = Math.max(1, Math.min(14, numOr(raw.dailyStudyHours, DEFAULT_PLANNER_CONFIG.dailyStudyHours)));
+  let dailySleepHours = Math.max(4, Math.min(12, numOr(raw.dailySleepHours, DEFAULT_PLANNER_CONFIG.dailySleepHours)));
+  let dailyFreeHours = Math.max(0.5, Math.min(10, numOr(raw.dailyFreeHours, DEFAULT_PLANNER_CONFIG.dailyFreeHours)));
+  // Study + sleep + free time must never exceed 24 hours: trim free time first, then study, then sleep.
+  let overHours = dailyStudyHours + dailySleepHours + dailyFreeHours - 24;
+  if (overHours > 0) {
+    const trim = (v, min) => {
+      const cut = Math.min(overHours, v - min);
+      overHours -= cut;
+      return v - cut;
+    };
+    dailyFreeHours = trim(dailyFreeHours, 0.5);
+    dailyStudyHours = trim(dailyStudyHours, 1);
+    dailySleepHours = trim(dailySleepHours, 4);
+  }
   const planDays = Math.max(1, Math.min(30, parseInt(raw.planDays, 10) || DEFAULT_PLANNER_CONFIG.planDays));
 
   const schoolDays = Array.isArray(raw.schoolDays)
@@ -78,9 +96,12 @@ export function normalizePlannerConfig(raw = {}) {
   const schoolEndTime = /^\d{2}:\d{2}$/.test(String(raw.schoolEndTime || ""))
     ? String(raw.schoolEndTime)
     : DEFAULT_PLANNER_CONFIG.schoolEndTime;
-  const wakeUpTime = /^\d{2}:\d{2}$/.test(String(raw.wakeUpTime || ""))
-    ? String(raw.wakeUpTime)
-    : DEFAULT_PLANNER_CONFIG.wakeUpTime;
+  const validTime = (v) => /^\d{2}:\d{2}$/.test(String(v || ""));
+  const freeStartTime = validTime(raw.freeStartTime) ? String(raw.freeStartTime) : DEFAULT_PLANNER_CONFIG.freeStartTime;
+  const sleepMinsTotal = Math.round(dailySleepHours * 60);
+  const wakeUpTime = validTime(raw.wakeUpTime) ? String(raw.wakeUpTime) : DEFAULT_PLANNER_CONFIG.wakeUpTime;
+  // Bedtime is derived: wake-up time minus sleep hours.
+  const sleepStartTime = minsToTimeStr(parseTimeToMins(wakeUpTime) - sleepMinsTotal);
 
   const sessionStyle = SESSION_STYLE_PRESETS[raw.sessionStyle]
     ? raw.sessionStyle
@@ -128,10 +149,13 @@ export function normalizePlannerConfig(raw = {}) {
   return {
     dailyStudyHours,
     dailySleepHours,
+    dailyFreeHours,
     planDays,
     schoolDays,
     schoolStartTime,
     schoolEndTime,
+    freeStartTime,
+    sleepStartTime,
     wakeUpTime,
     sessionStyle,
     customFocusMins,
@@ -571,6 +595,60 @@ function minsToTimeStr(totalMins) {
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
 
+function subtractRange(ranges, a, b) {
+  const out = [];
+  for (const [s0, e0] of ranges) {
+    if (b <= s0 || a >= e0) {
+      out.push([s0, e0]);
+      continue;
+    }
+    if (a > s0) out.push([s0, a]);
+    if (b < e0) out.push([b, e0]);
+  }
+  return out;
+}
+
+/**
+ * Lays out one day from the student's own three blocks - Sleep, Free time and Study. Sleep is
+ * anchored to the wake-up time, free time has its own start time, and study fills the rest: only
+ * while awake, after school (or mid-morning on non-school days), and outside the free-time block.
+ */
+function buildDayLayout(config, isSchoolDay) {
+  const sleepMins = Math.round(config.dailySleepHours * 60);
+  const freeMins = Math.round(config.dailyFreeHours * 60);
+  const wake = parseTimeToMins(config.wakeUpTime, 7 * 60);
+  const sleepStart = (((wake - sleepMins) % 1440) + 1440) % 1440;
+  const studyStart = isSchoolDay
+    ? parseTimeToMins(config.schoolEndTime, 14 * 60 + 30) + 75 // rest/commute after school
+    : Math.max(wake + 60, 9 * 60 + 30);
+  const freeStart = parseTimeToMins(config.freeStartTime, 14 * 60 + 30);
+  const awakeEnd = sleepStart > wake ? sleepStart : 1440;
+
+  let ranges = [[Math.max(studyStart, wake), awakeEnd]];
+  ranges = subtractRange(ranges, freeStart, Math.min(freeStart + freeMins, 1440));
+  if (isSchoolDay) {
+    ranges = subtractRange(
+      ranges,
+      parseTimeToMins(config.schoolStartTime, 8 * 60),
+      parseTimeToMins(config.schoolEndTime, 14 * 60 + 30)
+    );
+  }
+  const windows = ranges
+    .filter(([s, e]) => e - s >= 30)
+    .map(([s, e]) => ({
+      start: s,
+      end: e,
+      period: s < 12 * 60 ? "Morning Study Window" : s < 17 * 60 ? "Afternoon Study Window" : "Evening Study Window",
+    }));
+
+  return {
+    windows,
+    sleepBlock: { startTime: minsToTimeStr(sleepStart), endTime: minsToTimeStr(wake), hours: config.dailySleepHours },
+    freeBlock: { startTime: minsToTimeStr(freeStart), endTime: minsToTimeStr(freeStart + freeMins), hours: config.dailyFreeHours },
+    wakeTime: minsToTimeStr(wake),
+  };
+}
+
 function formatDateYMD(d) {
   const yr = d.getFullYear();
   const mo = String(d.getMonth() + 1).padStart(2, "0");
@@ -612,34 +690,7 @@ function getSessionPreset(config) {
  */
 function buildDailyTimeSlots(dayType, config, preset) {
   const totalStudyMins = Math.round(config.dailyStudyHours * 60);
-  const wakeMins = parseTimeToMins(config.wakeUpTime, 6 * 60 + 30);
-  const awakeBudgetMins = Math.max(8 * 60, (24 - config.dailySleepHours) * 60);
-  const bedtimeMins = Math.min(23 * 60 + 30, wakeMins + awakeBudgetMins);
-
-  const windows = [];
-  if (dayType === "school_day") {
-    const schoolStart = parseTimeToMins(config.schoolStartTime, 8 * 60);
-    const schoolEnd = parseTimeToMins(config.schoolEndTime, 14 * 60 + 30);
-    // Start 75 mins after school ends for commute/lunch/rest
-    const afterSchoolStart = Math.min(bedtimeMins - 60, schoolEnd + 75);
-    if (afterSchoolStart < bedtimeMins) {
-      windows.push({ start: afterSchoolStart, end: bedtimeMins, period: "After-School & Evening" });
-    }
-    if (schoolStart - wakeMins >= 75 && totalStudyMins > 330) {
-      windows.unshift({ start: wakeMins + 25, end: schoolStart - 25, period: "Morning Pre-School Review" });
-    }
-  } else {
-    const morningStart = Math.max(wakeMins + 60, 9 * 60 + 30);
-    const morningEnd = 13 * 60;
-    const afternoonStart = 14 * 60 + 30;
-    const afternoonEnd = 17 * 60 + 45;
-    const eveningStart = 18 * 60 + 30;
-    const eveningEnd = Math.min(bedtimeMins, 21 * 60 + 45);
-
-    windows.push({ start: morningStart, end: morningEnd, period: "Morning Deep Focus" });
-    windows.push({ start: afternoonStart, end: afternoonEnd, period: "Afternoon Practice & Lab" });
-    windows.push({ start: eveningStart, end: eveningEnd, period: "Evening Active Recall" });
-  }
+  const windows = buildDayLayout(config, dayType === "school_day").windows;
 
   // Group Pomodoro/Deep Work cycles into substantial 90–100m subject study sessions (3 blocks for 5h/day)
   const targetBlockFocus =
@@ -650,40 +701,33 @@ function buildDailyTimeSlots(dayType, config, preset) {
         : preset.focusMins; // 90m ultradian block
 
   const interBlockBreak = Math.max(15, preset.longBreakMins || 15);
+  const spanFor = (f) => f + Math.max(0, Math.round(f / preset.focusMins) - 1) * preset.breakMins;
 
   const slots = [];
   let remainingFocus = totalStudyMins;
   let wIdx = 0;
   let cursor = windows[0]?.start ?? 16 * 60;
 
-  while (remainingFocus > 0 && slots.length < 6) {
+  while (remainingFocus > 0 && slots.length < 8) {
     const win = windows[wIdx];
     if (!win) break;
     if (cursor < win.start) cursor = win.start;
 
-    const focusForThisBlock = Math.min(remainingFocus, targetBlockFocus);
+    let focusForThisBlock = Math.min(remainingFocus, targetBlockFocus);
+    // Shrink the block to fit what is left of this window, or move on to the next window.
+    if (cursor + spanFor(focusForThisBlock) > win.end) {
+      const avail = win.end - cursor;
+      let f = focusForThisBlock;
+      while (f > 15 && spanFor(f) > avail) f -= 5;
+      if (f < 20 || spanFor(f) > avail) {
+        wIdx++;
+        if (windows[wIdx]) cursor = windows[wIdx].start;
+        continue;
+      }
+      focusForThisBlock = f;
+    }
     const cyclesCount = Math.max(1, Math.round(focusForThisBlock / preset.focusMins));
-    const internalBreaks = Math.max(0, cyclesCount - 1) * preset.breakMins;
-    const actualSpan = focusForThisBlock + internalBreaks;
-
-    // On full days, distribute blocks across Morning -> Afternoon -> Evening naturally
-    if (
-      dayType !== "school_day" &&
-      slots.length > 0 &&
-      wIdx < windows.length - 1 &&
-      (cursor + actualSpan > win.end || slots.filter((s) => s.period === win.period).length >= 1) &&
-      remainingFocus <= (windows.length - wIdx) * targetBlockFocus
-    ) {
-      wIdx++;
-      cursor = windows[wIdx].start;
-      continue;
-    }
-
-    if (cursor + actualSpan > win.end && wIdx < windows.length - 1) {
-      wIdx++;
-      cursor = windows[wIdx].start;
-      continue;
-    }
+    const actualSpan = spanFor(focusForThisBlock);
 
     const startTime = minsToTimeStr(cursor);
     const endTime = minsToTimeStr(cursor + actualSpan);
@@ -886,7 +930,7 @@ export async function generateAiStudyPlan({
 }) {
   const config = normalizePlannerConfig(rawConfig);
   const preset = getSessionPreset(config);
-  const baseDate = startDate ? new Date(`${startDate}T00:00:00`) : new Date();
+  const baseDate = startDate ? new Date(`${startDate}T00:00:00`) : new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
   const todayYmd = formatDateYMD(baseDate);
 
   const prioritizedUnits = buildPrioritizedStudyQueue({
@@ -911,7 +955,9 @@ export async function generateAiStudyPlan({
 
 Student Configuration:
 - Daily Study Goal: ${config.dailyStudyHours} hours/day
-- Daily Sleep Target: ${config.dailySleepHours} hours/day
+- Daily Sleep Target: ${config.dailySleepHours} hours/day (bedtime ${config.sleepStartTime}, wake-up ${config.wakeUpTime})
+- Daily Free Time: ${config.dailyFreeHours} hours/day, starting ${config.freeStartTime} (never schedule study during it)
+- Study + sleep + free time = ${(config.dailyStudyHours + config.dailySleepHours + config.dailyFreeHours).toFixed(1)}h of the 24h day.
 - Session Style: ${preset.label}
 - School Days: ${config.schoolDays.map((d) => SHORT_DAY_NAMES[d]).join(", ")} (${config.schoolStartTime} to ${config.schoolEndTime}); Sunday & Vacation dates are full non-school days.
 - Upcoming Exams: ${config.examDates.length ? JSON.stringify(config.examDates) : "None specified yet"}
@@ -1098,15 +1144,8 @@ Provide:
 
     const totalScheduledMins = studyBlocks.reduce((acc, b) => acc + b.durationMins, 0);
     const totalBreakMins = studyBlocks.reduce((acc, b) => acc + b.breakMinsAfter, 0);
-    const freePlayHours = Math.max(
-      1,
-      +(
-        24 -
-        config.dailySleepHours -
-        (isSchoolDay ? (parseTimeToMins(config.schoolEndTime) - parseTimeToMins(config.schoolStartTime)) / 60 : 0) -
-        totalScheduledMins / 60
-      ).toFixed(1)
-    );
+    const layout = buildDayLayout(config, isSchoolDay);
+    const studyShortfallMins = Math.max(0, Math.round(config.dailyStudyHours * 60) - totalScheduledMins);
 
     days.push({
       dayIndex: dOffset + 1,
@@ -1127,7 +1166,12 @@ Provide:
       vacationLabel: vacationMatch?.label || null,
       sleepHours: config.dailySleepHours,
       studyHours: +(totalScheduledMins / 60).toFixed(1),
-      freePlayHours,
+      freeHours: config.dailyFreeHours,
+      freePlayHours: config.dailyFreeHours,
+      sleepBlock: layout.sleepBlock,
+      freeBlock: layout.freeBlock,
+      wakeTime: layout.wakeTime,
+      studyShortfallMins,
       totalBreakMins,
       todoistDueString: `${dOffset === 0 ? "today" : dOffset === 1 ? "tomorrow" : dateYmd} at 6pm`,
       studyBlocks,
@@ -1176,14 +1220,14 @@ Provide:
       ? `Smart ${config.planDays}-Day Plan · Prioritizing ${weakChaptersCount} Revision Chapter(s) & Upcoming Exams`
       : `Balanced ${config.planDays}-Day Study & Todoist Schedule (${config.dailyStudyHours}h/day · ${preset.label})`;
 
-  const defaultSummary = `Scheduled ${config.dailyStudyHours} hours of focused study and ${config.dailySleepHours} hours of sleep daily across ${config.planDays} days. Monday–Saturday school timings (${config.schoolStartTime}–${config.schoolEndTime}) place study blocks in afternoon/evening focus windows, while Sundays and holidays unlock full-day deep-work and play/recharge schedules.`;
+  const defaultSummary = `Scheduled ${config.dailyStudyHours} hours of focused study, ${config.dailyFreeHours} hours of free time from ${config.freeStartTime} and ${config.dailySleepHours} hours of sleep (${config.sleepStartTime}–${config.wakeUpTime}) daily across ${config.planDays} days. Monday–Saturday school timings (${config.schoolStartTime}–${config.schoolEndTime}) place study blocks in afternoon/evening focus windows, while Sundays and holidays unlock full-day deep-work and play/recharge schedules.`;
 
   const defaultRecs = [
     `Follow ${preset.label} strictly—step away from your desk during every ${preset.breakMins}-minute break to keep retention high.`,
     weakChaptersCount > 0
       ? `Chapters with quiz scores below 80% are front-loaded in peak focus slots for rapid score recovery.`
       : `Take a Study Agent chapter quiz after finishing each chapter's study block to lock in active recall.`,
-    `Protect your ${config.dailySleepHours}-hour sleep window each night so memory consolidation stays optimal before exams.`,
+    `Protect your ${config.dailySleepHours}-hour sleep window (${config.sleepStartTime}–${config.wakeUpTime}) each night so memory consolidation stays optimal before exams.`,
   ];
 
   return {
@@ -1206,6 +1250,7 @@ Provide:
       totalStudyHours: +days.reduce((acc, d) => acc + d.studyHours, 0).toFixed(1),
       dailyStudyHours: config.dailyStudyHours,
       dailySleepHours: config.dailySleepHours,
+      dailyFreeHours: config.dailyFreeHours,
       totalBlocks: days.reduce((acc, d) => acc + d.studyBlocks.length, 0),
       weakChaptersTargeted: weakChaptersCount,
     },

@@ -197,11 +197,13 @@
     config: {
       dailyStudyHours: 5,
       dailySleepHours: 8,
+      dailyFreeHours: 2,
       planDays: 7,
       schoolDays: [1, 2, 3, 4, 5, 6],
       schoolStartTime: '08:00',
       schoolEndTime: '14:30',
-      wakeUpTime: '06:30',
+      freeStartTime: '14:30',
+      wakeUpTime: '07:00',
       sessionStyle: 'pomodoro_25_5',
       customFocusMins: 45,
       customBreakMins: 10,
@@ -481,6 +483,55 @@
     return mins === 0 ? `${h}${ampm}` : `${h}:${String(mins).padStart(2, '0')}${ampm}`;
   }
 
+  function subtractRange(ranges, a, b) {
+    const out = [];
+    for (const [s0, e0] of ranges) {
+      if (b <= s0 || a >= e0) { out.push([s0, e0]); continue; }
+      if (a > s0) out.push([s0, a]);
+      if (b < e0) out.push([b, e0]);
+    }
+    return out;
+  }
+
+  // Lays out a day from the student's own Sleep, Free-time and Study blocks. Sleep is anchored to the
+  // wake-up time, free time has its own start time, and study fills the rest: only while awake,
+  // after school (or mid-morning on non-school days), and outside the free-time block.
+  function buildDayLayout(cfg, isSchoolDay) {
+    const sleepMins = Math.round((Number(cfg.dailySleepHours) || 8) * 60);
+    const freeMins = Math.round((Number(cfg.dailyFreeHours) || 2) * 60);
+    const wake = parseTimeToMins(cfg.wakeUpTime, 7 * 60);
+    const sleepStart = (((wake - sleepMins) % 1440) + 1440) % 1440;
+    const studyStart = isSchoolDay
+      ? parseTimeToMins(cfg.schoolEndTime, 14 * 60 + 30) + 75 // rest/commute after school
+      : Math.max(wake + 60, 9 * 60 + 30);
+    const freeStart = parseTimeToMins(cfg.freeStartTime, 14 * 60 + 30);
+    const awakeEnd = sleepStart > wake ? sleepStart : 1440;
+
+    let ranges = [[Math.max(studyStart, wake), awakeEnd]];
+    ranges = subtractRange(ranges, freeStart, Math.min(freeStart + freeMins, 1440));
+    if (isSchoolDay) {
+      ranges = subtractRange(ranges, parseTimeToMins(cfg.schoolStartTime, 8 * 60), parseTimeToMins(cfg.schoolEndTime, 14 * 60 + 30));
+    }
+    const windows = ranges
+      .filter(([a, b]) => b - a >= 30)
+      .map(([a, b]) => ({
+        start: a,
+        end: b,
+        period: a < 12 * 60 ? 'Morning Study Window' : a < 17 * 60 ? 'Afternoon Study Window' : 'Evening Study Window',
+      }));
+    return {
+      windows,
+      sleepBlock: { startTime: minsToTimeStr(sleepStart), endTime: minsToTimeStr(wake), hours: sleepMins / 60 },
+      freeBlock: { startTime: minsToTimeStr(freeStart), endTime: minsToTimeStr(freeStart + freeMins), hours: freeMins / 60 },
+      wakeTime: minsToTimeStr(wake),
+    };
+  }
+
+  // Current wall-clock time in India (IST), regardless of the device's timezone.
+  function nowIST() {
+    return new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  }
+
   function formatDateYMD(d) {
     const yr = d.getFullYear();
     const mo = String(d.getMonth() + 1).padStart(2, '0');
@@ -541,7 +592,7 @@
         }
       : SESSION_STYLE_PRESETS[cfg.sessionStyle] || SESSION_STYLE_PRESETS.pomodoro_25_5;
 
-    const today = new Date();
+    const today = nowIST();
     const todayYmd = formatDateYMD(today);
     // Day 1 is always a Monday: today if it is Monday, otherwise the coming Monday.
     const baseDate = new Date(today);
@@ -632,45 +683,37 @@
             : 'Non-School Full Day';
 
       const totalStudyMins = Math.round((Number(cfg.dailyStudyHours) || 5) * 60);
-      const wakeMins = parseTimeToMins(cfg.wakeUpTime, 6 * 60 + 30);
-      const bedtimeMins = Math.min(23 * 60 + 30, wakeMins + Math.max(8 * 60, (24 - (Number(cfg.dailySleepHours) || 8)) * 60));
-
-      const windows = [];
-      if (isSchoolDay) {
-        const schoolEnd = parseTimeToMins(cfg.schoolEndTime, 14 * 60 + 30);
-        windows.push({ start: Math.min(bedtimeMins - 60, schoolEnd + 75), end: bedtimeMins, period: 'After-School & Evening' });
-      } else {
-        windows.push({ start: Math.max(wakeMins + 60, 9 * 60 + 30), end: 13 * 60, period: 'Morning Deep Focus' });
-        windows.push({ start: 14 * 60 + 30, end: 17 * 60 + 45, period: 'Afternoon Practice & Lab' });
-        windows.push({ start: 18 * 60 + 30, end: Math.min(bedtimeMins, 21 * 60 + 45), period: 'Evening Active Recall' });
-      }
+      const layout = buildDayLayout(cfg, isSchoolDay);
+      const windows = layout.windows;
 
       const targetBlockFocus = preset.focusMins <= 30 ? preset.focusMins * 4 : preset.focusMins <= 55 ? preset.focusMins * 2 : preset.focusMins;
       const interBreak = Math.max(15, preset.longBreakMins || 15);
+      const spanFor = (f) => f + Math.max(0, Math.round(f / preset.focusMins) - 1) * preset.breakMins;
       let rem = totalStudyMins;
       let wIdx = 0;
       let cursor = windows[0]?.start ?? 16 * 60;
       const studyBlocks = [];
       const usedToday = new Set();
 
-      while (rem > 0 && studyBlocks.length < 6) {
+      while (rem > 0 && studyBlocks.length < 8) {
         const win = windows[wIdx];
         if (!win) break;
         if (cursor < win.start) cursor = win.start;
-        const focusMins = Math.min(rem, targetBlockFocus);
+        let focusMins = Math.min(rem, targetBlockFocus);
+        // Shrink the block to fit what is left of this window, or move on to the next window.
+        if (cursor + spanFor(focusMins) > win.end) {
+          const avail = win.end - cursor;
+          let f = focusMins;
+          while (f > 15 && spanFor(f) > avail) f -= 5;
+          if (f < 20 || spanFor(f) > avail) {
+            wIdx++;
+            if (windows[wIdx]) cursor = windows[wIdx].start;
+            continue;
+          }
+          focusMins = f;
+        }
         const cycles = Math.max(1, Math.round(focusMins / preset.focusMins));
-        const span = focusMins + Math.max(0, cycles - 1) * preset.breakMins;
-
-        if (!isSchoolDay && studyBlocks.length > 0 && wIdx < windows.length - 1 && studyBlocks.some((b) => b.period === win.period)) {
-          wIdx++;
-          cursor = windows[wIdx].start;
-          continue;
-        }
-        if (cursor + span > win.end && wIdx < windows.length - 1) {
-          wIdx++;
-          cursor = windows[wIdx].start;
-          continue;
-        }
+        const span = spanFor(focusMins);
 
         const startTime = minsToTimeStr(cursor);
         const endTime = minsToTimeStr(cursor + span);
@@ -744,8 +787,7 @@
       }
 
       const totalScheduledMins = studyBlocks.reduce((acc, b) => acc + b.durationMins, 0);
-      const schoolSpanHrs = isSchoolDay ? (parseTimeToMins(cfg.schoolEndTime) - parseTimeToMins(cfg.schoolStartTime)) / 60 : 0;
-      const freePlayHours = Math.max(1, +(24 - cfg.dailySleepHours - schoolSpanHrs - totalScheduledMins / 60).toFixed(1));
+      const studyShortfallMins = Math.max(0, totalStudyMins - totalScheduledMins);
 
       days.push({
         dayIndex: dOffset + 1,
@@ -764,7 +806,12 @@
         isSchoolDay,
         sleepHours: cfg.dailySleepHours,
         studyHours: +(totalScheduledMins / 60).toFixed(1),
-        freePlayHours,
+        freeHours: Number(cfg.dailyFreeHours) || 2,
+        freePlayHours: Number(cfg.dailyFreeHours) || 2,
+        sleepBlock: layout.sleepBlock,
+        freeBlock: layout.freeBlock,
+        wakeTime: layout.wakeTime,
+        studyShortfallMins,
         todoistDueString: `${dOffset === 0 ? 'today' : dOffset === 1 ? 'tomorrow' : dateYmd} at 6pm`,
         studyBlocks,
       });
@@ -810,11 +857,11 @@
       sessionStyleLabel: preset.label,
       config: cfg,
       coachHeadline: `Balanced ${planDays}-Day Study & Todoist Schedule (${cfg.dailyStudyHours}h/day · ${preset.label})`,
-      coachSummary: `Scheduled ${cfg.dailyStudyHours} hours of focused study and ${cfg.dailySleepHours} hours of sleep daily across ${planDays} days. Monday–Saturday school timings (${cfg.schoolStartTime}–${cfg.schoolEndTime}) place study sessions in afternoon/evening windows, while Sundays and holidays unlock full-day deep-work and recharge schedules.`,
+      coachSummary: `Scheduled ${cfg.dailyStudyHours} hours of focused study, ${cfg.dailyFreeHours} hours of free time from ${cfg.freeStartTime} and ${cfg.dailySleepHours} hours of sleep (${cfg.sleepStartTime}–${cfg.wakeUpTime}) daily across ${planDays} days. Monday–Saturday school timings (${cfg.schoolStartTime}–${cfg.schoolEndTime}) place study sessions in afternoon/evening windows, while Sundays and holidays unlock full-day deep-work and recharge schedules.`,
       keyRecommendations: [
         `Follow ${preset.label} strictly—step away from your desk during every ${preset.breakMins}-minute break to keep retention high.`,
         `Start each session with your High-priority subjects and weak quiz subtopics while mental energy is highest.`,
-        `Protect your ${cfg.dailySleepHours}-hour sleep window every night so memory consolidation stays strong before exams.`,
+        `Protect your ${cfg.dailySleepHours}-hour sleep window (${cfg.sleepStartTime}–${cfg.wakeUpTime}) every night so memory consolidation stays strong before exams.`,
       ],
       metrics: {
         totalDays: days.length,
@@ -823,6 +870,7 @@
         totalStudyHours: +days.reduce((acc, d) => acc + d.studyHours, 0).toFixed(1),
         dailyStudyHours: cfg.dailyStudyHours,
         dailySleepHours: cfg.dailySleepHours,
+        dailyFreeHours: cfg.dailyFreeHours,
         totalBlocks: days.reduce((acc, d) => acc + d.studyBlocks.length, 0),
       },
       prioritizedSubjects,
@@ -1389,30 +1437,79 @@
     renderPlanSummary();
   }
 
-  // Limits: sleep is at least 7h, and study + sleep can never go past 24h in one day.
+  // Limits: study, sleep and free time each have a minimum, and together they can never go past 24h.
   const MIN_SLEEP_HOURS = 7;
   const MIN_STUDY_HOURS = 3;
+  const MIN_FREE_HOURS = 0.5;
   const MAX_DAY_HOURS = 24;
-  function normalizeStudySleep(cfg, changed) {
-    let sleep = Math.max(MIN_SLEEP_HOURS, Math.min(12, Number(cfg.dailySleepHours) || 8));
-    let study = Math.max(MIN_STUDY_HOURS, Math.min(14, Number(cfg.dailyStudyHours) || 5));
-    if (study + sleep > MAX_DAY_HOURS) {
-      if (changed === 'dailySleepHours') sleep = Math.max(MIN_SLEEP_HOURS, MAX_DAY_HOURS - study);
-      else study = Math.max(MIN_STUDY_HOURS, MAX_DAY_HOURS - sleep);
+  let lastChangedHours = null; // which of study/sleep/free the student touched last
+  const HOUR_KEYS = {
+    dailyStudyHours: { min: MIN_STUDY_HOURS, max: 14, def: 5 },
+    dailySleepHours: { min: MIN_SLEEP_HOURS, max: 12, def: 8 },
+    dailyFreeHours: { min: MIN_FREE_HOURS, max: 10, def: 2 },
+  };
+  // The field the student just changed keeps its value (as far as the other two can give way);
+  // anything above 24h is taken from free time first, then study, then sleep.
+  function normalizeDayHours(cfg, changed) {
+    const keys = Object.keys(HOUR_KEYS);
+    keys.forEach((k) => {
+      const n = Number(cfg[k]);
+      cfg[k] = Math.max(HOUR_KEYS[k].min, Math.min(HOUR_KEYS[k].max, Number.isFinite(n) && n > 0 ? n : HOUR_KEYS[k].def));
+    });
+    if (changed && HOUR_KEYS[changed]) {
+      const othersMin = keys.filter((k) => k !== changed).reduce((a, k) => a + HOUR_KEYS[k].min, 0);
+      cfg[changed] = Math.min(cfg[changed], MAX_DAY_HOURS - othersMin);
     }
-    cfg.dailySleepHours = sleep;
-    cfg.dailyStudyHours = study;
+    let over = keys.reduce((a, k) => a + cfg[k], 0) - MAX_DAY_HOURS;
+    for (const k of ['dailyFreeHours', 'dailyStudyHours', 'dailySleepHours']) {
+      if (over <= 0) break;
+      if (k === changed) continue;
+      const cut = Math.min(over, cfg[k] - HOUR_KEYS[k].min);
+      cfg[k] -= cut;
+      over -= cut;
+    }
+    // Bedtime follows from the wake-up time and how long sleep lasts.
+    cfg.wakeUpTime = minsToTimeStr(parseTimeToMins(cfg.wakeUpTime, 7 * 60));
+    cfg.sleepStartTime = minsToTimeStr(parseTimeToMins(cfg.wakeUpTime) - Math.round(cfg.dailySleepHours * 60));
+  }
+
+  // Plain-language check of the day the student has set up: totals and any overlaps.
+  function describeDayBalance(cfg) {
+    const study = cfg.dailyStudyHours, sleep = cfg.dailySleepHours, free = cfg.dailyFreeHours;
+    const total = +(study + sleep + free).toFixed(1);
+    const notes = [];
+    const wake = parseTimeToMins(cfg.wakeUpTime, 7 * 60);
+    const sleepStart = (((wake - Math.round(sleep * 60)) % 1440) + 1440) % 1440;
+    const freeStart = parseTimeToMins(cfg.freeStartTime, 14 * 60 + 30);
+    const freeEnd = freeStart + Math.round(free * 60);
+    const inAwake = (m) => (sleepStart > wake ? m >= wake && m < sleepStart : m >= wake);
+    if (freeEnd > 1440 || !inAwake(freeStart) || !inAwake(Math.max(freeStart, freeEnd - 1))) {
+      notes.push('Free time overlaps your sleep - move it earlier.');
+    }
+    const hasSchool = (cfg.schoolDays || []).length > 0;
+    const layout = buildDayLayout(cfg, hasSchool);
+    const room = layout.windows.reduce((a, w) => a + (w.end - w.start), 0);
+    const preset = SESSION_STYLE_PRESETS[cfg.sessionStyle] || SESSION_STYLE_PRESETS.pomodoro_25_5;
+    const needed = study * 60 * (1 + preset.breakMins / preset.focusMins);
+    if (room < needed) {
+      notes.push(`Only about ${(room / 60).toFixed(1)}h is open for study after your free time${hasSchool ? ' and school' : ''}, so some study hours may not fit. Start study earlier, shorten free time, or sleep later.`);
+    }
+    return { total, notes };
   }
 
   function syncConfigControlsFromState() {
     const cfg = state.config;
-    normalizeStudySleep(cfg);
-    // The sliders themselves also stop at the allowed value
-    ['daily-study-hours-range', 'daily-study-hours-input'].forEach((id) => {
-      if ($(id)) { $(id).min = MIN_STUDY_HOURS; $(id).max = Math.min(14, MAX_DAY_HOURS - cfg.dailySleepHours); }
-    });
-    ['daily-sleep-hours-range', 'daily-sleep-hours-input'].forEach((id) => {
-      if ($(id)) { $(id).min = MIN_SLEEP_HOURS; $(id).max = Math.min(12, MAX_DAY_HOURS - cfg.dailyStudyHours); }
+    normalizeDayHours(cfg, lastChangedHours);
+    // The sliders themselves also stop at the allowed value, so the three can never pass 24h
+    [
+      ['study', 'dailyStudyHours', ['dailySleepHours', 'dailyFreeHours']],
+      ['sleep', 'dailySleepHours', ['dailyStudyHours', 'dailyFreeHours']],
+      ['free', 'dailyFreeHours', ['dailyStudyHours', 'dailySleepHours']],
+    ].forEach(([name, key, others]) => {
+      const max = Math.min(HOUR_KEYS[key].max, MAX_DAY_HOURS - others.reduce((a, k) => a + cfg[k], 0));
+      [`daily-${name}-hours-range`, `daily-${name}-hours-input`].forEach((id) => {
+        if ($(id)) { $(id).min = HOUR_KEYS[key].min; $(id).max = Math.max(HOUR_KEYS[key].min, max); }
+      });
     });
 
     if ($('daily-study-hours-input')) $('daily-study-hours-input').value = cfg.dailyStudyHours;
@@ -1421,10 +1518,23 @@
     if ($('daily-sleep-hours-input')) $('daily-sleep-hours-input').value = cfg.dailySleepHours;
     if ($('daily-sleep-hours-range')) $('daily-sleep-hours-range').value = cfg.dailySleepHours;
 
+    if ($('daily-free-hours-input')) $('daily-free-hours-input').value = cfg.dailyFreeHours;
+    if ($('daily-free-hours-range')) $('daily-free-hours-range').value = cfg.dailyFreeHours;
+    if ($('free-start-time')) $('free-start-time').value = cfg.freeStartTime;
+    if ($('wake-up-time')) $('wake-up-time').value = cfg.wakeUpTime;
+    if ($('bedtime-readout')) $('bedtime-readout').textContent = cfg.sleepStartTime;
+    const balance = describeDayBalance(cfg);
+    if ($('day-total-hours')) {
+      $('day-total-hours').textContent = `${cfg.dailyStudyHours}h study + ${cfg.dailyFreeHours}h free + ${cfg.dailySleepHours}h sleep = ${balance.total}h of 24h`;
+    }
+    if ($('day-balance-notes')) {
+      $('day-balance-notes').innerHTML = balance.notes.map((n) => `<li>${escapeHtml(n)}</li>`).join('');
+      $('day-balance-notes').hidden = balance.notes.length === 0;
+    }
+
     if ($('plan-days-select')) $('plan-days-select').value = String(cfg.planDays || 7);
     if ($('school-start-time')) $('school-start-time').value = cfg.schoolStartTime || '08:00';
     if ($('school-end-time')) $('school-end-time').value = cfg.schoolEndTime || '14:30';
-    if ($('wake-up-time')) $('wake-up-time').value = cfg.wakeUpTime || '06:30';
     if ($('include-quiz-revision-toggle')) $('include-quiz-revision-toggle').checked = cfg.includeQuizRevision !== false;
 
     document.querySelectorAll('#session-style-pills .pl-style-pill').forEach((btn) => {
@@ -1448,7 +1558,7 @@
     const schoolCount = cfg.schoolDays.length;
     const balanceChip = $('schedule-balance-chip');
     if (balanceChip) {
-      balanceChip.textContent = `${cfg.dailyStudyHours}h Study · ${cfg.dailySleepHours}h Sleep · ${schoolCount} School Day${schoolCount === 1 ? '' : 's'}/wk`;
+      balanceChip.textContent = `${cfg.dailyStudyHours}h Study · ${cfg.dailyFreeHours}h Free · ${cfg.dailySleepHours}h Sleep · ${schoolCount} School Day${schoolCount === 1 ? '' : 's'}/wk`;
     }
     const step2Sub = $('nav-pill-step2-sub');
     if (step2Sub) {
@@ -1466,7 +1576,8 @@
     const update = (val) => {
       const n = Math.max(Number(rangeEl.min), Math.min(Number(rangeEl.max), parseFloat(val) || Number(rangeEl.min)));
       state.config[configKey] = n;
-      normalizeStudySleep(state.config, configKey);
+      lastChangedHours = configKey;
+      normalizeDayHours(state.config, configKey);
       if (rangeEl) rangeEl.value = state.config[configKey];
       if (numEl) numEl.value = state.config[configKey];
       syncConfigControlsFromState();
@@ -1478,6 +1589,18 @@
 
   bindSliderPair('daily-study-hours-range', 'daily-study-hours-input', 'dailyStudyHours');
   bindSliderPair('daily-sleep-hours-range', 'daily-sleep-hours-input', 'dailySleepHours');
+  bindSliderPair('daily-free-hours-range', 'daily-free-hours-input', 'dailyFreeHours');
+
+  [
+    ['free-start-time', 'freeStartTime', '14:30'],
+    ['wake-up-time', 'wakeUpTime', '07:00'],
+  ].forEach(([id, key, def]) => {
+    $(id)?.addEventListener('change', (e) => {
+      state.config[key] = e.target.value || def;
+      syncConfigControlsFromState();
+      saveLocalPlannerCache();
+    });
+  });
 
   $('plan-days-select')?.addEventListener('change', (e) => {
     state.config.planDays = parseInt(e.target.value, 10) || 7;
@@ -1491,10 +1614,6 @@
   });
   $('school-end-time')?.addEventListener('change', (e) => {
     state.config.schoolEndTime = e.target.value || '14:30';
-    saveLocalPlannerCache();
-  });
-  $('wake-up-time')?.addEventListener('change', (e) => {
-    state.config.wakeUpTime = e.target.value || '06:30';
     saveLocalPlannerCache();
   });
   $('include-quiz-revision-toggle')?.addEventListener('change', (e) => {
@@ -1693,7 +1812,7 @@
       syncBanner.hidden = !isSynced;
       if (isSynced) {
         $('todoist-sync-banner-title').textContent = `Synced ${plan.todoistSync.parentTasksCreated || 0} Parent Tasks & ${plan.todoistSync.subTasksCreated || 0} Sub-Tasks to Todoist!`;
-        const syncDate = plan.todoistSync.syncedAt ? new Date(plan.todoistSync.syncedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'just now';
+        const syncDate = plan.todoistSync.syncedAt ? new Date(plan.todoistSync.syncedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' }) : 'just now';
         $('todoist-sync-banner-desc').textContent = `Last pushed at ${syncDate}. Open Todoist Upcoming to view your scheduled blocks, descriptions, and due dates.`;
       }
     }
@@ -1710,7 +1829,7 @@
 
     const m = plan.metrics || {};
     if ($('metric-daily-split')) {
-      $('metric-daily-split').textContent = `${m.dailyStudyHours || state.config.dailyStudyHours}h Study · ${m.dailySleepHours || state.config.dailySleepHours}h Sleep`;
+      $('metric-daily-split').textContent = `${m.dailyStudyHours || state.config.dailyStudyHours}h Study · ${m.dailyFreeHours || state.config.dailyFreeHours}h Free · ${m.dailySleepHours || state.config.dailySleepHours}h Sleep`;
     }
     if ($('metric-session-style')) {
       $('metric-session-style').textContent = plan.sessionStyleLabel || 'Pomodoro (25m / 5m)';
@@ -1833,7 +1952,9 @@
             </div>
             <div class="pl-day-Allocation">
               <span>📚 ${day.studyHours}h Study</span>
-              <span>😴 ${day.sleepHours}h Sleep</span>
+              <span title="${escapeHtml(day.freeBlock ? `${day.freeBlock.startTime}–${day.freeBlock.endTime}` : '')}">🎮 ${day.freeHours ?? day.freePlayHours ?? 0}h Free</span>
+              <span title="${escapeHtml(day.sleepBlock ? `${day.sleepBlock.startTime}–${day.sleepBlock.endTime}` : '')}">😴 ${day.sleepHours}h Sleep</span>
+              ${day.studyShortfallMins > 0 ? `<span class="pl-day-warn" title="Not enough open time to fit all study hours">⚠ ${(day.studyShortfallMins / 60).toFixed(1)}h didn't fit</span>` : ''}
               <span class="pl-day-progress-pill">${doneBlocksCount}/${blocks.length} Tasks</span>
               <button type="button" class="btn btn-ghost btn-sm pl-push-day-btn" data-date="${escapeHtml(day.date)}">
                 <i class="fa-solid ${allDaySynced ? 'fa-check' : 'fa-cloud-arrow-up'}"></i>
