@@ -2,13 +2,14 @@
 import { Api, Bot, HttpError } from "grammy";
 
 import {
-  CRON_SECRET,
-  DEFAULT_CLASS_LEVEL,
   GEMINI_API_KEY,
   GEMINI_MODEL,
-  MORNING_BRIEF_TIME,
   TELEGRAM_BOT_TOKEN,
 } from "../config.js";
+
+const DEFAULT_CLASS_LEVEL = parseInt(process.env.CLASS_LEVEL ?? "", 10) || 10;
+const CRON_SECRET = (process.env.CRON_SECRET ?? "").trim();
+const MORNING_BRIEF_TIME = (process.env.MORNING_BRIEF_TIME ?? "08:00").trim() || "08:00";
 import {
   compactTaskId,
   createPomodoroSession,
