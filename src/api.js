@@ -1478,7 +1478,7 @@ async def run():
         return
 
     try:
-        async with NotebookLMClient.from_storage(storage_path) as client:
+        async with NotebookLMClient.from_storage(storage_path, timeout=300.0) as client:
             notebooks = await client.notebooks.list()
             nb = next((n for n in notebooks if getattr(n, "title", "") == nb_title), None)
             if nb is None:

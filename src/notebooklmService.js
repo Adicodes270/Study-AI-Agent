@@ -18,7 +18,7 @@ import { registerChapterGenerator, setChapterStep } from "./generationQueue.js";
 const MAX_PDF_BYTES = 40 * 1024 * 1024;
 
 // Test mode: add ONLY the chapter's saved link to NotebookLM. No download + file-upload fallback.
-// On by default; set NOTEBOOKLM_URL_ONLY=0 to bring the NCERT PDF fallback back.
+// On by default (no download): set NOTEBOOKLM_URL_ONLY=0 to bring the NCERT PDF fallback back.
 const URL_ONLY = process.env.NOTEBOOKLM_URL_ONLY !== "0";
 
 // Allowed resources = the app's list minus anything excluded (infographics, reports). Checked again in the Python script.
@@ -126,6 +126,13 @@ async def verify(client, nb_id, task_id):
         await asyncio.sleep(2.5)  # not_found / unknown: listing may lag a moment
     return False, "not visible in the notebook"
 
+def open_client(cls, path):
+    """The library's default HTTP timeout is 30s, too short for ADD_SOURCE on a big PDF link: allow 5 minutes."""
+    try:
+        return cls.from_storage(path, timeout=300.0)
+    except TypeError:
+        return cls.from_storage(path)
+
 async def run():
     p = json.loads(sys.argv[1])
     action = p["action"]
@@ -134,7 +141,7 @@ async def run():
     except ImportError as e:
         print(json.dumps({"ok": False, "reason": "not_installed", "error": str(e)})); return
     try:
-        async with NotebookLMClient.from_storage(p["storage_path"]) as client:
+        async with open_client(NotebookLMClient, p["storage_path"]) as client:
             if action == "create_and_add_url":
                 title = p["title"]
                 nb = next((n for n in await client.notebooks.list() if getattr(n, "title", "") == title), None)
@@ -150,7 +157,7 @@ async def run():
                     nb = await client.notebooks.create(title)
                 out = {"ok": True, "notebook_id": nb.id, "source_ok": False}
                 try:
-                    src = await client.sources.add_url(nb.id, p["url"], wait=True, wait_timeout=90.0)
+                    src = await client.sources.add_url(nb.id, p["url"], wait=True, wait_timeout=240.0)
                     if not getattr(src, "id", None) or bad_status(src):
                         out["source_error"] = "source ended with status " + str(getattr(src, "status", "unknown"))
                         if getattr(src, "id", None):
@@ -161,6 +168,22 @@ async def run():
                 except Exception as exc:
                     if is_rate(exc): raise
                     out["source_error"] = f"{type(exc).__name__}: {exc}"
+                    # A slow link may still finish on NotebookLM's side: wait a bit more and keep it if it becomes usable
+                    try:
+                        want = p["url"].rstrip("/")
+                        for _ in range(12):  # up to ~2 more minutes
+                            found = [s for s in await client.sources.list(nb.id) if (getattr(s, "url", None) or "").rstrip("/") == want]
+                            good = [s for s in found if getattr(s, "id", None) and not bad_status(s) and getattr(getattr(s, "status", None), "name", "READY") not in ("PROCESSING", "PREPARING")]
+                            if good:
+                                out.update(source_ok=True, source_id=good[0].id); out.pop("source_error", None); break
+                            if found and all(bad_status(s) for s in found):
+                                for s in found:
+                                    try: await client.sources.delete(nb.id, s.id)
+                                    except Exception: pass
+                                break
+                            await asyncio.sleep(10)
+                    except Exception:
+                        pass
                 print(json.dumps(out))
             elif action == "add_file":
                 src = await client.sources.add_file(p["notebook_id"], p["file_path"], wait=True, wait_timeout=150.0)
@@ -301,7 +324,7 @@ export async function createChapterNotebook({ jobId, userId, chapter, sessionFil
 
   // 1 + 2. Notebook, then the user's source URL
   await step(url ? "Creating notebook and adding your source link" : "Creating notebook");
-  const first = await py({ action: "create_and_add_url", storage_path: sessionFile, title, url }, 240_000);
+  const first = await py({ action: "create_and_add_url", storage_path: sessionFile, title, url }, 480_000);
   if (!first?.ok || !first.notebook_id) throw pyError(first || {}, "Could not create the NotebookLM notebook");
   const notebookId = first.notebook_id;
   let sourceKind = first.reused ? "existing" : "url";

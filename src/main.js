@@ -8,6 +8,6 @@ import { registerNotebookLmGenerator } from "./notebooklmService.js";
 registerNotebookLmGenerator();
 
 // 1. Start the website on http://localhost:3000
-startWebServer(31011);
+startWebServer(3000);
 // 2. Start the Telegram bot polling
 runBot();
