@@ -3,8 +3,18 @@
 import { TodoistApi } from "@doist/todoist-sdk";
 import { GoogleGenAI, Type } from "@google/genai";
 import { GEMINI_API_KEY, GEMINI_MODEL } from "./config.js";
-import { cleanTodoistKey, isValidTodoistKey } from "./intake/userKeys.js";
-import { storedSubject } from "./db.js";
+import { cleanTodoistKey, getTodoistKey, getUserClass, getUserKeys, isValidTodoistKey } from "./intake/userKeys.js";
+import {
+  compactTaskId,
+  findTaskInPlan,
+  getChaptersWithResults,
+  getDailyProgressStats,
+  getStudyPlanForUser,
+  markStudyTaskDone,
+  markStudyTaskPartial,
+  saveStudyPlanForUser,
+  storedSubject,
+} from "./db.js";
 import { revisionFor } from "./quizEngine.js";
 
 // ---------------------------------------------------------------------------
@@ -1286,5 +1296,533 @@ Provide:
       totalTasksCreated: 0,
       upcomingUrl: "https://app.todoist.com/app/upcoming",
     },
+  };
+}
+
+
+// ---------------------------------------------------------------------------
+// 4. Telegram Bot Daily Study Brief, Partial Carry-Over & Dynamic Rescheduling
+// ---------------------------------------------------------------------------
+
+export function getTodayIstYmd() {
+  const istNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+  return formatDateYMD(istNow);
+}
+
+export function addDaysYmd(baseYmd, daysToAdd) {
+  const d = new Date(`${baseYmd}T00:00:00`);
+  d.setDate(d.getDate() + Number(daysToAdd || 0));
+  return formatDateYMD(d);
+}
+
+export function formatFriendlyDate(dateYmd, todayYmd = getTodayIstYmd()) {
+  const tomorrowYmd = addDaysYmd(todayYmd, 1);
+  const d = new Date(`${dateYmd}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return String(dateYmd);
+  const shortStr = `${SHORT_DAY_NAMES[d.getDay()]}, ${SHORT_MONTHS[d.getMonth()]} ${d.getDate()}`;
+  if (dateYmd === todayYmd) return `Today (${shortStr})`;
+  if (dateYmd === tomorrowYmd) return `Tomorrow (${shortStr})`;
+  return shortStr;
+}
+
+function buildEmptyPlanDay(dateYmd, dayIndex, configInput = {}, todayYmd = getTodayIstYmd()) {
+  const config = normalizePlannerConfig(configInput);
+  const preset = getSessionPreset(config);
+  const dateObj = new Date(`${dateYmd}T00:00:00`);
+  const dow = dateObj.getDay();
+  const vacationMatch = isDateInVacation(dateYmd, config.vacationRanges);
+  const isSchoolDay = !vacationMatch && config.schoolDays.includes(dow);
+  const dayType = vacationMatch ? "vacation_day" : isSchoolDay ? "school_day" : "full_day";
+  const dayTypeLabel = vacationMatch
+    ? `Vacation / Holiday (${vacationMatch.label})`
+    : isSchoolDay
+      ? `School Day (${config.schoolStartTime}–${config.schoolEndTime})`
+      : dow === 0
+        ? "Sunday · Full Study & Recharge Day"
+        : "Non-School Full Day";
+  const layout = buildDayLayout(config, isSchoolDay);
+  const tomorrowYmd = addDaysYmd(todayYmd, 1);
+
+  return {
+    dayIndex,
+    date: dateYmd,
+    dayOfWeek: DAY_NAMES[dow],
+    shortDay: SHORT_DAY_NAMES[dow],
+    displayDate: `${SHORT_DAY_NAMES[dow]}, ${SHORT_MONTHS[dateObj.getMonth()]} ${dateObj.getDate()}`,
+    dayLabel:
+      dateYmd === todayYmd
+        ? `Today (${SHORT_DAY_NAMES[dow]}, ${SHORT_MONTHS[dateObj.getMonth()]} ${dateObj.getDate()})`
+        : dateYmd === tomorrowYmd
+          ? `Tomorrow (${SHORT_DAY_NAMES[dow]}, ${SHORT_MONTHS[dateObj.getMonth()]} ${dateObj.getDate()})`
+          : `${DAY_NAMES[dow]}, ${SHORT_MONTHS[dateObj.getMonth()]} ${dateObj.getDate()}`,
+    dayType,
+    dayTypeLabel,
+    isSchoolDay,
+    isVacation: Boolean(vacationMatch),
+    vacationLabel: vacationMatch?.label || null,
+    sleepHours: config.dailySleepHours,
+    studyHours: 0,
+    freeHours: config.dailyFreeHours,
+    freePlayHours: config.dailyFreeHours,
+    sleepBlock: layout.sleepBlock,
+    freeBlock: layout.freeBlock,
+    wakeTime: layout.wakeTime,
+    studyShortfallMins: 0,
+    totalBreakMins: 0,
+    todoistDueString: `${dateYmd === todayYmd ? "today" : dateYmd === tomorrowYmd ? "tomorrow" : dateYmd} at 6pm`,
+    studyBlocks: [],
+    _presetLabel: preset.label,
+  };
+}
+
+function recalculateDayTimings(day, configInput = {}, todayYmd = getTodayIstYmd()) {
+  const config = normalizePlannerConfig(configInput);
+  const preset = getSessionPreset(config);
+  const slots = buildDailyTimeSlots(day.isSchoolDay ? "school_day" : "full_day", config, preset);
+  const blocks = Array.isArray(day.studyBlocks) ? day.studyBlocks : [];
+  const tomorrowYmd = addDaysYmd(todayYmd, 1);
+
+  let lastEndMins = slots[0] ? parseTimeToMins(slots[0].startTime, 16 * 60) : 16 * 60;
+  for (let i = 0; i < blocks.length; i++) {
+    const b = blocks[i];
+    b.slotIndex = i + 1;
+    const dur = Math.max(15, Number(b.durationMins) || 45);
+    if (slots[i]) {
+      b.startTime = slots[i].startTime;
+      b.endTime = minsToTimeStr(parseTimeToMins(slots[i].startTime) + dur);
+      b.period = slots[i].period;
+      b.sessionPatternLabel = b.sessionPatternLabel || slots[i].sessionPatternLabel;
+      b.breakIntervalText = b.breakIntervalText || slots[i].breakIntervalText;
+      lastEndMins = parseTimeToMins(b.endTime) + (slots[i].breakMinsAfter || 15);
+    } else {
+      b.startTime = minsToTimeStr(lastEndMins);
+      b.endTime = minsToTimeStr(lastEndMins + dur);
+      b.period = lastEndMins < 17 * 60 ? "Afternoon Study Window" : "Evening Study Window";
+      b.sessionPatternLabel = b.sessionPatternLabel || preset.label;
+      b.breakIntervalText = b.breakIntervalText || `${dur}m focused study session`;
+      lastEndMins = lastEndMins + dur + 15;
+    }
+    const relPrefix = day.date === todayYmd ? "today" : day.date === tomorrowYmd ? "tomorrow" : day.date;
+    b.todoistDueString = `${relPrefix} at ${format12hDueTime(b.startTime)}`;
+  }
+
+  const activeMins = blocks
+    .filter((b) => b.status !== "rescheduled")
+    .reduce((acc, b) => acc + (Number(b.durationMins) || 0), 0);
+  day.studyHours = +(activeMins / 60).toFixed(1);
+}
+
+/**
+ * Ensures the user has an active, up-to-date study plan in src/db.js.
+ * If none exists (or all scheduled days are in the past), generates and saves one automatically.
+ */
+export async function ensureUserStudyPlan(
+  telegramUserId,
+  { todayYmd = getTodayIstYmd(), forceRegenerate = false } = {}
+) {
+  const existing = await getStudyPlanForUser(telegramUserId);
+  const config = normalizePlannerConfig(existing?.config || DEFAULT_PLANNER_CONFIG);
+  let plan = existing?.plan || null;
+
+  const hasCurrentOrFutureDays =
+    plan &&
+    Array.isArray(plan.days) &&
+    plan.days.length > 0 &&
+    plan.days.some((d) => d.date >= todayYmd);
+
+  if (!hasCurrentOrFutureDays || forceRegenerate) {
+    const [chapters, geminiKeys, classLevel] = await Promise.all([
+      getChaptersWithResults(telegramUserId),
+      getUserKeys(telegramUserId),
+      getUserClass(telegramUserId),
+    ]);
+    plan = await generateAiStudyPlan({
+      chapters,
+      config,
+      geminiKeys,
+      startDate: todayYmd,
+      classLevel,
+    });
+    await saveStudyPlanForUser(telegramUserId, { config, plan });
+  }
+
+  return { plan, config, todayYmd };
+}
+
+/**
+ * Fetches today's scheduled tasks/chapters and completion statistics for the given user.
+ */
+export async function getTodayScheduleForUser(
+  telegramUserId,
+  { todayYmd = getTodayIstYmd(), forceRegenerate = false } = {}
+) {
+  const { plan, config } = await ensureUserStudyPlan(telegramUserId, { todayYmd, forceRegenerate });
+  const days = Array.isArray(plan?.days) ? plan.days : [];
+  let day = days.find((d) => d.date === todayYmd) || days.find((d) => d.date >= todayYmd) || days[0] || null;
+
+  if (!day) {
+    day = buildEmptyPlanDay(todayYmd, 1, config, todayYmd);
+    plan.days = [day];
+    await saveStudyPlanForUser(telegramUserId, { plan });
+  }
+
+  const stats = getDailyProgressStats(day);
+  return {
+    plan,
+    config,
+    day,
+    todayYmd,
+    stats,
+  };
+}
+
+/**
+ * Marks a task as 100% completed in src/db.js (and syncs to Todoist if linked),
+ * returning updated daily progress stats.
+ */
+export async function completeStudyTask(telegramUserId, taskId, { todayYmd = getTodayIstYmd() } = {}) {
+  await ensureUserStudyPlan(telegramUserId, { todayYmd });
+  const res = await markStudyTaskDone(telegramUserId, taskId);
+  if (!res.ok) return res;
+
+  if (res.task?.todoistTaskId) {
+    const token = await getTodoistKey(telegramUserId).catch(() => "");
+    if (token) {
+      await setTodoistTaskCompleted({
+        token,
+        taskId: res.task.todoistTaskId,
+        completed: true,
+      }).catch(() => {});
+    }
+  }
+
+  return res;
+}
+
+/**
+ * Marks a task as 50% complete in src/db.js and automatically carries over the remaining half
+ * of the topic into tomorrow's schedule.
+ */
+export async function carryOverPartialTask(telegramUserId, taskId, { todayYmd = getTodayIstYmd() } = {}) {
+  const { plan, config } = await ensureUserStudyPlan(telegramUserId, { todayYmd });
+  const found = findTaskInPlan(plan, taskId);
+  if (!found) {
+    return { ok: false, error: `Task "${taskId}" not found in your study plan.` };
+  }
+
+  const { day, block } = found;
+  const tomorrowYmd = addDaysYmd(day.date || todayYmd, 1);
+
+  // 1. Mark current task as 50% complete in db
+  block.completed = false;
+  block.status = "partial";
+  block.completionPct = 50;
+  block.partialLoggedAt = new Date().toISOString();
+  block.carriedToDate = tomorrowYmd;
+
+  if (Array.isArray(block.subtasks) && block.subtasks.length > 0) {
+    const half = Math.max(1, Math.ceil(block.subtasks.length / 2));
+    block.subtasks.forEach((sub, idx) => {
+      if (sub && typeof sub === "object" && idx < half) {
+        sub.completed = true;
+      }
+    });
+  }
+
+  // 2. Find or create tomorrow's schedule day
+  let tomorrowDay = plan.days.find((d) => d.date === tomorrowYmd);
+  if (!tomorrowDay) {
+    tomorrowDay = buildEmptyPlanDay(tomorrowYmd, plan.days.length + 1, config, todayYmd);
+    plan.days.push(tomorrowDay);
+    plan.days.sort((a, b) => a.date.localeCompare(b.date));
+    plan.days.forEach((d, idx) => {
+      d.dayIndex = idx + 1;
+    });
+  }
+
+  tomorrowDay.studyBlocks = Array.isArray(tomorrowDay.studyBlocks) ? tomorrowDay.studyBlocks : [];
+
+  // 3. Avoid duplicate carry-over if user tapped Half Done twice on the same task
+  let carryOverBlock = tomorrowDay.studyBlocks.find((b) => b.carriedFromTaskId === block.id);
+  if (!carryOverBlock) {
+    const remainingDuration = Math.max(25, Math.round((Number(block.durationMins) || 60) / 2));
+    const baseTitle = String(block.title || block.chapterTitle || "Study Topic")
+      .replace(/\s*\(Remaining 50%\)\s*$/i, "")
+      .trim();
+    const nextSlotNum = tomorrowDay.studyBlocks.length + 1;
+    const carryId = `block_${tomorrowYmd}_${nextSlotNum}`;
+
+    const remainingSubtasks = Array.isArray(block.subtasks)
+      ? block.subtasks.filter((s) => !s.completed).map((s, idx) => ({
+          id: `sub_${tomorrowYmd}_${nextSlotNum}_${idx + 1}`,
+          content: typeof s === "string" ? s : String(s.content || ""),
+          completed: false,
+          todoistTaskId: null,
+        }))
+      : [];
+
+    if (!remainingSubtasks.length) {
+      remainingSubtasks.push({
+        id: `sub_${tomorrowYmd}_${nextSlotNum}_1`,
+        content: `Complete remaining 50% of ${baseTitle} & take Study Agent Quiz`,
+        completed: false,
+        todoistTaskId: null,
+      });
+    }
+
+    carryOverBlock = {
+      ...block,
+      id: carryId,
+      slotIndex: nextSlotNum,
+      durationMins: remainingDuration,
+      title: `${baseTitle} (Remaining 50%)`,
+      priority: "High",
+      focusType: "Carry-Over Completion (Remaining 50%)",
+      strategyNote: `Finish the remaining half of "${baseTitle}" carried over from ${day.date}.`,
+      carriedFromTaskId: block.id,
+      carriedFromDate: day.date,
+      carriedToDate: null,
+      completed: false,
+      status: "pending",
+      completionPct: 0,
+      synced: false,
+      todoistTaskId: null,
+      todoistUrl: null,
+      subtasks: remainingSubtasks,
+    };
+
+    // Front-load carried-over partial task at the start of tomorrow's schedule
+    tomorrowDay.studyBlocks.unshift(carryOverBlock);
+    recalculateDayTimings(tomorrowDay, config, todayYmd);
+  }
+
+  block.carriedToTaskId = carryOverBlock.id;
+
+  if (plan.metrics) {
+    plan.metrics.totalBlocks = plan.days.reduce((acc, d) => acc + (d.studyBlocks?.length || 0), 0);
+    plan.metrics.totalStudyHours = +plan.days.reduce((acc, d) => acc + (d.studyHours || 0), 0).toFixed(1);
+  }
+
+  await saveStudyPlanForUser(telegramUserId, { plan });
+  const stats = getDailyProgressStats(day);
+
+  return {
+    ok: true,
+    task: block,
+    carryOverBlock,
+    day,
+    tomorrowDay,
+    tomorrowDate: tomorrowYmd,
+    tomorrowLabel: formatFriendlyDate(tomorrowYmd, todayYmd),
+    stats,
+    plan,
+  };
+}
+
+/**
+ * Dynamically redistributes a specific unfinished task (`taskId`) OR all overdue/unfinished tasks
+ * across upcoming days in the user's schedule without overloading a single day.
+ */
+export async function rescheduleTasks(
+  telegramUserId,
+  { taskId = null, todayYmd = getTodayIstYmd() } = {}
+) {
+  const { plan, config } = await ensureUserStudyPlan(telegramUserId, { todayYmd });
+  const maxDailyMins = Math.round((Number(config.dailyStudyHours) || 5) * 60);
+  const maxBlocksPerDay = Math.max(3, Math.ceil(maxDailyMins / 75) + 1);
+
+  const tasksToMove = [];
+
+  if (taskId) {
+    const found = findTaskInPlan(plan, taskId);
+    if (!found) {
+      return { ok: false, error: `Task "${taskId}" not found in your study plan.` };
+    }
+    tasksToMove.push(found);
+
+    // Also include any strictly overdue unfinished tasks from earlier days (< todayYmd)
+    for (let dIdx = 0; dIdx < plan.days.length; dIdx++) {
+      const d = plan.days[dIdx];
+      if (d.date >= todayYmd) continue;
+      for (let bIdx = 0; bIdx < (d.studyBlocks || []).length; bIdx++) {
+        const b = d.studyBlocks[bIdx];
+        if (!b.completed && b.status !== "rescheduled" && b.id !== found.block.id) {
+          tasksToMove.push({ day: d, dayIndex: dIdx, block: b, blockIndex: bIdx });
+        }
+      }
+    }
+  } else {
+    // 1. Collect all overdue unfinished tasks from past days (date < todayYmd)
+    for (let dIdx = 0; dIdx < plan.days.length; dIdx++) {
+      const d = plan.days[dIdx];
+      if (d.date >= todayYmd) continue;
+      for (let bIdx = 0; bIdx < (d.studyBlocks || []).length; bIdx++) {
+        const b = d.studyBlocks[bIdx];
+        if (!b.completed && b.status !== "rescheduled") {
+          tasksToMove.push({ day: d, dayIndex: dIdx, block: b, blockIndex: bIdx });
+        }
+      }
+    }
+
+    // 2. If no past overdue tasks, redistribute unfinished tasks from today
+    if (!tasksToMove.length) {
+      const todayIdx = plan.days.findIndex((d) => d.date === todayYmd);
+      if (todayIdx >= 0) {
+        const d = plan.days[todayIdx];
+        for (let bIdx = 0; bIdx < (d.studyBlocks || []).length; bIdx++) {
+          const b = d.studyBlocks[bIdx];
+          if (!b.completed && b.status !== "rescheduled") {
+            tasksToMove.push({ day: d, dayIndex: todayIdx, block: b, blockIndex: bIdx });
+          }
+        }
+      }
+    }
+  }
+
+  if (!tasksToMove.length) {
+    const todayDay = plan.days.find((d) => d.date === todayYmd) || plan.days[0] || null;
+    return {
+      ok: true,
+      movedTasks: [],
+      day: todayDay,
+      stats: todayDay ? getDailyProgressStats(todayDay) : null,
+      plan,
+    };
+  }
+
+  // Helper to get active minutes & block count for a candidate day
+  const getDayLoad = (d) => {
+    const active = (d.studyBlocks || []).filter((b) => b.status !== "rescheduled");
+    const mins = active.reduce((acc, b) => acc + (Number(b.durationMins) || 0), 0);
+    return { count: active.length, mins };
+  };
+
+  // Helper to ensure there is at least one upcoming day after `afterDateYmd` with capacity
+  const pickTargetUpcomingDay = (afterDateYmd, neededMins) => {
+    const minTargetDate = afterDateYmd > todayYmd ? addDaysYmd(afterDateYmd, 1) : addDaysYmd(todayYmd, 1);
+
+    // Ensure at least 3 upcoming days exist in plan.days
+    let lastDate = plan.days[plan.days.length - 1]?.date || todayYmd;
+    while (lastDate < addDaysYmd(minTargetDate, 2)) {
+      const nextDate = addDaysYmd(lastDate, 1);
+      plan.days.push(buildEmptyPlanDay(nextDate, plan.days.length + 1, config, todayYmd));
+      lastDate = nextDate;
+    }
+
+    const candidates = plan.days.filter((d) => d.date >= minTargetDate);
+
+    // First pass: find the earliest upcoming day that fits neededMins without exceeding maxDailyMins + 30m buffer
+    let bestDay = null;
+    let bestScore = Infinity;
+
+    for (let i = 0; i < candidates.length; i++) {
+      const cand = candidates[i];
+      const load = getDayLoad(cand);
+      const fitsCleanly = load.mins + neededMins <= maxDailyMins + 30 && load.count < maxBlocksPerDay;
+      // Score balances current load and proximity so tasks spread evenly across upcoming days
+      const score = load.mins + i * 20 + (fitsCleanly ? 0 : 500);
+      if (score < bestScore) {
+        bestScore = score;
+        bestDay = cand;
+      }
+    }
+
+    // If even the best candidate is overloaded, append a new day at the end of the plan
+    if (!bestDay || getDayLoad(bestDay).mins + neededMins > maxDailyMins + 60) {
+      const newDate = addDaysYmd(plan.days[plan.days.length - 1].date, 1);
+      const newDay = buildEmptyPlanDay(newDate, plan.days.length + 1, config, todayYmd);
+      plan.days.push(newDay);
+      return newDay;
+    }
+
+    return bestDay;
+  };
+
+  const movedTasks = [];
+
+  for (const item of tasksToMove) {
+    const { day: srcDay, block } = item;
+    const dur = Math.max(25, Number(block.durationMins) || 60);
+    const targetDay = pickTargetUpcomingDay(srcDay.date, dur);
+
+    // Mark original block as rescheduled so today's view reflects it cleanly
+    block.completed = false;
+    block.status = "rescheduled";
+    block.rescheduledTo = targetDay.date;
+    block.rescheduledAt = new Date().toISOString();
+
+    const nextSlotNum = (targetDay.studyBlocks?.length || 0) + 1;
+    const newBlockId = `block_${targetDay.date}_${nextSlotNum}`;
+
+    const clonedSubtasks = Array.isArray(block.subtasks)
+      ? block.subtasks.map((s, idx) => ({
+          id: `sub_${targetDay.date}_${nextSlotNum}_${idx + 1}`,
+          content: typeof s === "string" ? s : String(s.content || ""),
+          completed: Boolean(s.completed),
+          todoistTaskId: null,
+        }))
+      : [];
+
+    const newBlock = {
+      ...block,
+      id: newBlockId,
+      slotIndex: nextSlotNum,
+      rescheduledFrom: srcDay.date,
+      rescheduledFromTaskId: block.id,
+      rescheduledTo: null,
+      completed: false,
+      status: "pending",
+      synced: false,
+      todoistTaskId: null,
+      todoistUrl: null,
+      subtasks: clonedSubtasks,
+    };
+
+    targetDay.studyBlocks = Array.isArray(targetDay.studyBlocks) ? targetDay.studyBlocks : [];
+    targetDay.studyBlocks.push(newBlock);
+    recalculateDayTimings(targetDay, config, todayYmd);
+    recalculateDayTimings(srcDay, config, todayYmd);
+
+    block.rescheduledToTaskId = newBlock.id;
+
+    movedTasks.push({
+      originalTaskId: block.id,
+      newTaskId: newBlock.id,
+      subject: block.subject,
+      title: block.title || block.chapterTitle,
+      durationMins: dur,
+      fromDate: srcDay.date,
+      fromDayLabel: formatFriendlyDate(srcDay.date, todayYmd),
+      toDate: targetDay.date,
+      toDayLabel: formatFriendlyDate(targetDay.date, todayYmd),
+      startTime: newBlock.startTime,
+      endTime: newBlock.endTime,
+    });
+  }
+
+  plan.days.sort((a, b) => a.date.localeCompare(b.date));
+  plan.days.forEach((d, idx) => {
+    d.dayIndex = idx + 1;
+  });
+
+  if (plan.metrics) {
+    plan.metrics.totalDays = plan.days.length;
+    plan.metrics.totalBlocks = plan.days.reduce((acc, d) => acc + (d.studyBlocks?.length || 0), 0);
+    plan.metrics.totalStudyHours = +plan.days.reduce((acc, d) => acc + (d.studyHours || 0), 0).toFixed(1);
+  }
+
+  await saveStudyPlanForUser(telegramUserId, { plan });
+  const primaryDay =
+    (taskId ? tasksToMove[0]?.day : plan.days.find((d) => d.date === todayYmd)) ||
+    plan.days.find((d) => d.date === todayYmd) ||
+    plan.days[0] ||
+    null;
+
+  return {
+    ok: true,
+    movedTasks,
+    day: primaryDay,
+    stats: primaryDay ? getDailyProgressStats(primaryDay) : null,
+    plan,
   };
 }
