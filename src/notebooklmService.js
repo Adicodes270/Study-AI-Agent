@@ -183,9 +183,17 @@ async def run():
                 print(json.dumps({"ok": True, "source_id": src.id}))
             elif action == "generate":
                 nb_id = p["notebook_id"]
-                src_ids = [s.id for s in await client.sources.list(nb_id) if getattr(s, "id", None)]
+                def busy(x):
+                    return str(getattr(getattr(x, "status", None), "name", "")).upper() in ("PROCESSING", "PREPARING", "PENDING")
+                srcs = []
+                for _ in range(24):  # the link may still be loading: wait up to ~2 minutes
+                    srcs = [x for x in await client.sources.list(nb_id) if getattr(x, "id", None)]
+                    if not any(busy(x) for x in srcs): break
+                    await asyncio.sleep(5)
+                src_ids = [x.id for x in srcs if not bad_status(x)]
                 if not src_ids:
-                    raise RuntimeError("the notebook has no usable source")
+                    st = ", ".join(str(getattr(getattr(x, "status", None), "name", getattr(x, "status", "unknown"))) for x in srcs) or "no source"
+                    raise RuntimeError("NotebookLM could not read the source link (" + st + "). It cannot open this link, so there is nothing to generate from.")
                 results = {}
                 have = await existing_kinds(client, nb_id)
                 for r_type in p["resource_types"]:
