@@ -9,11 +9,21 @@
 //   5. return { notebookUrl, ... } -> the queue stores status 'Ready' + notebook_url, or 'Failed' if this throws
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { NOTEBOOKLM_RESOURCE_TYPES, EXCLUDED_RESOURCE_TYPES } from "./api.js";
 import { getChapterForUser, getNcertPdfUrls } from "./db.js";
 import { registerChapterGenerator, setChapterStep } from "./generationQueue.js";
+
+/** Python that has notebooklm-py: NOTEBOOKLM_PYTHON, else the project's own virtualenv, else system python. */
+export function pickPython() {
+  const env = process.env.NOTEBOOKLM_PYTHON;
+  if (env && existsSync(env)) return env;
+  const here = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+  for (const c of [path.join(here, ".venv/bin/python"), "/app/.venv/bin/python", "/opt/venv/bin/python"]) if (existsSync(c)) return c;
+  return process.platform === "win32" ? "python" : "python3";
+}
 
 const MAX_PDF_BYTES = 40 * 1024 * 1024;
 
@@ -34,6 +44,7 @@ EXCLUDED = {"infographic", "infographics", "report", "reports"}
 
 def is_rate(exc):
     msg = str(exc).lower()
+    if "sourceadd" in type(exc).__name__.lower(): return False  # "can't open this link" is not a rate limit
     return "ratelimit" in type(exc).__name__.lower() or "429" in msg or "quota" in msg or "rate limit" in msg
 
 def bad_status(src):
@@ -156,34 +167,14 @@ async def run():
                 if nb is None:
                     nb = await client.notebooks.create(title)
                 out = {"ok": True, "notebook_id": nb.id, "source_ok": False}
+                # Just hand NotebookLM the link: no waiting, no checking that it loads.
                 try:
-                    src = await client.sources.add_url(nb.id, p["url"], wait=True, wait_timeout=240.0)
-                    if not getattr(src, "id", None) or bad_status(src):
-                        out["source_error"] = "source ended with status " + str(getattr(src, "status", "unknown"))
-                        if getattr(src, "id", None):
-                            try: await client.sources.delete(nb.id, src.id)
-                            except Exception: pass
-                    else:
-                        out.update(source_ok=True, source_id=src.id)
+                    src = await client.sources.add_url(nb.id, p["url"], wait=False)
+                    out["source_id"] = getattr(src, "id", None)
                 except Exception as exc:
                     if is_rate(exc): raise
-                    out["source_error"] = f"{type(exc).__name__}: {exc}"
-                    # A slow link may still finish on NotebookLM's side: wait a bit more and keep it if it becomes usable
-                    try:
-                        want = p["url"].rstrip("/")
-                        for _ in range(12):  # up to ~2 more minutes
-                            found = [s for s in await client.sources.list(nb.id) if (getattr(s, "url", None) or "").rstrip("/") == want]
-                            good = [s for s in found if getattr(s, "id", None) and not bad_status(s) and getattr(getattr(s, "status", None), "name", "READY") not in ("PROCESSING", "PREPARING")]
-                            if good:
-                                out.update(source_ok=True, source_id=good[0].id); out.pop("source_error", None); break
-                            if found and all(bad_status(s) for s in found):
-                                for s in found:
-                                    try: await client.sources.delete(nb.id, s.id)
-                                    except Exception: pass
-                                break
-                            await asyncio.sleep(10)
-                    except Exception:
-                        pass
+                    out["note"] = f"{type(exc).__name__}: {exc}"  # ignored on purpose
+                out["source_ok"] = True
                 print(json.dumps(out))
             elif action == "add_file":
                 src = await client.sources.add_file(p["notebook_id"], p["file_path"], wait=True, wait_timeout=150.0)
@@ -192,7 +183,7 @@ async def run():
                 print(json.dumps({"ok": True, "source_id": src.id}))
             elif action == "generate":
                 nb_id = p["notebook_id"]
-                src_ids = [s.id for s in await client.sources.list(nb_id) if getattr(s, "id", None) and not bad_status(s)]
+                src_ids = [s.id for s in await client.sources.list(nb_id) if getattr(s, "id", None)]
                 if not src_ids:
                     raise RuntimeError("the notebook has no usable source")
                 results = {}
@@ -225,7 +216,7 @@ asyncio.run(run())
 
 function runPython(payload, timeoutMs = 180_000) {
   return new Promise((resolve) => {
-    const bin = process.env.NOTEBOOKLM_PYTHON || (process.platform === "win32" ? "python" : "python3");
+    const bin = pickPython();
     const proc = spawn(bin, ["-c", PY_SCRIPT, JSON.stringify(payload)], { stdio: ["ignore", "pipe", "pipe"], timeout: timeoutMs });
     let out = "", err = "";
     proc.stdout.on("data", (d) => (out += d));
@@ -381,7 +372,7 @@ export async function createChapterNotebook({ jobId, userId, chapter, sessionFil
 
 /** Make the generation queue use this service (call once at startup). */
 export function registerNotebookLmGenerator() {
-  const bin = process.env.NOTEBOOKLM_PYTHON || (process.platform === "win32" ? "python" : "python3");
+  const bin = pickPython();
   const chk = spawn(bin, ["-c", "import notebooklm"], { stdio: "ignore" });
   chk.on("error", () => console.log(`⚠️  NotebookLM generation: "${bin}" was not found. Install Python 3 on the server.`));
   chk.on("close", (code) => { if (code) console.log("⚠️  NotebookLM generation: Python package notebooklm-py is missing. Run: pip install notebooklm-py"); });
