@@ -16,7 +16,7 @@
 
     <link rel="stylesheet" href="./theme.css">
     <link rel="stylesheet" href="./style.css">
-    <link rel="stylesheet" href="./planner.css">
+    <link rel="stylesheet" href="./planner.css?v=20261026">
 
     <meta name="description"
         content="Send your syllabus to Telegram. Study Agent finds NCERT chapters, builds a Todoist study plan and reschedules it after every quiz.">
@@ -125,9 +125,27 @@
                         <span class="pl-card-kicker">Todoist Workspace</span>
                         <strong id="todoist-connection-title">Todoist Quick Access</strong>
                     </div>
-                    <button type="button" class="pl-link-btn" id="toggle-inline-todoist-btn">
-                        <i class="fa-solid fa-key"></i> <span id="toggle-inline-todoist-text">API Key</span>
-                    </button>
+                    <div class="pl-more-wrap">
+                        <button type="button" class="pl-more-btn" id="plan-more-btn" aria-haspopup="menu"
+                            aria-expanded="false" aria-controls="plan-more-menu" aria-label="More actions" title="More actions">
+                            <i class="fa-solid fa-ellipsis" aria-hidden="true"></i>
+                        </button>
+                        <div class="pl-more-menu" id="plan-more-menu" role="menu" hidden>
+                            <button type="button" class="pl-menu-item" role="menuitem" id="toggle-inline-todoist-btn">
+                                <i class="fa-solid fa-key" aria-hidden="true"></i> <span id="toggle-inline-todoist-text">API Key</span>
+                            </button>
+                            <button type="button" class="pl-menu-item" role="menuitem" id="top-regenerate-btn">
+                                <i class="fa-solid fa-rotate" aria-hidden="true"></i> <span>Regenerate Plan</span>
+                            </button>
+                            <a href="https://app.todoist.com/app/upcoming" target="_blank" rel="noopener noreferrer"
+                                class="pl-menu-item" role="menuitem" id="open-todoist-upcoming-btn">
+                                <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i> <span>Open Todoist</span>
+                            </a>
+                            <a href="setup.html#step-todoist" class="pl-menu-item" role="menuitem">
+                                <i class="fa-solid fa-gear" aria-hidden="true"></i> <span>Manage keys in Setup</span>
+                            </a>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Inline Todoist API Token Drawer -->
@@ -148,21 +166,6 @@
                         <i class="fa-solid fa-cloud-arrow-up"></i>
                         <span id="top-sync-todoist-label">Sync / Push to Todoist</span>
                     </button>
-                </div>
-
-                <div class="pl-hero-secondary-row">
-                    <button type="button" class="btn btn-ghost btn-sm" id="top-regenerate-btn">
-                        <i class="fa-solid fa-rotate"></i>
-                        <span>Regenerate Plan</span>
-                    </button>
-                    <a href="https://app.todoist.com/app/upcoming" target="_blank" rel="noopener noreferrer"
-                        class="pl-link-btn" id="open-todoist-upcoming-btn">
-                        <i class="fa-solid fa-arrow-up-right-from-square"></i>
-                        <span>Open Todoist</span>
-                    </a>
-                    <a href="setup.html#step-todoist" class="pl-link-btn">
-                        <i class="fa-solid fa-gear"></i> Manage keys in Setup
-                    </a>
                 </div>
             </div>
         </section>
@@ -816,7 +819,7 @@
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
     <script defer src="./script.js"></script>
-    <script defer src="./planner.js"></script>
+    <script defer src="./planner.js?v=20261026"></script>
 <script>
   // Mark the open page in the navbar and keep it visible in the scrolling mobile menu
   (function () {

@@ -78,7 +78,7 @@
 
   function isValidTodoistToken(raw) {
     const c = cleanTodoistToken(raw);
-    return /^[a-f0-9]{40}$/i.test(c);
+    return c.length >= 16 && !/\s/.test(c);
   }
 
   function getCookie(name) {
@@ -226,6 +226,7 @@
     coachInsightsOpen: false,
     subjectsBreakdownOpen: false,
     expandedDays: new Set(),
+    dayAutoExpandPending: true, // open Day 1 once per new plan; never re-open it after the user collapses all
     expandedBlocks: new Set(),
     allBlocksExpanded: false,
     allDaysExpanded: false,
@@ -1131,6 +1132,28 @@
     }
   }
 
+  // "..." menu next to the main Sync button
+  (() => {
+    const btn = $('plan-more-btn');
+    const menu = $('plan-more-menu');
+    if (!btn || !menu) return;
+    const close = (returnFocus = false) => {
+      menu.hidden = true;
+      btn.setAttribute('aria-expanded', 'false');
+      if (returnFocus) btn.focus();
+    };
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const open = menu.hidden;
+      menu.hidden = !open;
+      btn.setAttribute('aria-expanded', String(open));
+      if (open) menu.querySelector('.pl-menu-item')?.focus();
+    });
+    menu.addEventListener('click', (e) => { if (e.target.closest('.pl-menu-item')) close(); });
+    document.addEventListener('click', (e) => { if (!menu.hidden && !e.target.closest('.pl-more-wrap')) close(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !menu.hidden) close(true); });
+  })();
+
   $('toggle-inline-todoist-btn')?.addEventListener('click', () => {
     const drawer = $('inline-todoist-drawer');
     if (!drawer) return;
@@ -1149,7 +1172,7 @@
   async function saveAndVerifyTokenFromInput(inputEl, buttonEl, autoSyncAfter = false) {
     const raw = cleanTodoistToken(inputEl?.value || '');
     if (!isValidTodoistToken(raw)) {
-      showToast('That is not a Todoist API token (it is 40 letters and numbers, 0-9 and a-f)', 'fa-solid fa-triangle-exclamation');
+      showToast('Paste a valid Todoist API token (at least 16 characters, no spaces)', 'fa-solid fa-triangle-exclamation');
       inputEl?.focus();
       return false;
     }
@@ -1904,8 +1927,9 @@
     }
 
     // Ensure Day 1 and its first study block are expanded on initial load so the user sees immediate interactive value without clutter
-    if (state.expandedDays.size === 0 && plan.days.length > 0 && !state.allDaysExpanded) {
-      state.expandedDays.add(plan.days[0].date);
+    if (state.dayAutoExpandPending && plan.days.length > 0) {
+      state.dayAutoExpandPending = false;
+      if (state.expandedDays.size === 0 && !state.allDaysExpanded) state.expandedDays.add(plan.days[0].date);
       // Task cards start folded: one clean row each (time, subject, priority); click to open.
     }
 
@@ -2110,28 +2134,33 @@
             ? `<span class="chip ok"><i class="fa-solid fa-check"></i> Synced</span>`
             : `<span class="chip wait">Local</span>`;
 
+          const prio = block.priority || 'Medium';
           bCard.innerHTML = `
             <div class="pl-block-top">
               <div class="pl-block-check-title">
                 <input type="checkbox" class="pl-parent-check" ${block.completed ? 'checked' : ''} title="Mark study block completed in Todoist">
-                <div class="pl-block-title-stack">
-                  <span class="pl-block-time">${escapeHtml(block.startTime)}–${escapeHtml(block.endTime)} · ${block.durationMins}m</span>
-                  <div class="pl-block-title">[${escapeHtml(block.subject)}] ${escapeHtml(block.title)}</div>
-                </div>
+                <span class="pl-block-time">${escapeHtml(block.startTime)}</span>
+                <span class="pl-subj-dot" style="background:${subjectColor(block.subject)}" aria-hidden="true"></span>
+                <div class="pl-block-title"><span class="pl-block-subj">${escapeHtml(block.subject)}</span> · ${escapeHtml(block.title)}</div>
               </div>
               <div class="pl-block-badges">
-                <span class="pl-prio-badge ${escapeHtml(block.priority || 'Medium')}">${escapeHtml(block.priority || 'Medium')}</span>
-                ${subtasks.length ? `<span class="pl-subtask-count-pill">${doneSubs}/${subtasks.length} steps</span>` : ''}
-                ${quizBadge}
-                ${syncBadge}
-                <button type="button" class="pl-block-expand-btn" aria-expanded="${isBlockExpanded}">
-                  <span>Details</span>
+                ${prio === 'High' ? '<span class="pl-prio-dot" title="High priority"></span>' : ''}
+                <span class="pl-block-dur">${block.durationMins}m</span>
+                ${block.synced ? '<i class="fa-solid fa-check pl-sync-tick" title="Synced to Todoist" aria-label="Synced to Todoist"></i>' : ''}
+                <button type="button" class="pl-block-expand-btn" aria-expanded="${isBlockExpanded}" aria-label="Show details">
                   <i class="fa-solid fa-chevron-down"></i>
                 </button>
               </div>
             </div>
 
             <div class="pl-block-details">
+              <div class="pl-block-meta">
+                <span>${escapeHtml(block.startTime)}–${escapeHtml(block.endTime)}</span>
+                <span class="pl-prio-badge ${escapeHtml(prio)}">${escapeHtml(prio)}</span>
+                ${subtasks.length ? `<span class="pl-subtask-count-pill">${doneSubs}/${subtasks.length} steps</span>` : ''}
+                ${quizBadge}
+                ${syncBadge}
+              </div>
               <div class="pl-break-strip">
                 <i class="fa-solid fa-mug-hot"></i>
                 <span><b>${escapeHtml(block.sessionPatternLabel || plan.sessionStyleLabel)}:</b> ${escapeHtml(block.breakIntervalText)}</span>
@@ -2203,6 +2232,13 @@
         daysContainer.appendChild(dayCard);
       });
     }
+  }
+
+  // Stable colour per subject for the dot in each task row
+  function subjectColor(subject) {
+    let h = 0;
+    for (const ch of String(subject || '')) h = (h * 31 + ch.charCodeAt(0)) % 360;
+    return `hsl(${h} 62% 52%)`;
   }
 
   async function refreshPlannerState() {
@@ -2315,6 +2351,7 @@
           state.plan = data.plan;
           state.expandedDays.clear();
           state.expandedBlocks.clear();
+          state.dayAutoExpandPending = true;
           if (Array.isArray(data.chapters) && data.chapters.length) state.chapters = data.chapters;
           if (data.quiz_history) state.quizHistory = data.quiz_history;
           saveLocalPlannerCache();
@@ -2338,6 +2375,7 @@
       state.plan = generateLocalStudyPlan(state.chapters, state.config);
       state.expandedDays.clear();
       state.expandedBlocks.clear();
+      state.dayAutoExpandPending = true;
       saveLocalPlannerCache();
       renderSyllabusAndQuizFallback();
       syncConfigControlsFromState();
