@@ -142,6 +142,33 @@
     document.cookie = `${name}=${encodeURIComponent(value)}; max-age=31536000; path=/; SameSite=Lax${secure}`;
   };
 
+  // ---------- Setup gate ----------
+  // Setup is "complete" only with a real numeric Telegram ID (not the guest fallback setup.js
+  // uses when nothing was entered) and a Gemini API key. Until then, uploading a syllabus /
+  // fetching from Telegram is never offered: the page only points to setup.html.
+  const GUEST_TELEGRAM_ID = '100000001';
+  function getSetupStatus() {
+    const id = getCookie('sa_telegram_id');
+    const key = getCookie('sa_gemini_key');
+    const hasId = /^\d+$/.test(id) && id !== GUEST_TELEGRAM_ID;
+    const hasKey = key.length >= 20 && !/\s/.test(key);
+    return { id, hasId, hasKey, complete: hasId && hasKey };
+  }
+
+  function showSetupRequired() {
+    const { hasId, hasKey } = getSetupStatus();
+    const missing = [!hasId && 'your Telegram ID', !hasKey && 'your Gemini API key'].filter(Boolean).join(' and ');
+    const txt = $('setup-missing-text');
+    if (txt) {
+      txt.textContent = `Quizzes need ${missing}. Add ${missing.includes(' and ') ? 'them' : 'it'} on the setup page and press Save Configuration, then come back here.`;
+    }
+    manualGateOpen = false;
+    gateLatestUploadedChapter = null;
+    chapters = [];
+    banner('');
+    show('view-setup');
+  }
+
   function backfillCookiesFromSetup() {
     try {
       const st = JSON.parse(localStorage.getItem('study_agent_config') || 'null');
@@ -598,20 +625,23 @@
     syncTopQuestionCountUI();
     setGateQuestionCount(12, { fromAi: true });
 
-    userId = getCookie('sa_telegram_id');
-    const key = getCookie('sa_gemini_key');
-
-    if (!/^\d+$/.test(userId) || !key) {
-      const missing = [!/^\d+$/.test(userId) && 'your Telegram ID', !key && 'your Gemini API key'].filter(Boolean).join(' and ');
-      $('setup-missing-text').textContent = `Quizzes need ${missing}. Add ${missing.includes('and') ? 'them' : 'it'} on the setup page and press Save Configuration.`;
-      show('view-setup');
+    const setup = getSetupStatus();
+    if (!setup.complete) {
+      showSetupRequired();
       return;
     }
+    userId = setup.id;
     await loadChapters();
   }
 
   // ---------- Load Chapters ----------
   async function loadChapters({ silent = false, forceChaptersView = false } = {}) {
+    const setup = getSetupStatus();
+    if (!setup.complete) {
+      showSetupRequired();
+      return false;
+    }
+    userId = setup.id;
     if (silent && (currentView === 'view-quiz' || currentView === 'view-done')) {
       return true;
     }
@@ -670,6 +700,10 @@
 
   // ---------- Onboarding / "New Quiz" Upload Gate ----------
   function showGate(isNewQuizFlow = false) {
+    if (!getSetupStatus().complete) {
+      showSetupRequired();
+      return;
+    }
     const backRow = $('gate-back-row');
     const heading = $('gate-heading');
     const subtext = $('gate-subtext');
@@ -708,6 +742,7 @@
   }
 
   $('new-quiz-btn')?.addEventListener('click', () => {
+    if (!getSetupStatus().complete) return showSetupRequired();
     manualGateOpen = true;
     sylStatus('');
     if ($('syl-file-name')) $('syl-file-name').hidden = true;
@@ -837,6 +872,7 @@
     });
 
   async function sendSyllabus(payload, buttons) {
+    if (!getSetupStatus().complete) return showSetupRequired();
     buttons.forEach((b) => { if (b) b.disabled = true; });
     if ($('gate-ready-box')) $('gate-ready-box').hidden = true;
     sylStatus('Finding which chapter this is…');
@@ -1982,6 +2018,14 @@
     addEventListener('scrollend', go, { once: true });
     setTimeout(go, 1000);
   }
+
+  // Coming back from setup.html (other tab / back button): re-check and continue automatically.
+  function recheckSetup() {
+    if (currentView === 'view-setup' && getSetupStatus().complete) init();
+  }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) recheckSetup(); });
+  addEventListener('pageshow', recheckSetup);
+  addEventListener('focus', recheckSetup);
 
   init();
 })();
