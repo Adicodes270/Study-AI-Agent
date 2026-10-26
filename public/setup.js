@@ -111,9 +111,10 @@
   let nlmMode = IS_LOCAL_HOST ? 'local' : 'upload';
 
   // Mirror the saved settings into browser cookies so planner.html, quizzes.html & resources.html can access them.
-  function setCookie(name, value) {
+  function setCookie(name, value, maxAgeSeconds = 31536000) {
     const secure = location.protocol === 'https:' ? '; Secure' : '';
-    document.cookie = `${name}=${encodeURIComponent(value)}; max-age=31536000; path=/; SameSite=Lax${secure}`;
+    const maxAge = maxAgeSeconds ? `; max-age=${maxAgeSeconds}` : '';
+    document.cookie = `${name}=${encodeURIComponent(value)}${maxAge}; path=/; SameSite=Lax${secure}`;
   }
 
   function getEffectiveUserId() {
@@ -126,9 +127,12 @@
       const userId = getEffectiveUserId();
       setCookie('sa_telegram_id', userId);
       const validGeminiKeys = state.geminiKeys.map((k) => k.key.trim()).filter(isValidGeminiKeyFormat);
-      if (validGeminiKeys.length) setCookie('sa_gemini_key', validGeminiKeys[0]);
+      // Secrets are mirrored as session-only cookies (no max-age) so they do not persist
+      // in the browser beyond the current session, reducing exposure if the device is shared
+      // or compromised via XSS/a malicious extension.
+      if (validGeminiKeys.length) setCookie('sa_gemini_key', validGeminiKeys[0], 0);
       const todoistKey = cleanTodoistToken(state.todoist.apiKey);
-      if (isValidTodoistKeyFormat(todoistKey)) setCookie('sa_todoist_key', todoistKey);
+      if (isValidTodoistKeyFormat(todoistKey)) setCookie('sa_todoist_key', todoistKey, 0);
       const nlm = sessionSaved || state.notebooklm.status === 'connected' || state.notebooklm.sessionStored;
       setCookie('sa_notebooklm_auth', nlm ? 'connected' : 'none');
     } catch (e) {}
