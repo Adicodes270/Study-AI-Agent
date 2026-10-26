@@ -419,6 +419,8 @@
       const el = $(v);
       if (el) el.hidden = v !== id;
     });
+    // "Finish setup" box sits in the middle of the page (same look as the Resources empty state)
+    $('qz-root')?.classList.toggle('is-centered', id === 'view-setup');
     if (id !== 'view-chapters') hidePop();
   }
 
