@@ -92,6 +92,16 @@ export function safe(fn) {
   };
 }
 
+
+/** Save a Todoist token only if it has the right format AND Todoist accepts it. Returns true when saved. */
+async function saveTodoistKeyIfReal(id, raw) {
+  if (!raw || !isValidTodoistKey(raw)) return false;
+  const check = await verifyTodoistToken(raw).catch(() => ({ valid: false }));
+  if (!check.valid) return false;
+  await saveTodoistKey(id, cleanTodoistKey(raw));
+  return true;
+}
+
 // POST /api/user-keys
 export const saveKeys = safe(async (body = {}, hooks = {}) => {
   const parsedId = parseId(body.telegram_user_id);
@@ -136,8 +146,10 @@ export const saveKeys = safe(async (body = {}, hooks = {}) => {
 
   if (rawTodoist !== undefined && rawTodoist !== null && String(rawTodoist).trim() !== "") {
     if (!isValidTodoistKey(rawTodoist)) {
-      return fail(400, "That Todoist API token doesn't look valid (must be at least 16 characters with no spaces).");
+      return fail(400, "That isn't a Todoist API token. It is 40 letters and numbers (0-9, a-f). Copy it from Todoist Settings → Integrations → Developer.");
     }
+    const check = await verifyTodoistToken(rawTodoist);
+    if (!check.valid) return fail(400, check.error || "Todoist rejected this API token.");
   }
 
   let rawClass = body.class_level ?? body.classLevel;
@@ -1096,9 +1108,7 @@ export const plannerGenerate = safe(async (body = {}, ctx = {}) => {
     ).catch((e) => console.log(`Inline syllabus parse warning: ${e.message}`));
   }
 
-  if (body.todoistApiKey && isValidTodoistKey(body.todoistApiKey)) {
-    await saveTodoistKey(id, body.todoistApiKey);
-  }
+  if (body.todoistApiKey) await saveTodoistKeyIfReal(id, body.todoistApiKey);
 
   const [chapters, savedGeminiKeys] = await Promise.all([
     getChaptersWithResults(id),
@@ -1150,9 +1160,7 @@ export const plannerGenerate = safe(async (body = {}, ctx = {}) => {
 export const plannerSyncTodoist = safe(async (body = {}, ctx = {}) => {
   const id = resolveUserId(body.telegramUserId, ctx);
 
-  if (body.todoistApiKey && isValidTodoistKey(body.todoistApiKey)) {
-    await saveTodoistKey(id, body.todoistApiKey);
-  }
+  if (body.todoistApiKey) await saveTodoistKeyIfReal(id, body.todoistApiKey);
 
   const token = await getTodoistKey(id, body.todoistApiKey || ctx?.cookies?.sa_todoist_key);
   if (!token) {
@@ -1550,7 +1558,7 @@ function invokeNotebookLmPython(sessionFile, chapter, resourceType) {
       chapter,
       resource_type: resourceType,
     });
-    const pyBin = process.platform === "win32" ? "python" : "python3";
+    const pyBin = process.env.NOTEBOOKLM_PYTHON || (process.platform === "win32" ? "python" : "python3");
     const proc = spawn(pyBin, ["-c", NOTEBOOKLM_PY_SCRIPT, payload], {
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 90_000,

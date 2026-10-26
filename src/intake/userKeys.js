@@ -21,8 +21,8 @@ export function cleanTodoistKey(raw) {
     .trim();
 }
 
-// Todoist personal API tokens are 40-char hex strings, OAuth tokens are 24-64 chars; accept any 16+ char non-whitespace token.
-const TODOIST_KEY_RE = /^[^\s"'`]{16,}$/;
+// Todoist API tokens (personal and OAuth) are exactly 40 hex characters. Anything else is not a real key.
+const TODOIST_KEY_RE = /^[a-f0-9]{40}$/i;
 export const isValidTodoistKey = (k) => {
   const cleaned = cleanTodoistKey(k);
   return TODOIST_KEY_RE.test(cleaned);

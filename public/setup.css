@@ -1104,3 +1104,56 @@ html {
     grid-template-columns: 1fr;
   }
 }
+/* Verify buttons: keep the tick/spinner icon and label at full size (the button used to shrink and squeeze the icon) */
+.input-action-row > .btn,
+.input-action-row > .btn-sm {
+  flex: 0 0 auto;
+  min-width: 7.5rem;
+  justify-content: center;
+}
+
+.input-action-row .input-wrapper {
+  min-width: 0;
+}
+
+.btn i,
+.btn-sm i,
+.chip i {
+  flex: 0 0 auto;
+  width: 1em;
+  text-align: center;
+  line-height: 1;
+}
+
+.btn span,
+.btn-sm span {
+  white-space: nowrap;
+}
+
+/* 5 steps now */
+.progress-steps-row {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+@media (max-width: 1100px) {
+  .progress-steps-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 720px) {
+  .progress-steps-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 480px) {
+  .progress-steps-row { grid-template-columns: 1fr; }
+}
+
+/* Save stays locked until every step is done */
+#save-all-config-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+.save-lock-hint {
+  margin: 0.25rem 0 0.75rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+.save-lock-hint:empty { display: none; }

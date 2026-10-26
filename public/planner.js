@@ -78,7 +78,7 @@
 
   function isValidTodoistToken(raw) {
     const c = cleanTodoistToken(raw);
-    return c.length >= 16 && !/\s/.test(c);
+    return /^[a-f0-9]{40}$/i.test(c);
   }
 
   function getCookie(name) {
@@ -1149,7 +1149,7 @@
   async function saveAndVerifyTokenFromInput(inputEl, buttonEl, autoSyncAfter = false) {
     const raw = cleanTodoistToken(inputEl?.value || '');
     if (!isValidTodoistToken(raw)) {
-      showToast('Paste a valid Todoist API token (at least 16 characters, no spaces)', 'fa-solid fa-triangle-exclamation');
+      showToast('That is not a Todoist API token (it is 40 letters and numbers, 0-9 and a-f)', 'fa-solid fa-triangle-exclamation');
       inputEl?.focus();
       return false;
     }

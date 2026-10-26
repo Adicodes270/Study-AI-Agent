@@ -60,7 +60,7 @@
 
   function isValidTodoistKeyFormat(key) {
     const cleaned = cleanTodoistToken(key);
-    return /^[^\s"'`]{16,}$/.test(cleaned);
+    return /^[a-f0-9]{40}$/i.test(cleaned);
   }
 
   function loadState() {
@@ -136,6 +136,11 @@
 
   // Save Telegram id + Gemini keys + Todoist API key + Google account to the database
   async function saveConfigToDb() {
+    const missingNow = missingSteps();
+    if (missingNow.length) {
+      showToast('Finish all 5 steps first: ' + missingNow.join(', '), 'fa-solid fa-lock');
+      return false;
+    }
     const userId = getEffectiveUserId();
     const keys = state.geminiKeys.map((k) => k.key.trim()).filter(isValidGeminiKeyFormat);
     const todoistKey = cleanTodoistToken(state.todoist.apiKey);
@@ -1128,7 +1133,7 @@
       return;
     }
     if (cleaned && !isValidTodoistKeyFormat(cleaned)) {
-      showToast('Todoist API token must be at least 16 characters with no spaces', 'fa-solid fa-triangle-exclamation');
+      showToast('That is not a Todoist API token (it is 40 letters and numbers, 0-9 and a-f)', 'fa-solid fa-triangle-exclamation');
       return;
     }
 
@@ -1189,13 +1194,14 @@
     if (classChip) {
       const has = Boolean(state.classLevel);
       classChip.className = has ? 'chip ok' : 'chip wait';
-      classChip.textContent = has ? 'Class ' + state.classLevel : 'Choose class';
+      classChip.textContent = has ? 'Configured' : 'Required';
     }
   }
   classSelect?.addEventListener('change', () => {
     state.classLevel = classSelect.value || '';
     saveState(true);
     syncClassUI();
+    updateReadinessUI();
   });
   syncClassUI();
 
@@ -1210,6 +1216,7 @@
         state.classLevel = String(data.class_level);
         saveState(true);
         syncClassUI();
+        updateReadinessUI();
       }
       if (data && data.has_todoist_key) {
         state.todoist.serverConfigured = true;
@@ -1232,6 +1239,12 @@
     return Boolean(state.telegram.chatId && String(state.telegram.chatId).trim().length > 0);
   }
 
+  // Step 3 is the class; NotebookLM is step 4 and Todoist step 5 (function names kept for the code that uses them)
+  function isClassComplete() {
+    const n = parseInt(String(state.classLevel || ''), 10);
+    return Number.isInteger(n) && n >= 1 && n <= 12;
+  }
+
   function isStep3Complete() {
     return state.notebooklm.status === 'connected';
   }
@@ -1240,13 +1253,25 @@
     return isValidTodoistKeyFormat(state.todoist.apiKey) || Boolean(state.todoist.serverConfigured);
   }
 
+  /** Names of the steps still missing; empty when all 5 are done. */
+  function missingSteps() {
+    const list = [];
+    if (!isStep1Complete()) list.push('Step 1 (Gemini key)');
+    if (!isStep2Complete()) list.push('Step 2 (Telegram)');
+    if (!isClassComplete()) list.push('Step 3 (class)');
+    if (!isStep3Complete()) list.push('Step 4 (NotebookLM)');
+    if (!isStep4Complete()) list.push('Step 5 (Todoist)');
+    return list;
+  }
+
   function updateReadinessUI() {
     const s1 = isStep1Complete();
     const s2 = isStep2Complete();
     const s3 = isStep3Complete();
     const s4 = isStep4Complete();
-    const totalSteps = 4;
-    const doneCount = [s1, s2, s3, s4].filter(Boolean).length;
+    const sClass = isClassComplete();
+    const totalSteps = 5;
+    const doneCount = [s1, s2, sClass, s3, s4].filter(Boolean).length;
     const pct = Math.round((doneCount / totalSteps) * 100);
 
     const fill = $id('progress-bar-fill');
@@ -1255,8 +1280,8 @@
     const summaryText = $id('progress-summary-text');
     if (summaryText) {
       summaryText.textContent = doneCount === totalSteps
-        ? 'All 4 integrations configured — Study Agent & Todoist Planner ready!'
-        : `${doneCount} of ${totalSteps} integrations configured`;
+        ? 'All 5 steps done — Study Agent & Todoist Planner ready!'
+        : `${doneCount} of ${totalSteps} steps done`;
     }
 
     const overallChip = $id('overall-status-chip');
@@ -1274,6 +1299,10 @@
       `Chat ID: ${state.telegram.chatId}`,
       'Not paired');
 
+    setPillState('pill-step-class', 'pill-status-class', 'class-status-chip', sClass,
+      'Class ' + state.classLevel,
+      'Not chosen');
+
     setPillState('pill-step-3', 'pill-status-3', 'notebooklm-step-chip', s3,
       state.notebooklm.accountEmail || 'Google linked',
       'Not signed in');
@@ -1290,6 +1319,14 @@
         ? 'All Systems Go'
         : `${totalSteps - doneCount} Step${totalSteps - doneCount === 1 ? '' : 's'} Remaining`;
     }
+    const saveBtn = $id('save-all-config-btn');
+    const lockHint = $id('save-lock-hint');
+    const missing = missingSteps();
+    if (saveBtn) {
+      saveBtn.disabled = missing.length > 0;
+      saveBtn.setAttribute('aria-disabled', String(missing.length > 0));
+    }
+    if (lockHint) lockHint.textContent = missing.length ? 'Finish before saving: ' + missing.join(', ') + '.' : '';
     if (finishTitle) {
       finishTitle.textContent = doneCount === totalSteps
         ? 'Your Study Agent is ready to roll!'
@@ -1388,6 +1425,7 @@
     syncTelegramInputsFromState();
     syncNotebookLMUI();
     syncTodoistUI();
+    syncClassUI();
     updateReadinessUI();
     showToast('Reset all setup credentials', 'fa-solid fa-rotate-left');
   });

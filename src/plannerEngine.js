@@ -179,7 +179,7 @@ export async function verifyTodoistToken(rawToken) {
     return {
       ok: false,
       valid: false,
-      error: "Please paste a valid Todoist API token (at least 16 characters, no spaces).",
+      error: "That is not a Todoist API token. It is 40 letters and numbers (0-9, a-f). Copy it from Todoist Settings → Integrations → Developer.",
     };
   }
 
@@ -217,16 +217,24 @@ export async function verifyTodoistToken(rawToken) {
           mode: "todoist_api_v1",
         };
       }
-      if (resV1.status === 401 || resV1.status === 403) {
+      if (resV1.status < 500 && resV1.status !== 429) {
+        // Todoist answered and said no (401/403/400/404...): this is not a working token
         return {
           ok: false,
           valid: false,
-          error: "Todoist rejected this API token (Unauthorized). Please copy your active API token from Todoist Settings → Integrations → Developer.",
+          error: "Todoist rejected this API token. Please copy your active API token from Todoist Settings → Integrations → Developer.",
         };
       }
     } catch {}
 
-    if (status === 401 || status === 403 || /\b(401|403|unauthorized|forbidden)\b/i.test(msg)) {
+    if (status >= 400 && status < 500 && status !== 429) {
+      return {
+        ok: false,
+        valid: false,
+        error: "Todoist rejected this API token. Please check that you copied the exact token from Todoist Developer Settings.",
+      };
+    }
+    if (/\b(400|401|403|404|unauthorized|forbidden|invalid)\b/i.test(msg)) {
       return {
         ok: false,
         valid: false,
@@ -234,11 +242,12 @@ export async function verifyTodoistToken(rawToken) {
       };
     }
 
+    // Todoist could not be reached at all (network/5xx): the format is right, so allow it but say it was not verified
     return {
       ok: true,
       valid: true,
-      verified: true,
-      mode: "format_verified",
+      verified: false,
+      mode: "format_only",
     };
   }
 }

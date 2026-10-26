@@ -102,7 +102,7 @@
                 <div class="progress-top">
                     <div class="progress-title-group">
                         <span class="progress-eyebrow">Onboarding Readiness</span>
-                        <strong id="progress-summary-text">0 of 4 integrations configured</strong>
+                        <strong id="progress-summary-text">0 of 5 steps done</strong>
                     </div>
                     <div class="progress-actions">
                         <span class="chip wait" id="overall-status-chip">Setup Incomplete</span>
@@ -132,8 +132,17 @@
                         <i class="fa-solid fa-circle-dot pill-icon"></i>
                     </a>
 
-                    <a href="#step-notebooklm" class="progress-pill" id="pill-step-3">
+                    <a href="#step-class" class="progress-pill" id="pill-step-class">
                         <span class="pill-num">3</span>
+                        <div class="pill-meta">
+                            <b>Your Class</b>
+                            <small id="pill-status-class">Not chosen</small>
+                        </div>
+                        <i class="fa-solid fa-circle-dot pill-icon"></i>
+                    </a>
+
+                    <a href="#step-notebooklm" class="progress-pill" id="pill-step-3">
+                        <span class="pill-num">4</span>
                         <div class="pill-meta">
                             <b>NotebookLM</b>
                             <small id="pill-status-3">Not signed in</small>
@@ -142,7 +151,7 @@
                     </a>
 
                     <a href="#step-todoist" class="progress-pill" id="pill-step-4">
-                        <span class="pill-num">4</span>
+                        <span class="pill-num">5</span>
                         <div class="pill-meta">
                             <b>Todoist API</b>
                             <small id="pill-status-4">Not connected</small>
@@ -259,33 +268,6 @@
                 <p class="lead">
                     Our official Study Agent bot is already live on Telegram—no bot setup needed. Just open the bot, send <code>/start</code>, and we'll automatically detect your Chat ID.
                 </p>
-            </div>
-
-            <!-- Student's class: saved per user (not read from .env). Used to find the right NCERT chapters. -->
-            <div class="bento-card setup-config-card" id="class-card" style="margin-bottom: 1.25rem;">
-                <div class="card-head-row">
-                    <div>
-                        <h3><i class="fa-solid fa-graduation-cap icon-accent"></i> Your Class</h3>
-                        <p>Used to pick the right NCERT chapter when you upload a PDF, and for your quizzes and study plan.</p>
-                    </div>
-                    <span class="chip wait" id="class-status-chip">Choose class</span>
-                </div>
-                <label for="class-level-select" class="field-label">Class / Grade</label>
-                <select id="class-level-select" class="setup-input" aria-describedby="class-status-chip">
-                    <option value="">Select your class…</option>
-                    <option value="1">Class 1</option>
-                    <option value="2">Class 2</option>
-                    <option value="3">Class 3</option>
-                    <option value="4">Class 4</option>
-                    <option value="5">Class 5</option>
-                    <option value="6">Class 6</option>
-                    <option value="7">Class 7</option>
-                    <option value="8">Class 8</option>
-                    <option value="9">Class 9</option>
-                    <option value="10">Class 10</option>
-                    <option value="11">Class 11</option>
-                    <option value="12">Class 12</option>
-                </select>
             </div>
 
             <div class="setup-grid">
@@ -413,12 +395,47 @@
         </section>
 
         <!-- ==================================================================
-             STEP 3: NOTEBOOKLM (notebooklm-py) GOOGLE ACCOUNT AUTH
+             STEP 3: YOUR CLASS
+             ================================================================== -->
+        <section class="setup-step" id="step-class">
+            <div class="step-header">
+                <div class="step-badge-row">
+                    <span class="step-number-tag">STEP 03</span>
+                    <span class="chip wait" id="class-status-chip">Required</span>
+                </div>
+                <h2>Choose Your Class</h2>
+                <p class="lead">
+                    Saved per user. Used to pick the right NCERT chapters when you upload a PDF, and for your quizzes and study plan.
+                </p>
+            </div>
+
+            <div class="bento-card setup-config-card" id="class-card">
+                <label for="class-level-select" class="field-label">Class / Grade</label>
+                <select id="class-level-select" class="setup-input" aria-describedby="class-status-chip">
+                    <option value="">Select your class…</option>
+                    <option value="1">Class 1</option>
+                    <option value="2">Class 2</option>
+                    <option value="3">Class 3</option>
+                    <option value="4">Class 4</option>
+                    <option value="5">Class 5</option>
+                    <option value="6">Class 6</option>
+                    <option value="7">Class 7</option>
+                    <option value="8">Class 8</option>
+                    <option value="9">Class 9</option>
+                    <option value="10">Class 10</option>
+                    <option value="11">Class 11</option>
+                    <option value="12">Class 12</option>
+                </select>
+            </div>
+        </section>
+
+        <!-- ==================================================================
+             STEP 4: NOTEBOOKLM (notebooklm-py) GOOGLE ACCOUNT AUTH
              ================================================================== -->
         <section class="setup-step" id="step-notebooklm">
             <div class="step-header">
                 <div class="step-badge-row">
-                    <span class="step-number-tag">STEP 03</span>
+                    <span class="step-number-tag">STEP 04</span>
                     <span class="chip wait" id="notebooklm-step-chip">Required</span>
                 </div>
                 <h2>NotebookLM Google Account Sign-In</h2>
@@ -550,12 +567,12 @@
         </section>
 
         <!-- ==================================================================
-             STEP 4: TODOIST API KEY INTEGRATION (AI STUDY PLANNER)
+             STEP 5: TODOIST API KEY INTEGRATION (AI STUDY PLANNER)
              ================================================================== -->
         <section class="setup-step" id="step-todoist">
             <div class="step-header">
                 <div class="step-badge-row">
-                    <span class="step-number-tag">STEP 04</span>
+                    <span class="step-number-tag">STEP 05</span>
                     <span class="chip wait" id="todoist-step-chip">Required for Planner</span>
                 </div>
                 <h2>Todoist API Key Integration</h2>
@@ -676,11 +693,12 @@
              ================================================================== -->
         <section class="setup-footer-section" id="step-finish">
             <div class="cta-card setup-finish-card">
-                <span class="chip wait" id="finish-card-chip">Waiting for all 4 steps</span>
+                <span class="chip wait" id="finish-card-chip">Waiting for all 5 steps</span>
                 <h2 id="finish-card-title">Save your Study Agent configuration</h2>
 
+                <p class="save-lock-hint" id="save-lock-hint" role="status"></p>
                 <div class="cta-row finish-actions-row">
-                    <button type="button" class="btn btn-solid" id="save-all-config-btn">
+                    <button type="button" class="btn btn-solid" id="save-all-config-btn" disabled aria-disabled="true">
                         <i class="fa-solid fa-floppy-disk"></i>
                         <span>Save Configuration</span>
                     </button>
@@ -723,6 +741,7 @@
                 <h4>Integrations</h4>
                 <a href="#step-gemini">Gemini API Fallback</a>
                 <a href="#step-telegram">Telegram Pairing</a>
+                <a href="#step-class">Your Class</a>
                 <a href="#step-notebooklm">NotebookLM Auth</a>
                 <a href="#step-todoist">Todoist API Key</a>
             </nav>
