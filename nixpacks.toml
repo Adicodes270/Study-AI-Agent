@@ -1,15 +1,14 @@
 [phases.setup]
 nixPkgs = ["nodejs_20", "python311", "python311Packages.pip"]
- 
+
 [phases.install]
 cmds = [
   "npm ci",
-  "pip install --target /app/pylibs notebooklm-py'"
+  "python3 -m pip install --target /app/pylibs notebooklm-py"
 ]
- 
+
 [variables]
 PYTHONPATH = "/app/pylibs"
- 
+
 [start]
 cmd = "npm start"
- 
