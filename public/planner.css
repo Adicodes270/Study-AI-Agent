@@ -2267,3 +2267,589 @@ main .bento-card { padding: 1rem 1.1rem; gap: 0.5rem; border-radius: 14px; }
 .pl-subj-dot { margin-top: 0.4rem; }
 .pl-block-badges { align-self: flex-start; }
 .pl-block-top { align-items: flex-start; }
+
+
+/* ==========================================================================
+   Mobile Responsive Fix (320px – 425px & small screens)
+   - Prevents horizontal scrollbar (overflow-x)
+   - Ensures all grid/flex containers & children can shrink (min-width: 0)
+   - Wraps long chips, buttons, tabs, weekday toggles, priority rows & pills
+   ========================================================================== */
+
+html,
+body {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+.pl-main {
+  grid-template-columns: minmax(0, 1fr);
+  width: 100%;
+  max-width: 1280px;
+  box-sizing: border-box;
+  overflow-x: clip;
+}
+
+/* Force all single-column grids and cards to constrain track width to 100% */
+.pl-main > *,
+.pl-section,
+.pl-subsection,
+.pl-hero,
+.pl-hero-left,
+.pl-hero-actions,
+.bento-card,
+.pl-accordion-shell,
+.pl-accordion-trigger,
+.pl-accordion-body,
+.pl-two-col,
+.pl-subpanel,
+.pl-card,
+.pl-syllabus-editor,
+.pl-detected-chapters-wrap,
+.pl-weak-topics-box,
+.pl-weak-list,
+.pl-config-bento,
+.pl-field-box,
+.pl-slider-card,
+.pl-start-row,
+.pl-style-block,
+.pl-dates-split,
+.pl-date-subblock,
+.pl-vacation-form,
+.pl-date-field,
+.pl-step2-todoist-prompt,
+.pl-summary-hero-card,
+.pl-coach-drawer,
+.pl-subjects-collapsible,
+.pl-subjects-drawer-body,
+.pl-subj-card,
+.pl-schedule-toolbar,
+.pl-days-list,
+.pl-day-card,
+.pl-blocks-grid,
+.pl-block-card,
+.pl-block-details {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.bento-card,
+.pl-hero-actions,
+.pl-inline-key-box,
+.pl-section,
+.pl-accordion-body,
+.pl-subpanel,
+.pl-syllabus-editor,
+.pl-detected-chapters-wrap,
+.pl-weak-topics-box,
+.pl-weak-list,
+.pl-slider-card,
+.pl-start-row,
+.pl-style-block,
+.pl-date-subblock,
+.pl-vacation-form,
+.pl-date-field,
+.pl-step2-todoist-prompt,
+.pl-summary-hero-card,
+.pl-coach-drawer,
+.pl-subjects-collapsible,
+.pl-subj-card,
+.pl-subsection,
+.pl-schedule-toolbar,
+.pl-day-card,
+.pl-blocks-grid,
+.pl-block-card,
+.pl-block-details,
+.pl-subtasks-list {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Allow chips, badges, link buttons & action buttons inside planner to wrap instead of overflowing */
+.pl-main .chip,
+.pl-main .btn,
+.pl-main .pl-link-btn,
+.pl-main .pl-expand-btn-visual,
+.pl-main .pl-drawer-pill-btn,
+.pl-main .pl-day-type-pill,
+.pl-main .pl-prio-badge,
+.pl-main .pl-ch-pill,
+.pl-main .pl-tag-row,
+.pl-main .pl-day-tab,
+.pl-main .pl-config-tab {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
+  height: auto;
+  box-sizing: border-box;
+}
+
+/* Keep the expandable headline chevron attached to the last word instead of dropping to its own line */
+#plan-coach-headline.is-expandable {
+  display: inline;
+  overflow-wrap: anywhere;
+}
+
+#plan-coach-headline.is-expandable::after {
+  display: inline-block;
+  margin-left: 0.35rem;
+}
+
+/* Keep the "..." menu inside the viewport on narrow screens */
+.pl-todoist-quick-top {
+  min-width: 0;
+}
+
+.pl-todoist-quick-top > div:first-child {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow-wrap: anywhere;
+}
+
+.pl-more-menu {
+  max-width: calc(100vw - 2.5rem);
+  min-width: min(13.5rem, calc(100vw - 2.5rem));
+  box-sizing: border-box;
+}
+
+/* Accordion triggers & headers: wrap titles and metadata badges cleanly */
+.pl-accordion-title-wrap,
+.pl-accordion-title-wrap > div,
+.pl-accordion-meta {
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+
+.pl-accordion-heading {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Step 1: Detected chapters actions, chapter pills & weak quiz items */
+.pl-detected-head,
+.pl-detected-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.75rem;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.pl-ch-pill {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.pl-ch-pill span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.pl-weak-header-row,
+.pl-weak-item {
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.pl-weak-item > div {
+  min-width: 0;
+  flex: 1 1 140px;
+  overflow-wrap: anywhere;
+}
+
+.pl-checkbox-label {
+  align-items: flex-start;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.pl-checkbox-label span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Step 2: Horizon controls, sliders, focus style summary, tags & subject priorities */
+.pl-box-header,
+.pl-horizon-inline,
+.pl-slider-head,
+.pl-advanced > summary {
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.pl-select-compact {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.pl-tag-row {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.pl-tag-row span,
+.pl-tag-row code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.pl-priority-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(200px, 100%), 1fr));
+}
+
+.pl-prio-row {
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.pl-prio-row span {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  flex: 1 1 110px;
+  min-width: 0;
+}
+
+.pl-prio-btns {
+  flex-wrap: wrap;
+}
+
+/* Step 3: Coach recommendations, subjects grid, day cards & task blocks */
+.pl-coach-recs,
+.pl-subjects-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(220px, 100%), 1fr));
+}
+
+.pl-subjects-toggle-left {
+  min-width: 0;
+  flex: 1 1 160px;
+  overflow-wrap: anywhere;
+}
+
+.pl-day-title-group {
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+
+.pl-day-type-pill {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.pl-day-Allocation {
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+
+.pl-block-top {
+  flex-wrap: wrap;
+  gap: 0.4rem 0.55rem;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.pl-block-check-title {
+  flex: 1 1 160px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.pl-block-badges {
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+/* Dedicated Mobile Viewport Refinements (320px to 480px) */
+@media (max-width: 480px) {
+  .pl-main {
+    padding: 4.8rem 0.75rem 3.25rem;
+    gap: 0.75rem;
+  }
+
+  main .bento-card,
+  .pl-card,
+  .pl-subpanel,
+  .pl-field-box {
+    padding: 0.85rem;
+    border-radius: 12px;
+  }
+
+  .pl-hero h1 {
+    font-size: clamp(1.22rem, 5.5vw, 1.5rem);
+    line-height: 1.22;
+    overflow-wrap: anywhere;
+  }
+
+  .pl-hero-actions {
+    padding: 0.75rem 0.85rem;
+  }
+
+  .pl-inline-key-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .pl-inline-key-row .pl-input,
+  .pl-inline-key-row .btn {
+    flex: 1 1 auto;
+    width: 100%;
+    justify-content: center;
+  }
+
+  .pl-accordion-trigger {
+    padding: 0.65rem 0.8rem;
+    gap: 0.5rem;
+  }
+
+  .pl-accordion-body {
+    padding: 0 0.8rem 0.85rem;
+    gap: 0.85rem;
+  }
+
+  .pl-two-col {
+    padding-top: 0.85rem;
+    gap: 0.85rem;
+  }
+
+  .pl-editor-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .pl-editor-actions .btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .pl-quick-add-chapter {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .pl-input-xs {
+    width: 100%;
+  }
+
+  .pl-quiz-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.45rem;
+  }
+
+  .pl-config-tabs-bar {
+    padding-top: 0.75rem;
+    gap: 0.55rem;
+  }
+
+  .pl-config-tabs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .pl-config-tab {
+    justify-content: flex-start;
+    padding: 0.45rem 0.55rem;
+    font-size: 0.74rem;
+  }
+
+  /* Pair each label ("Day 1:", "Horizon:") with its input cleanly on its own row */
+  .pl-horizon-inline {
+    width: 100%;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 0.45rem 0.6rem;
+  }
+
+  .pl-horizon-inline #plan-start-today-btn {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .pl-horizon-inline .pl-select-compact {
+    width: 100%;
+  }
+
+  .pl-slider-card {
+    padding: 0.75rem 0.8rem;
+  }
+
+  .pl-num-pill {
+    padding: 0.12rem 0.38rem;
+    font-size: 0.72rem;
+  }
+
+  .pl-num-input {
+    width: 2.3rem;
+    font-size: 0.78rem;
+  }
+
+  .pl-custom-intervals-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* Wrap the 7 weekday buttons across 2 rows so "School" and "Full Day" never spill out */
+  .pl-weekdays-row {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.38rem;
+  }
+
+  .pl-day-toggle {
+    padding: 0.48rem 0.25rem;
+  }
+
+  .pl-day-toggle b {
+    font-size: 0.76rem;
+  }
+
+  .pl-day-toggle small {
+    font-size: 0.62rem;
+    white-space: normal;
+    text-align: center;
+    line-height: 1.15;
+  }
+
+  .pl-inline-form-row,
+  .pl-vacation-dates-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .pl-add-btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .pl-priority-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .pl-config-actions-bar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.65rem;
+  }
+
+  .pl-config-actions-right {
+    width: 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.5rem;
+  }
+
+  .pl-config-actions-right .pl-select-compact,
+  .pl-config-actions-right .btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .pl-metrics-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+
+  .pl-metric-card {
+    padding: 0.28rem 0.58rem;
+    border-radius: 8px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-subtle);
+  }
+
+  .pl-metric-card + .pl-metric-card::before {
+    content: none;
+    margin: 0;
+  }
+
+  .pl-schedule-controls-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.55rem;
+  }
+
+  .pl-day-tabs {
+    width: 100%;
+  }
+
+  .pl-day-tab {
+    flex: 1 1 auto;
+    text-align: center;
+    padding: 0.34rem 0.6rem;
+    font-size: 0.72rem;
+  }
+
+  .pl-view-toggles {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.4rem;
+  }
+
+  .pl-view-toggles .btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .pl-days-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .pl-day-card {
+    padding: 0.65rem 0.75rem;
+  }
+
+  .pl-block-card {
+    padding: 0.45rem 0.55rem;
+  }
+
+  .pl-block-check-title {
+    gap: 0.38rem;
+  }
+
+  .pl-block-time {
+    min-width: auto;
+    font-size: 0.7rem;
+  }
+
+  .setup-toast-container {
+    left: 0.75rem;
+    right: 0.75rem;
+    bottom: 0.75rem;
+    max-width: calc(100vw - 1.5rem);
+  }
+
+  .setup-toast {
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+}
+
+@media (max-width: 360px) {
+  .pl-main {
+    padding-inline: 0.55rem;
+  }
+
+  .pl-config-tabs {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .pl-weekdays-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .pl-view-toggles {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
