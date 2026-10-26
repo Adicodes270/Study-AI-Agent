@@ -9,3 +9,4 @@ npm-debug.log*
 data/
 *.db
 *.sqlite3
+scripts/
