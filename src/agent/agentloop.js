@@ -1,12 +1,24 @@
 // src/agent/agentLoop.js
-import "../tz.js";
+import "./tz.js";
 import { GoogleGenAI } from "@google/genai";
 
 import { GEMINI_API_KEY, GEMINI_MODEL } from "../config.js";
-import { getRecentAgentActions } from "../db.js";
+import {
+  getAgentMemory,
+  getMorningBriefSentDate,
+  getRecentAgentActions,
+  logAgentAction,
+} from "../db.js";
+import { sendDailyMorningBrief } from "../intake/telegramBot.js";
 import { getUserKeys } from "../intake/userKeys.js";
+import { getTodayIstYmd } from "../plannerEngine.js";
 import { buildStudentSnapshot } from "./snapshot.js";
-import { executeTool, getToolDeclarations, isDryRun } from "./tools.js";
+import {
+  executeTool,
+  flushPendingNudgesForUser,
+  getToolDeclarations,
+  isDryRun,
+} from "./tools.js";
 
 const DEFAULT_MAX_STEPS = 4;
 const DEFAULT_MAX_CALLS_PER_USER_PER_DAY = 20;
@@ -15,13 +27,15 @@ const DEFAULT_GEMINI_TIMEOUT_MS = 15_000;
 export const AGENT_SYSTEM_PROMPT = `You are a caring, concise AI study coach for an Indian CBSE (NCERT) student.
 
 Core Coaching Rules:
-1. Choose the single most useful set of actions for right now based on the student's snapshot and tickType ('morning' | 'evening' | 'event').
+1. Choose the single most useful set of actions for right now based on the student's snapshot and tickType ('morning' | 'evening' | 'event'):
+   - On 'morning' ticks: rebalance overdue tasks if needed and send the daily morning brief via send_morning_brief.
+   - On 'evening' ticks: check what was completed today (progress.completedToday / progress.totalToday), send a gentle nudge or celebration via send_message (respecting quiet hours and daily caps), schedule spaced-repetition reviews via schedule_review for weak subtopics, and send a quick quiz via send_quick_quiz if a review is due (dueReviews).
 2. Prefer fewer, higher-value messages. Never nag, guilt-trip, or spam the student.
-3. Respect quiet hours (22:00-07:00 IST) and daily message limits. Never try to message during quiet hours.
-4. Adapt your emphasis based on examMode:
-   - 'learning' (nearest exam > 14 days away): Emphasize steady chapter completion, deep conceptual understanding, and consistent daily habits.
-   - 'revision' (nearest exam 4-14 days away): Prioritize weakSubtopics from recent quizzes, dueReviews, and targeted practice on low-scoring chapters.
-   - 'final_prep' (nearest exam <= 3 days away): Focus on high-yield exam revision, active recall of key formulas/definitions, and keeping the schedule calm and manageable.
+3. Respect the student's quiet hours (snapshot.isQuietHours) and daily message limits. Never try to message during quiet hours.
+4. Adapt your emphasis based on examMode (derived from nearestExamDays):
+   - 'learning' (nearest exam > 14 days away, or no upcoming exam): Emphasize steady chapter completion, deep conceptual understanding, and consistent daily habits.
+   - 'revision' (within 14 days of an exam, nearestExamDays 4-14): Emphasize revision and practice — prioritize weakSubtopics from recent quizzes, dueReviews, active recall, and targeted practice on low-scoring chapters rather than starting heavy new topics.
+   - 'final_prep' (within 3 days of an exam, nearestExamDays <= 3): Emphasize light review plus sleep — focus on light, confidence-building review of key formulas, definitions, and summaries, avoid heavy cramming or overloading the schedule, and explicitly encourage getting full sleep and rest before the exam.
 5. Never invent or guess task IDs. Only pass a taskId to reschedule_missed_tasks or carry_over_partial if that exact id appears in todayTasks or overdueTasks.
 6. Only act through tools. Plain text responses are never sent to the student on Telegram.
 7. Calling do_nothing({ reason }) is always a valid, respected choice whenever the student is on track, in quiet hours, or doesn't need an intervention right now.`;
@@ -50,6 +64,21 @@ export function getAgentMaxCallsPerUserPerDay() {
     if (Number.isFinite(parsed) && parsed >= 0) return parsed;
   }
   return DEFAULT_MAX_CALLS_PER_USER_PER_DAY;
+}
+
+/**
+ * Build explicit exam-mode coaching guidance for the prompt based on `snapshot.examMode` and `snapshot.nearestExamDays`.
+ */
+export function buildExamModeGuidance(snapshot = {}) {
+  const mode = snapshot?.examMode || "learning";
+  const days = snapshot?.nearestExamDays;
+  if (mode === "final_prep" || (Number.isFinite(days) && days <= 3)) {
+    return "EXAM MODE: final_prep (exam within 3 days). Emphasize light review of high-yield formulas/summaries plus plenty of sleep and rest. Avoid heavy cramming.";
+  }
+  if (mode === "revision" || (Number.isFinite(days) && days <= 14)) {
+    return "EXAM MODE: revision (exam within 14 days). Emphasize revision and practice on weakSubtopics and dueReviews.";
+  }
+  return "EXAM MODE: learning (>14 days to exam). Emphasize steady chapter progress and conceptual clarity.";
 }
 
 /**
@@ -210,7 +239,7 @@ function buildOfflineDryRunResponse(snapshot, tickType, stepIndex) {
 
   if (snapshot.isQuietHours) {
     return {
-      text: "Student is currently in quiet hours (22:00-07:00 IST); choosing do_nothing.",
+      text: "Student is currently in quiet hours; choosing do_nothing.",
       functionCalls: [
         {
           name: "do_nothing",
@@ -230,13 +259,19 @@ function buildOfflineDryRunResponse(snapshot, tickType, stepIndex) {
     if (snapshot.overdueTasks?.length > 0) {
       calls.push({
         name: "reschedule_missed_tasks",
-        args: { taskId: snapshot.overdueTasks[0].id },
+        args: { taskId: snapshot.overdueTasks.length === 1 ? snapshot.overdueTasks[0].id : null },
       });
     }
+    const focusAdvice =
+      snapshot.examMode === "final_prep"
+        ? `Keep today to light review on ${focusSubject} (${focusTopic}) and prioritize full sleep tonight before your exam.`
+        : snapshot.examMode === "revision"
+        ? `Focus on revision and practice for ${focusSubject} (${focusTopic}) to strengthen weak areas.`
+        : `Start with ${focusSubject} (${focusTopic}) during your peak focus block today.`;
     calls.push({
       name: "send_morning_brief",
       args: {
-        focusAdvice: `Start with ${focusSubject} (${focusTopic}) during your peak focus block today.`,
+        focusAdvice,
         quickQuestion: topWeak
           ? `Can you state the core principle of ${topWeak.subtopic} in ${topWeak.chapter} in one sentence?`
           : `What is the main formula or takeaway from ${focusTopic}?`,
@@ -249,21 +284,71 @@ function buildOfflineDryRunResponse(snapshot, tickType, stepIndex) {
   }
 
   if (tickType === "evening") {
-    if (snapshot.progress?.totalToday > 0 && snapshot.progress?.completedToday === 0) {
-      const pendingTask = snapshot.todayTasks?.find((t) => t.status === "pending");
-      return {
-        text: "Evening tick: student hasn't marked today's first task done yet; sending a gentle reminder.",
-        functionCalls: [
-          {
-            name: "send_message",
-            args: {
-              kind: "reminder",
-              text: pendingTask
-                ? `Evening check-in: even 25 minutes on "${pendingTask.title}" (${pendingTask.subject}) will keep your streak alive today!`
-                : "Evening check-in: log even one 25-minute focus block before bedtime to keep your momentum going!",
-            },
+    const calls = [];
+    const topWeak = snapshot.weakSubtopics?.[0];
+    if (topWeak) {
+      const alreadyDue = (snapshot.dueReviews || []).some(
+        (r) => String(r.subtopic || "").toLowerCase() === String(topWeak.subtopic || "").toLowerCase()
+      );
+      if (!alreadyDue) {
+        calls.push({
+          name: "schedule_review",
+          args: {
+            subject: topWeak.subject,
+            chapter: topWeak.chapter,
+            subtopic: topWeak.subtopic,
+            intervalDays: snapshot.examMode === "final_prep" ? 1 : 3,
           },
-        ],
+        });
+      }
+    }
+
+    if (snapshot.dueReviews?.length > 0) {
+      const due = snapshot.dueReviews[0];
+      calls.push({
+        name: "send_quick_quiz",
+        args: {
+          subject: due.subject,
+          chapter: due.chapter,
+          subtopic: due.subtopic,
+        },
+      });
+    }
+
+    const totalToday = snapshot.progress?.totalToday || 0;
+    const completedToday = snapshot.progress?.completedToday || 0;
+
+    if (totalToday > 0 && completedToday >= totalToday) {
+      calls.push({
+        name: "send_message",
+        args: {
+          kind: "celebration",
+          text:
+            snapshot.examMode === "final_prep"
+              ? `Awesome job finishing all ${completedToday}/${totalToday} tasks today! Do a light 10-minute formula skim if you like, then get a full night's sleep.`
+              : `Great work completing all ${completedToday}/${totalToday} study blocks today! Get good rest tonight.`,
+        },
+      });
+    } else if (totalToday > 0 && completedToday < totalToday) {
+      const pendingTask = snapshot.todayTasks?.find((t) => t.status === "pending");
+      calls.push({
+        name: "send_message",
+        args: {
+          kind: "nudge",
+          text:
+            snapshot.examMode === "final_prep"
+              ? `Evening check-in: do a light 15-minute review of "${pendingTask?.title || "key formulas"}" and head to sleep early so you're well-rested for your exam!`
+              : pendingTask
+              ? `Evening check-in (${completedToday}/${totalToday} done): even 25 minutes on "${pendingTask.title}" (${pendingTask.subject}) will keep your momentum going!`
+              : `Evening check-in (${completedToday}/${totalToday} done): wrap up one short revision block before winding down tonight!`,
+        },
+      });
+    }
+
+    if (calls.length > 0) {
+      return {
+        text: `Evening tick (${snapshot.examMode} mode): checked daily completion, scheduled reviews, and prepared evening coaching actions.`,
+        functionCalls: calls,
       };
     }
   }
@@ -281,11 +366,19 @@ function buildOfflineDryRunResponse(snapshot, tickType, stepIndex) {
 
 /**
  * Run the tool-calling study agent loop for `telegramUserId`.
- * Returns `{ ok: false, fallback: true }` on total Gemini failure so the caller can fall back to deterministic logic.
+ * Returns `{ ok: false, fallback: true }` on total Gemini failure so the caller can fall back to deterministic logic
+ * (and for `tickType === "morning"`, automatically ensures the deterministic morning brief still goes out).
  */
 export async function runAgentForUser(
   telegramUserId,
-  { tickType = "event", api = null, dryRun = undefined, timeoutMs = DEFAULT_GEMINI_TIMEOUT_MS, generateFn = null } = {}
+  {
+    tickType = "event",
+    api = null,
+    dryRun = undefined,
+    timeoutMs = DEFAULT_GEMINI_TIMEOUT_MS,
+    generateFn = null,
+    now = undefined,
+  } = {}
 ) {
   const uid = Number(telegramUserId);
   if (!Number.isFinite(uid) || uid <= 0) {
@@ -297,6 +390,30 @@ export async function runAgentForUser(
   const maxCallsPerDay = getAgentMaxCallsPerUserPerDay();
 
   try {
+    // 0. Check if user has paused the agent in agent_memory; every tick is a no-op while paused
+    const memory = await getAgentMemory(uid);
+    if (memory?.paused) {
+      if (dry) {
+        console.log(`[Agent DRY_RUN] Agent is paused for user ${uid}; skipping tick (${tickType}).`);
+      }
+      return {
+        ok: true,
+        skipped: true,
+        paused: true,
+        reason: "paused",
+        fallback: false,
+        dryRun: dry,
+        telegramUserId: uid,
+        tickType,
+        steps: 0,
+        stoppedBy: "paused",
+        actions: [],
+      };
+    }
+
+    // Flush any queued quiet-hours nudges that are ready (or drop them if stale)
+    await flushPendingNudgesForUser(uid, { now: now || new Date(), api, dryRun: dry }).catch(() => {});
+
     // 1. Enforce AGENT_MAX_CALLS_PER_USER_PER_DAY via agent_actions
     const callsToday = await countAgentActionsToday(uid);
     if (callsToday >= maxCallsPerDay) {
@@ -317,7 +434,7 @@ export async function runAgentForUser(
     }
 
     // 2. Build student snapshot (<2KB, no keys/tokens)
-    const snapshot = await buildStudentSnapshot(uid);
+    const snapshot = await buildStudentSnapshot(uid, { now: now || new Date() });
     if (dry) {
       console.log(`\n[Agent DRY_RUN] === Student Snapshot (user=${uid}, tick=${tickType}) ===`);
       console.log(JSON.stringify(snapshot, null, 2));
@@ -332,6 +449,7 @@ export async function runAgentForUser(
     ];
 
     const toolDeclarations = getToolDeclarations();
+    const examGuidance = buildExamModeGuidance(snapshot);
     const contents = [
       {
         role: "user",
@@ -339,6 +457,7 @@ export async function runAgentForUser(
           {
             text: [
               `Tick type: ${tickType}`,
+              examGuidance,
               `Current student snapshot (JSON):`,
               JSON.stringify(snapshot),
               `Choose the single most useful action (or small set of actions) for this student right now using the provided tools, or call do_nothing({ reason }) if no action is needed.`,
@@ -353,6 +472,13 @@ export async function runAgentForUser(
     let stoppedBy = "max_steps";
 
     for (let step = 0; step < maxSteps; step++) {
+      // Re-check paused status before each step in case the user sent /pause mid-tick
+      const latestMem = await getAgentMemory(uid);
+      if (latestMem?.paused) {
+        stoppedBy = "paused";
+        break;
+      }
+
       const currentCallsToday = callsToday + executedActions.length;
       if (currentCallsToday >= maxCallsPerDay) {
         stoppedBy = "max_calls_per_user_per_day";
@@ -421,6 +547,7 @@ export async function runAgentForUser(
           tickType,
           api,
           dryRun: dry,
+          now: now || new Date(),
         });
 
         executedActions.push({
@@ -468,9 +595,41 @@ export async function runAgentForUser(
     };
   } catch (err) {
     console.log(`Agent loop failed for user ${uid} (${tickType}): ${err.message}`);
+
+    // If Gemini fails during a morning tick (e.g. bad API key), still send the deterministic morning brief
+    let fallbackBrief = null;
+    if (tickType === "morning" && !dry) {
+      try {
+        const todayYmd = getTodayIstYmd();
+        const alreadySent = (await getMorningBriefSentDate(uid)) === todayYmd;
+        if (!alreadySent) {
+          fallbackBrief = await sendDailyMorningBrief(uid, { todayYmd, api });
+          await logAgentAction({
+            telegram_user_id: uid,
+            tick_type: "morning",
+            tool_name: "send_morning_brief",
+            tool_args: { fallback: true },
+            tool_result: {
+              status: "ok",
+              fallback: true,
+              date: fallbackBrief.date || todayYmd,
+              tasksCount: fallbackBrief.stats?.total || 0,
+            },
+            message_sent: fallbackBrief.text,
+            reasoning: `Deterministic morning brief fallback (${err.message || "Gemini error"})`,
+            status: "ok",
+          }).catch(() => {});
+        }
+      } catch (fbErr) {
+        console.log(`Fallback morning brief failed for user ${uid}: ${fbErr.message}`);
+      }
+    }
+
     return {
       ok: false,
       fallback: true,
+      fallbackBriefSent: Boolean(fallbackBrief?.ok),
+      brief: fallbackBrief,
       error: err.message || "Agent loop failed",
     };
   }

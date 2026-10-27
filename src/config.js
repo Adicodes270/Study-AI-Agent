@@ -1,4 +1,4 @@
-import "./tz.js";
+import "./agent/tz.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
@@ -14,6 +14,16 @@ export const DATABASE_URL = (process.env.DATABASE_URL ?? "").trim();
 
 export const GEMINI_API_KEY = process.env.GEMINI_API_KEY ?? "";
 export const GEMINI_MODEL = (process.env.GEMINI_MODEL ?? "").trim() || "gemini-3.5-flash-lite";
+
+// Scheduled agent tick times (24-hour HH:MM in IST)
+export const AGENT_TICK_TIME_MORNING =
+  (process.env.AGENT_TICK_TIME_MORNING ?? process.env.MORNING_BRIEF_TIME ?? "08:00").trim() || "08:00";
+export const AGENT_TICK_TIME_EVENING =
+  (process.env.AGENT_TICK_TIME_EVENING ?? "20:00").trim() || "20:00";
+
+// Default quiet-hours window (24-hour HH:MM in IST), overridable via .env or per-user in agent_memory
+export const QUIET_HOURS_START = (process.env.QUIET_HOURS_START ?? "22:00").trim() || "22:00";
+export const QUIET_HOURS_END = (process.env.QUIET_HOURS_END ?? "07:00").trim() || "07:00";
 
 // Optional fallback Todoist API key from .env
 export const TODOIST_API_KEY = (process.env.TODOIST_API_KEY ?? "").trim();

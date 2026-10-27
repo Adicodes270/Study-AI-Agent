@@ -1,5 +1,5 @@
 // src/agent/snapshot.js
-import "../tz.js";
+import "./tz.js";
 import {
   compactTaskId,
   countAgentMessagesToday,
@@ -18,7 +18,11 @@ import {
   normalizePlannerConfig,
 } from "../plannerEngine.js";
 import { revisionFor } from "../quizEngine.js";
-import { getNowIstHhMm, isQuietHours as checkQuietHours } from "./quietHours.js";
+import {
+  getNowIstHhMm,
+  isQuietHours as checkQuietHours,
+  resolveQuietHoursFromMemory,
+} from "./quiethours.js";
 
 const MAX_SNAPSHOT_BYTES = 2048;
 const SENSITIVE_KEY_RE = /key|token|secret|password|cookie|session|auth|credential/i;
@@ -58,6 +62,7 @@ function sanitizeMemory(rawMemory) {
   const out = {};
   for (const [k, v] of Object.entries(rawMemory)) {
     if (SENSITIVE_KEY_RE.test(k)) continue;
+    if (k === "pendingNudges" || k === "pendingBulkReschedule") continue;
     if (typeof v === "string") {
       out[k] = truncateStr(v, 80);
     } else if (typeof v === "number" || typeof v === "boolean" || v === null) {
@@ -186,15 +191,13 @@ export async function buildStudentSnapshot(telegramUserId, { now = new Date() } 
       getAgentMemory(uid),
     ]);
 
-  const config = normalizePlannerConfig(
-    planRecord?.config || planRecord?.plan?.config || DEFAULT_PLANNER_CONFIG
-  );
+  const rawPlanConfig = planRecord?.config || planRecord?.plan?.config || null;
+  const config = normalizePlannerConfig(rawPlanConfig || DEFAULT_PLANNER_CONFIG);
   const plan = planRecord?.plan || null;
   const days = Array.isArray(plan?.days) ? plan.days : [];
   const memory = sanitizeMemory(rawMemory);
 
-  const quietStart = memory.quietHoursStart || config.quietHoursStart || "22:00";
-  const quietEnd = memory.quietHoursEnd || config.quietHoursEnd || config.wakeUpTime || "07:00";
+  const { start: quietStart, end: quietEnd } = resolveQuietHoursFromMemory(rawMemory, rawPlanConfig);
   const isQuietHours = checkQuietHours(nowIst, quietStart, quietEnd);
 
   // 1. Today's tasks

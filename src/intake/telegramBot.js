@@ -2,6 +2,8 @@
 import { Api, Bot, HttpError } from "grammy";
 
 import {
+  AGENT_TICK_TIME_EVENING,
+  AGENT_TICK_TIME_MORNING,
   GEMINI_API_KEY,
   GEMINI_MODEL,
   TELEGRAM_BOT_TOKEN,
@@ -9,21 +11,36 @@ import {
 
 const DEFAULT_CLASS_LEVEL = parseInt(process.env.CLASS_LEVEL ?? "", 10) || 10;
 const CRON_SECRET = (process.env.CRON_SECRET ?? "").trim();
-const MORNING_BRIEF_TIME = (process.env.MORNING_BRIEF_TIME ?? "08:00").trim() || "08:00";
+const MORNING_BRIEF_TIME =
+  (process.env.AGENT_TICK_TIME_MORNING ?? process.env.MORNING_BRIEF_TIME ?? "08:00").trim() || "08:00";
+export const QUIET_HOURS_START = (process.env.QUIET_HOURS_START ?? "22:00").trim() || "22:00";
+export const QUIET_HOURS_END = (process.env.QUIET_HOURS_END ?? "07:00").trim() || "07:00";
+
 import {
   compactTaskId,
   createPomodoroSession,
   findTaskInPlan,
+  getAgentMemory,
   getAllActiveStudyUserIds,
   getDailyProgressStats,
   getMorningBriefSentDate,
   getPomodoroSession,
+  getRecentAgentActions,
+  getStudyPlanForUser,
   initDb,
+  logAgentAction,
   logStudyFocusMinutes,
-   savePairing,
+  patchAgentMemory,
+  savePairing,
   setMorningBriefSentDate,
   updatePomodoroSession,
 } from "../db.js";
+import {
+  getNowIstHhMm,
+  isQuietHours,
+  parseTimeToMinutes,
+} from "../agent/quiethours.js";
+import * as agentToolsModule from "../agent/tools.js";
 import { saveSyllabus } from "./storage.js";
 import { enqueueSyllabus, scheduleAutoStart } from "../generationQueue.js";
 import {
@@ -41,6 +58,7 @@ import {
 } from "./userKeys.js";
 import { identifyChaptersFromPdf, syllabusFromNcertRows } from "./chapterIdentifier.js";
 import {
+  addDaysYmd,
   carryOverPartialTask,
   completeStudyTask,
   formatFriendlyDate,
@@ -66,6 +84,209 @@ const PAIR_CODE = /^SA-\d{4}$/i;
 
 // Active in-memory Pomodoro and Break timers (sessionId -> Timeout)
 const activeTimers = new Map();
+// Active in-memory timers for sending queued nudges at the first minute after quiet hours end (userId -> Timeout)
+const pendingQuietNudgeTimers = new Map();
+
+// ---------------------------------------------------------------------------
+// 0. Per-User Quiet Hours, Pause State & Deferred Nudge Helpers
+// ---------------------------------------------------------------------------
+
+export function normalizeHhMm(value) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  const match = /^(\d{1,2}):(\d{2})$/.exec(trimmed);
+  if (!match) return null;
+  const h = parseInt(match[1], 10);
+  const m = parseInt(match[2], 10);
+  if (!Number.isInteger(h) || !Number.isInteger(m) || h < 0 || h > 23 || m < 0 || m > 59) {
+    return null;
+  }
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+}
+
+export function getDefaultQuietHours() {
+  const rawStart = String(process.env.QUIET_HOURS_START ?? QUIET_HOURS_START ?? "22:00").trim();
+  const rawEnd = String(process.env.QUIET_HOURS_END ?? QUIET_HOURS_END ?? "07:00").trim();
+  const start = normalizeHhMm(rawStart) || "22:00";
+  const end = normalizeHhMm(rawEnd) || "07:00";
+  return { start, end, window: `${start}-${end}` };
+}
+
+export function validateQuietHoursWindow(input) {
+  const raw = String(input ?? "").trim();
+  if (!raw) {
+    return {
+      ok: false,
+      error: "Please provide a time window in HH:MM-HH:MM format (e.g. /quiet 23:00-06:00).",
+    };
+  }
+  const match = /^(\d{1,2}:\d{2})\s*(?:-|–|—)\s*(\d{1,2}:\d{2})$/.exec(raw);
+  if (!match) {
+    return {
+      ok: false,
+      error: "Invalid format. Use 24-hour HH:MM-HH:MM format (for example: /quiet 23:00-06:00).",
+    };
+  }
+  const start = normalizeHhMm(match[1]);
+  const end = normalizeHhMm(match[2]);
+  if (!start || !end) {
+    return {
+      ok: false,
+      error: "Invalid time values. Hours must be 00–23 and minutes 00–59 (for example: /quiet 23:00-06:00).",
+    };
+  }
+  if (start === end) {
+    return {
+      ok: false,
+      error: "Quiet hours start and end times cannot be identical (for example: /quiet 23:00-06:00).",
+    };
+  }
+  return {
+    ok: true,
+    start,
+    end,
+    window: `${start}-${end}`,
+  };
+}
+
+export function resolveQuietHoursFromMemory(memory = null, fallbackConfig = null) {
+  const defaults = getDefaultQuietHours();
+  const mem = memory && typeof memory === "object" ? memory : {};
+  const cfg = fallbackConfig && typeof fallbackConfig === "object" ? fallbackConfig : {};
+
+  let memStart = normalizeHhMm(mem.quietHoursStart ?? mem.quiet_hours_start ?? "");
+  let memEnd = normalizeHhMm(mem.quietHoursEnd ?? mem.quiet_hours_end ?? "");
+
+  if ((!memStart || !memEnd) && mem.quietHours) {
+    if (typeof mem.quietHours === "string") {
+      const parsed = validateQuietHoursWindow(mem.quietHours);
+      if (parsed.ok) {
+        memStart = memStart || parsed.start;
+        memEnd = memEnd || parsed.end;
+      }
+    } else if (typeof mem.quietHours === "object") {
+      memStart = memStart || normalizeHhMm(mem.quietHours.start ?? "");
+      memEnd = memEnd || normalizeHhMm(mem.quietHours.end ?? "");
+    }
+  }
+
+  const cfgStart = normalizeHhMm(cfg.quietHoursStart ?? "");
+  const cfgEnd = normalizeHhMm(cfg.quietHoursEnd ?? "");
+
+  const start = memStart || cfgStart || defaults.start;
+  const end = memEnd || cfgEnd || defaults.end;
+  const isCustom = Boolean(memStart && memEnd);
+
+  return {
+    start,
+    end,
+    window: `${start}-${end}`,
+    isCustom,
+  };
+}
+
+export async function getUserQuietHours(telegramUserId) {
+  const uid = Number(telegramUserId);
+  if (!Number.isFinite(uid) || uid <= 0) {
+    return { ...getDefaultQuietHours(), isCustom: false };
+  }
+  const [memory, planRecord] = await Promise.all([
+    getAgentMemory(uid).catch(() => ({})),
+    getStudyPlanForUser(uid).catch(() => null),
+  ]);
+  const cfg = planRecord?.config || planRecord?.plan?.config || null;
+  return resolveQuietHoursFromMemory(memory, cfg);
+}
+
+export async function setUserQuietHours(telegramUserId, windowInput) {
+  const uid = Number(telegramUserId);
+  if (!Number.isFinite(uid) || uid <= 0) {
+    return { ok: false, error: "Invalid user ID." };
+  }
+  const validated = validateQuietHoursWindow(windowInput);
+  if (!validated.ok) return validated;
+
+  const memory = await patchAgentMemory(uid, {
+    quietHoursStart: validated.start,
+    quietHoursEnd: validated.end,
+    quietHours: validated.window,
+  });
+  return {
+    ok: true,
+    start: validated.start,
+    end: validated.end,
+    window: validated.window,
+    memory,
+  };
+}
+
+export function getNextQuietHoursEndDate(now = new Date(), start = undefined, end = undefined) {
+  const defaults = getDefaultQuietHours();
+  let resolvedEnd = end;
+  if (start && typeof start === "object" && !(start instanceof Date)) {
+    resolvedEnd = resolveQuietHoursFromMemory(start).end;
+  } else if (typeof start === "string" && start.includes("-") && end === undefined) {
+    const parsed = validateQuietHoursWindow(start);
+    if (parsed.ok) resolvedEnd = parsed.end;
+  }
+  const endStr = normalizeHhMm(String(resolvedEnd || defaults.end)) || defaults.end;
+  const endMins = parseTimeToMinutes(endStr, 7 * 60);
+
+  let baseDate;
+  if (now instanceof Date && !Number.isNaN(now.getTime())) {
+    baseDate = new Date(now.getTime());
+  } else if (typeof now === "string" && /^\d{1,2}:\d{2}(?::\d{2})?$/.test(now.trim())) {
+    const todayYmd = getTodayIstYmd();
+    const hhmm = now.trim().padStart(5, "0").slice(0, 5);
+    baseDate = new Date(`${todayYmd}T${hhmm}:00+05:30`);
+  } else {
+    const parsed = new Date(now);
+    baseDate = Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+  }
+
+  baseDate.setUTCSeconds(0, 0);
+  const nowMins = parseTimeToMinutes(baseDate);
+  let diffMins = endMins - nowMins;
+  if (diffMins <= 0) {
+    diffMins += 1440;
+  }
+  return new Date(baseDate.getTime() + diffMins * 60_000);
+}
+
+export function clearPendingNudgeTimer(telegramUserId) {
+  const uid = Number(telegramUserId);
+  const existing = pendingQuietNudgeTimers.get(uid);
+  if (existing) {
+    clearTimeout(existing);
+    pendingQuietNudgeTimers.delete(uid);
+  }
+  if (typeof agentToolsModule.clearPendingNudgeTimer === "function") {
+    try {
+      agentToolsModule.clearPendingNudgeTimer(uid);
+    } catch {}
+  }
+}
+
+export async function flushPendingNudgesForUser(telegramUserId, options = {}) {
+  if (typeof agentToolsModule.flushPendingNudgesForUser === "function") {
+    return await agentToolsModule.flushPendingNudgesForUser(telegramUserId, options);
+  }
+  return { ok: true, sent: [], dropped: [], remaining: [] };
+}
+
+export async function reschedulePendingNudgesForUser(telegramUserId, options = {}) {
+  if (typeof agentToolsModule.reschedulePendingNudgesForUser === "function") {
+    return await agentToolsModule.reschedulePendingNudgesForUser(telegramUserId, options);
+  }
+  return { ok: true, updated: 0 };
+}
+
+export async function flushAllPendingNudges(options = {}) {
+  if (typeof agentToolsModule.flushAllPendingNudges === "function") {
+    return await agentToolsModule.flushAllPendingNudges(options);
+  }
+  return { ok: true, results: [] };
+}
 
 /**
  * Ensures any callback_data string is strictly under Telegram's 64-byte limit.
@@ -266,15 +487,26 @@ export async function triggerDailyMorningBriefsForAllUsers({
   force = false,
   chatId = null,
   api = null,
+  delayMs = 50,
 } = {}) {
   const targetIds = chatId != null ? [Number(chatId)] : await getAllActiveStudyUserIds();
   const results = [];
   let sentCount = 0;
   let skippedCount = 0;
 
-  for (const id of targetIds) {
+  for (let i = 0; i < targetIds.length; i++) {
+    const id = targetIds[i];
     if (!Number.isFinite(id) || id <= 0) continue;
+    if (i > 0 && delayMs > 0) {
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
     try {
+      const memory = await getAgentMemory(id).catch(() => ({}));
+      if (memory?.paused) {
+        skippedCount++;
+        results.push({ chatId: id, status: "paused", date: todayYmd });
+        continue;
+      }
       if (!force && chatId == null) {
         const lastSent = await getMorningBriefSentDate(id);
         if (lastSent === todayYmd) {
@@ -550,7 +782,7 @@ export async function cancelPomodoroSession(sessionId, { ctx = null } = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// 3. Command & Callback Query Handlers
+// 3. Command & Callback Query Handlers (Including Student Controls)
 // ---------------------------------------------------------------------------
 
 async function start(ctx) {
@@ -570,7 +802,10 @@ async function start(ctx) {
         `Daily study commands:\n` +
         `• /today — View today's interactive study plan\n` +
         `• /pomodoro [mins] — Start an in-chat focus timer\n` +
-        `• /reschedule — Dynamically rebalance unfinished tasks`
+        `• /reschedule — Dynamically rebalance unfinished tasks\n` +
+        `• /quiet [HH:MM-HH:MM] — View or change quiet hours\n` +
+        `• /pause & /resume — Pause or resume proactive agent actions\n` +
+        `• /agentlog — View recent agent actions`
     );
     return;
   }
@@ -581,6 +816,9 @@ async function start(ctx) {
       `• /today — Today's study brief & 1-tap progress tracker\n` +
       `• /pomodoro [minutes] — Start a 25m focus session\n` +
       `• /reschedule — Redistribute unfinished tasks across upcoming days\n` +
+      `• /quiet [HH:MM-HH:MM] — Show or update your quiet-hours window\n` +
+      `• /pause & /resume — Pause or resume all agent actions\n` +
+      `• /agentlog — Show the last 5 agent actions in plain language\n` +
       `• /removekey — Delete your saved Gemini key\n• /help — View all commands & usage guide`
   );
 }
@@ -608,7 +846,7 @@ async function removeKey(ctx) {
 }
 
 /**
- * `/help` command handler: displays all available bot commands, 1-tap study actions, and syllabus intake tips.
+ * `/help` command handler: displays all available bot commands, student controls, 1-tap study actions, and syllabus intake tips.
  */
 export async function handleHelpCommand(ctx) {
   const helpText = [
@@ -618,6 +856,12 @@ export async function handleHelpCommand(ctx) {
     "• /today — View today's study brief, progress %, and 1-tap task buttons",
     "• /reschedule — Dynamically move unfinished or overdue topics to upcoming days",
     "• /pomodoro `[minutes] [topic]` — Start an in-chat focus timer (default: 25m)",
+    "",
+    "🎛️ *Student Agent Controls*",
+    "• /pause — Pause all proactive agent nudges, scheduled ticks, and actions",
+    "• /resume — Resume proactive agent coaching and scheduled actions",
+    "• /quiet `[HH:MM-HH:MM]` — Show or change your quiet-hours window (e.g. `/quiet 23:00-06:00`)",
+    "• /agentlog — Show the last 5 agent actions in plain, friendly language",
     "",
     "⚡ *1-Tap Inline Actions (on /today cards)*",
     "• *✅ Done* — Mark topic 100% completed (syncs with Web Planner & Todoist)",
@@ -647,6 +891,423 @@ export async function handleHelpCommand(ctx) {
   return await ctx.reply(helpText, { reply_markup });
 }
 
+/**
+ * `/pause` command handler: sets `paused: true` in `agent_memory` so every tick and tool becomes a no-op for this user.
+ */
+export async function handlePauseCommand(ctx) {
+  const userId = Number(ctx.from?.id ?? ctx.chat?.id);
+  clearPendingNudgeTimer(userId);
+  const memory = await patchAgentMemory(userId, {
+    paused: true,
+    pausedAt: new Date().toISOString(),
+  });
+  const text =
+    "⏸️ *Study Agent Paused*\n" +
+    "All proactive nudges, scheduled ticks, and agent actions are now paused for your account. " +
+    "Send /resume anytime when you're ready to turn them back on.";
+  await ctx.reply(text);
+  return { ok: true, paused: true, telegramUserId: userId, memory, text };
+}
+
+/**
+ * `/resume` command handler: sets `paused: false` in `agent_memory` to re-enable ticks and tools for this user.
+ */
+export async function handleResumeCommand(ctx) {
+  const userId = Number(ctx.from?.id ?? ctx.chat?.id);
+  const memory = await patchAgentMemory(userId, {
+    paused: false,
+    resumedAt: new Date().toISOString(),
+  });
+  const text =
+    "▶️ *Study Agent Resumed*\n" +
+    "Welcome back! Proactive study check-ins and scheduled agent actions are active again. " +
+    "Use /today to check your plan or /pause anytime.";
+  await ctx.reply(text);
+  return { ok: true, paused: false, telegramUserId: userId, memory, text };
+}
+
+function extractCommandArgs(ctx, commandName) {
+  if (typeof ctx?.match === "string") {
+    return ctx.match.trim();
+  }
+  const rawText = String(ctx?.message?.text || "").trim();
+  const re = new RegExp(`^\\/${commandName}(?:@[\\w_]+)?(?:\\s+([\\s\\S]*))?$`, "i");
+  const m = re.exec(rawText);
+  return m && m[1] ? m[1].trim() : "";
+}
+
+/**
+ * `/quiet [HH:MM-HH:MM]` command handler: shows or updates the user's quiet-hours window in `agent_memory`.
+ */
+export async function handleQuietCommand(ctx) {
+  const userId = Number(ctx.from?.id ?? ctx.chat?.id);
+  const rawArg = extractCommandArgs(ctx, "quiet");
+
+  if (!rawArg) {
+    const current = await getUserQuietHours(userId);
+    const nowIst = getNowIstHhMm(new Date());
+    const activeNow = isQuietHours(nowIst, current.start, current.end);
+    const sourceLabel = current.isCustom ? "custom setting" : "default setting";
+    const statusLabel = activeNow ? "🌙 Currently in quiet hours" : "☀️ Currently outside quiet hours";
+    const text =
+      `🔕 *Quiet Hours: ${current.start}-${current.end} IST* (${sourceLabel})\n` +
+      `${statusLabel} (current time: ${nowIst} IST).\n\n` +
+      `To change your quiet-hours window, send:\n` +
+      `/quiet HH:MM-HH:MM (for example: /quiet 23:00-06:00)`;
+    await ctx.reply(text);
+    return {
+      ok: true,
+      mode: "show",
+      start: current.start,
+      end: current.end,
+      window: current.window,
+      isCustom: current.isCustom,
+      inQuietHours: activeNow,
+      text,
+    };
+  }
+
+  const validation = validateQuietHoursWindow(rawArg);
+  if (!validation.ok) {
+    const errText = `⚠️ ${validation.error}`;
+    await ctx.reply(errText);
+    return {
+      ok: false,
+      error: validation.error,
+      text: errText,
+    };
+  }
+
+  const saved = await setUserQuietHours(userId, validation.window);
+  await reschedulePendingNudgesForUser(userId, { api: ctx?.api || null }).catch(() => {});
+
+  const nowIst = getNowIstHhMm(new Date());
+  const activeNow = isQuietHours(nowIst, saved.start, saved.end);
+  const text =
+    `🔕 *Quiet hours updated to ${saved.window} IST*\n` +
+    `Proactive nudges will be held between *${saved.start}* and *${saved.end}* IST ` +
+    `(and sent at ${saved.end} if still relevant, or dropped if stale).` +
+    (activeNow ? "\n🌙 Quiet hours are currently active right now." : "");
+  await ctx.reply(text);
+
+  return {
+    ok: true,
+    mode: "update",
+    start: saved.start,
+    end: saved.end,
+    window: saved.window,
+    inQuietHours: activeNow,
+    memory: saved.memory,
+    text,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Friendly `/agentlog` Formatting Helpers (Plain English, Never Raw JSON)
+// ---------------------------------------------------------------------------
+
+function formatDateToWeekday(ymd) {
+  if (!ymd || typeof ymd !== "string") return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(ymd.trim());
+  if (!m) return null;
+  const d = new Date(`${m[1]}-${m[2]}-${m[3]}T12:00:00+05:30`);
+  if (Number.isNaN(d.getTime())) return null;
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Kolkata",
+    weekday: "long",
+  }).format(d);
+}
+
+function formatDateIstYmd(date = new Date()) {
+  const d = date instanceof Date && !Number.isNaN(date.getTime()) ? date : new Date(date);
+  const valid = Number.isNaN(d.getTime()) ? new Date() : d;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(valid);
+  const y = parts.find((p) => p.type === "year")?.value || "2026";
+  const m = parts.find((p) => p.type === "month")?.value || "01";
+  const day = parts.find((p) => p.type === "day")?.value || "01";
+  return `${y}-${m}-${day}`;
+}
+
+function formatActionTimestampFriendly(createdAt, now = new Date()) {
+  const nowDate = now instanceof Date && !Number.isNaN(now.getTime()) ? now : new Date();
+  const actionDate = createdAt instanceof Date ? createdAt : new Date(createdAt || Date.now());
+  const validDate = Number.isNaN(actionDate.getTime()) ? nowDate : actionDate;
+
+  const todayYmd = formatDateIstYmd(nowDate);
+  const yesterdayYmd = addDaysYmd(todayYmd, -1);
+  const actionYmd = formatDateIstYmd(validDate);
+
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Kolkata",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(validDate);
+  const hourNum = parseInt(parts.find((p) => p.type === "hour")?.value || "0", 10) % 24;
+  const minuteStr = parts.find((p) => p.type === "minute")?.value || "00";
+  const timeStr = `${hourNum}:${minuteStr}`;
+
+  if (actionYmd === todayYmd) {
+    return `Today ${timeStr}`;
+  }
+  if (actionYmd === yesterdayYmd) {
+    return `Yesterday ${timeStr}`;
+  }
+
+  const diffDays = Math.round(
+    (new Date(`${todayYmd}T00:00:00+05:30`).getTime() -
+      new Date(`${actionYmd}T00:00:00+05:30`).getTime()) /
+      86_400_000
+  );
+  if (diffDays > 1 && diffDays <= 6) {
+    const weekday = formatDateToWeekday(actionYmd);
+    if (weekday) return `${weekday} ${timeStr}`;
+  }
+
+  const shortDate = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Kolkata",
+    month: "short",
+    day: "numeric",
+  }).format(validDate);
+  return `${shortDate} ${timeStr}`;
+}
+
+function cleanPlainSnippet(str, maxLen = 70) {
+  if (!str) return "";
+  const cleaned = String(str)
+    .replace(/[\r\n]+/g, " ")
+    .replace(/[{}\[\]"]/g, "")
+    .replace(/\*+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (cleaned.length <= maxLen) return cleaned;
+  return `${cleaned.slice(0, maxLen - 1).trim()}…`;
+}
+
+export function describeAgentActionPlainly(action = {}) {
+  const tool = String(action?.tool_name ?? action?.toolName ?? "").trim();
+  const status = String(action?.status || "ok").toLowerCase();
+  const args = action?.tool_args && typeof action.tool_args === "object" ? action.tool_args : {};
+  const result = action?.tool_result && typeof action.tool_result === "object" ? action.tool_result : {};
+  const reasoning = String(action?.reasoning || "").trim();
+  const messageSent = String(action?.message_sent ?? action?.messageSent ?? "").trim();
+
+  if (tool === "reschedule_missed_tasks") {
+    if (status === "pending_confirmation" || result?.requiresConfirmation) {
+      const pendingCount = Number(result?.pendingCount) || 4;
+      return `asked for confirmation before moving ${pendingCount} missed tasks`;
+    }
+    if (status === "skipped") {
+      if (/declined/i.test(reasoning)) {
+        return "cancelled bulk reschedule at your request";
+      }
+      return "skipped rescheduling tasks";
+    }
+    if (status === "error") {
+      return "tried to reschedule missed tasks but couldn't update the plan";
+    }
+    const movedTasks = Array.isArray(result?.movedTasks) ? result.movedTasks : [];
+    const count =
+      Number.isFinite(Number(result?.movedCount))
+        ? Number(result.movedCount)
+        : movedTasks.length || (args?.taskId ? 1 : 0);
+
+    if (count === 0) {
+      return "checked for missed tasks (everything was already on track)";
+    }
+
+    const dayNames = [
+      ...new Set(
+        movedTasks
+          .map((m) => {
+            if (m?.toDayLabel) {
+              return String(m.toDayLabel).split(",")[0].trim();
+            }
+            return formatDateToWeekday(m?.toDate);
+          })
+          .filter(Boolean)
+      ),
+    ];
+
+    const targetLabel =
+      dayNames.length === 1
+        ? dayNames[0]
+        : dayNames.length > 1
+        ? dayNames.join(" & ")
+        : result?.toDay || formatDateToWeekday(result?.toDate) || "upcoming days";
+
+    return `moved ${count} missed ${count === 1 ? "task" : "tasks"} to ${targetLabel}`;
+  }
+
+  if (tool === "carry_over_partial") {
+    if (status === "error") {
+      return "tried to carry over a half-done task to tomorrow";
+    }
+    const tomorrowDay = formatDateToWeekday(result?.tomorrowDate) || "tomorrow";
+    return `carried over remaining half of a study task to ${tomorrowDay}`;
+  }
+
+  if (tool === "send_morning_brief") {
+    if (status === "skipped") {
+      return "skipped sending the morning study brief";
+    }
+    const count = Number(result?.tasksCount);
+    if (Number.isFinite(count) && count > 0) {
+      return `sent your morning study brief (${count} ${count === 1 ? "task" : "tasks"} planned)`;
+    }
+    return "sent your daily morning study brief";
+  }
+
+  if (tool === "send_message") {
+    const kind = String(args?.kind || result?.kind || "nudge").toLowerCase();
+    const kindLabels = {
+      nudge: "study nudge",
+      reminder: "study reminder",
+      celebration: "progress celebration",
+      exam_alert: "exam alert",
+    };
+    const label = kindLabels[kind] || "study message";
+
+    if (status === "skipped") {
+      const skipReason = String(result?.reason || reasoning || "").toLowerCase();
+      if (skipReason === "quiet_hours") {
+        if (result?.nudgeStatus === "dropped_stale" || result?.dropped) {
+          return `dropped a stale ${label} during quiet hours`;
+        }
+        if (result?.deliverAtHhMm) {
+          return `held a ${label} during quiet hours (scheduled for ${result.deliverAtHhMm})`;
+        }
+        return `held a ${label} because quiet hours were active`;
+      }
+      if (skipReason === "paused") {
+        return `skipped a ${label} while agent was paused`;
+      }
+      if (skipReason === "max_messages_per_day") {
+        return `skipped a ${label} (daily message limit reached)`;
+      }
+      return `skipped sending a ${label}`;
+    }
+
+    const preview = cleanPlainSnippet(messageSent || args?.text || "", 55);
+    if (result?.flushedAfterQuietHours) {
+      return preview
+        ? `sent queued ${label} after quiet hours: "${preview}"`
+        : `sent a queued ${label} after quiet hours ended`;
+    }
+    return preview ? `sent a ${label}: "${preview}"` : `sent a ${label}`;
+  }
+
+  if (tool === "update_memory") {
+    const keys = Array.isArray(result?.updatedKeys)
+      ? result.updatedKeys
+      : args?.patch && typeof args.patch === "object"
+      ? Object.keys(args.patch)
+      : [];
+    const cleanKeys = keys
+      .filter((k) => k !== "pendingNudges" && k !== "pendingBulkReschedule")
+      .map((k) => k.replace(/([A-Z])/g, " $1").replace(/_/g, " ").toLowerCase().trim());
+    if (cleanKeys.length > 0) {
+      return `updated your study preferences (${cleanKeys.join(", ")})`;
+    }
+    return "saved a note to your study profile";
+  }
+
+  if (tool === "get_snapshot") {
+    return "checked your study progress and upcoming schedule";
+  }
+
+  if (tool === "do_nothing") {
+    const reason = cleanPlainSnippet(args?.reason || result?.reason || reasoning, 60);
+    if (reason) {
+      const lower = reason.charAt(0).toLowerCase() + reason.slice(1).replace(/\.$/, "");
+      return `took no action (${lower})`;
+    }
+    return "checked in and saw you were on track (no action needed)";
+  }
+
+  if (tool === "send_quick_quiz") {
+    const topic = cleanPlainSnippet(args?.subtopic || args?.chapter || args?.subject || "", 40);
+    return topic ? `sent a quick practice quiz on ${topic}` : "sent a quick practice quiz";
+  }
+
+  if (tool === "schedule_review") {
+    const topic = cleanPlainSnippet(args?.subtopic || args?.chapter || args?.subject || "", 40);
+    const days = Number(args?.intervalDays ?? result?.intervalDays);
+    const inDays = Number.isFinite(days) && days > 0 ? ` in ${days} ${days === 1 ? "day" : "days"}` : "";
+    return topic
+      ? `scheduled a revision check for ${topic}${inDays}`
+      : `scheduled a spaced-repetition review${inDays}`;
+  }
+
+  if (tool === "send_followup_practice") {
+    const topic = cleanPlainSnippet(args?.subtopic || args?.chapter || "", 40);
+    return topic
+      ? `sent a follow-up practice question on ${topic}`
+      : "sent a follow-up practice question";
+  }
+
+  if (reasoning && !reasoning.includes("{")) {
+    return cleanPlainSnippet(reasoning, 70);
+  }
+
+  if (tool) {
+    return `ran ${tool.replace(/_/g, " ")}`;
+  }
+
+  return "completed a study check-in";
+}
+
+/**
+ * Formats a single `agent_actions` row into a plain, friendly line:
+ * e.g. `"Yesterday 8:00 - moved 2 missed tasks to Thursday"`
+ */
+export function formatAgentActionFriendly(action, { now = new Date() } = {}) {
+  const timeLabel = formatActionTimestampFriendly(action?.created_at ?? action?.createdAt, now);
+  const description = describeAgentActionPlainly(action);
+  return `${timeLabel} - ${description}`;
+}
+
+/**
+ * Formats a list of up to 5 `agent_actions` rows into a complete `/agentlog` message.
+ */
+export function formatAgentLogMessage(actions = [], { now = new Date() } = {}) {
+  const slice = (Array.isArray(actions) ? actions : []).slice(0, 5);
+  if (!slice.length) {
+    return (
+      "📋 *Recent Agent Activity*\n" +
+      "No agent actions recorded yet! As I help manage your schedule, send morning briefs, or rebalance tasks, your last 5 actions will show up here."
+    );
+  }
+
+  const lines = [
+    "📋 *Last 5 Agent Actions*",
+    "",
+    ...slice.map((act) => `• ${formatAgentActionFriendly(act, { now })}`),
+  ];
+  return lines.join("\n");
+}
+
+/**
+ * `/agentlog` command handler: shows the last 5 `agent_actions` for the user in plain, friendly language.
+ */
+export async function handleAgentLogCommand(ctx) {
+  const userId = Number(ctx.from?.id ?? ctx.chat?.id);
+  const actions = await getRecentAgentActions(userId, 5);
+  const text = formatAgentLogMessage(actions);
+  await ctx.reply(text);
+  return {
+    ok: true,
+    telegramUserId: userId,
+    count: actions.length,
+    lines: actions.map((a) => formatAgentActionFriendly(a)),
+    text,
+  };
+}
 
 /**
  * `/today` command handler: sends the user's Morning Study Brief with interactive 1-tap buttons.
@@ -719,8 +1380,32 @@ export async function handlePomodoroCommand(ctx) {
   });
 }
 
+function parseBulkRescheduleCallback(data) {
+  const prefixes = [
+    "reschedule_confirm:",
+    "resched_confirm:",
+    "confirm_reschedule:",
+    "bulk_reschedule:",
+    "bulk_resched_",
+  ];
+  const matchedPrefix = prefixes.find((p) => data.startsWith(p));
+  if (!matchedPrefix) return null;
+
+  const rest = data.slice(matchedPrefix.length).trim();
+  const parts = rest.split(":");
+  const decisionRaw = String(parts[0] || "").toLowerCase();
+  if (decisionRaw !== "yes" && decisionRaw !== "no") return null;
+
+  const rawTarget = parts.slice(1).join(":").trim();
+  const taskId = rawTarget && rawTarget !== "all" ? rawTarget : null;
+  return {
+    decision: decisionRaw,
+    taskId,
+  };
+}
+
 /**
- * Handles all `callback_query` events for 1-tap task updates, dynamic rescheduling, and Pomodoro sessions.
+ * Handles all `callback_query` events for 1-tap task updates, bulk reschedule confirmations, dynamic rescheduling, and Pomodoro sessions.
  */
 export async function handleCallbackQuery(ctx) {
   const data = String(ctx.callbackQuery?.data || "").trim();
@@ -733,6 +1418,104 @@ export async function handleCallbackQuery(ctx) {
 
   if (data === "help_today") {
     return await sendDailyMorningBrief(userId, { ctx });
+  }
+
+  // 0. Bulk reschedule confirmation: reschedule_confirm:yes[:<taskId>] / reschedule_confirm:no[:<taskId>]
+  const bulkConfirm = parseBulkRescheduleCallback(data);
+  if (bulkConfirm) {
+    const memory = await getAgentMemory(userId).catch(() => ({}));
+    const pendingInfo = memory?.pendingBulkReschedule || null;
+    const resolvedTaskId = bulkConfirm.taskId || pendingInfo?.taskId || null;
+
+    if (bulkConfirm.decision === "no") {
+      await patchAgentMemory(userId, { pendingBulkReschedule: null });
+      const cancelText = "✖️ Bulk reschedule cancelled. Your current study schedule was kept unchanged.";
+      await safeEditMessageText(ctx, cancelText, {
+        reply_markup: { inline_keyboard: [] },
+      });
+      await logAgentAction({
+        telegram_user_id: Number(userId),
+        tick_type: "event",
+        tool_name: "reschedule_missed_tasks",
+        tool_args: { taskId: resolvedTaskId, confirmed: false },
+        tool_result: { status: "skipped", reason: "user_declined", movedCount: 0, movedTasks: [] },
+        message_sent: cancelText,
+        reasoning: "Student declined bulk reschedule confirmation",
+        status: "skipped",
+      }).catch(() => {});
+
+      return {
+        ok: true,
+        confirmed: false,
+        cancelled: true,
+        decision: "no",
+        movedCount: 0,
+        movedTasks: [],
+        text: cancelText,
+      };
+    }
+
+    // decision === "yes": execute the confirmed bulk reschedule
+    const res = await rescheduleTasks(userId, { taskId: resolvedTaskId });
+    await patchAgentMemory(userId, { pendingBulkReschedule: null });
+
+    if (!res.ok || !res.movedTasks?.length) {
+      const msg = "🔄 Schedule checked! All tasks are already balanced across your upcoming days.";
+      await safeEditMessageText(ctx, msg, { reply_markup: { inline_keyboard: [] } });
+      return { ok: true, confirmed: true, decision: "yes", movedCount: 0, movedTasks: [], text: msg };
+    }
+
+    const movedCount = res.movedTasks.length;
+    const summaryLines = res.movedTasks
+      .slice(0, 5)
+      .map((m) => `• **[${m.subject}] ${m.title}** → **${m.toDayLabel}** (${m.toDate})`);
+    const banner =
+      `✅ **Bulk Reschedule Confirmed (${movedCount} tasks moved)!**\n` +
+      summaryLines.join("\n");
+
+    if (res.day && res.stats) {
+      const payload = buildDailyBriefPayload(res.day, res.stats, { statusBanner: banner });
+      await safeEditMessageText(ctx, payload.text, {
+        reply_markup: payload.reply_markup,
+      });
+    } else {
+      await safeEditMessageText(ctx, banner, {
+        reply_markup: { inline_keyboard: [] },
+      });
+    }
+
+    await logAgentAction({
+      telegram_user_id: Number(userId),
+      tick_type: "event",
+      tool_name: "reschedule_missed_tasks",
+      tool_args: { taskId: resolvedTaskId, confirmed: true },
+      tool_result: {
+        status: "ok",
+        confirmed: true,
+        movedCount,
+        movedTasks: res.movedTasks.slice(0, 5).map((m) => ({
+          fromId: m.originalTaskId,
+          toId: m.newTaskId,
+          subject: m.subject,
+          title: m.title,
+          toDate: m.toDate,
+          toDayLabel: m.toDayLabel,
+          startTime: m.startTime,
+        })),
+      },
+      message_sent: banner,
+      reasoning: `Student confirmed bulk reschedule of ${movedCount} tasks`,
+      status: "ok",
+    }).catch(() => {});
+
+    return {
+      ok: true,
+      confirmed: true,
+      decision: "yes",
+      movedCount,
+      movedTasks: res.movedTasks,
+      res,
+    };
   }
 
   // 1. task_done:<taskId>
@@ -1072,7 +1855,7 @@ function onError(err) {
 }
 
 /**
- * Registers all Study Agent commands, callback_query handlers, and syllabus intake handlers on a Grammy Bot instance.
+ * Registers all Study Agent commands, student controls, callback_query handlers, and syllabus intake handlers on a Grammy Bot instance.
  */
 export function registerBotHandlers(botInstance) {
   if (!botInstance || botInstance._studyAgentHandlersRegistered) {
@@ -1087,6 +1870,10 @@ export function registerBotHandlers(botInstance) {
   botInstance.command("today", handleTodayCommand);
   botInstance.command("reschedule", handleRescheduleCommand);
   botInstance.command("pomodoro", handlePomodoroCommand);
+  botInstance.command("pause", handlePauseCommand);
+  botInstance.command("resume", handleResumeCommand);
+  botInstance.command("quiet", handleQuietCommand);
+  botInstance.command("agentlog", handleAgentLogCommand);
 
   botInstance.on("callback_query:data", handleCallbackQuery);
 
@@ -1111,13 +1898,14 @@ export function createBot(token = TELEGRAM_BOT_TOKEN) {
 export const bot = createBot(TELEGRAM_BOT_TOKEN);
 
 // ---------------------------------------------------------------------------
-// 5. Local Morning Brief Scheduler (8:00 AM IST) & Cron Auth Helper
+// 5. Local Morning & Evening Tick Scheduler (IST) & Cron Auth Helper
 // ---------------------------------------------------------------------------
 let dailyBriefInterval = null;
 
 export function startDailyBriefScheduler({
   checkIntervalMs = 60_000,
   targetTimeIst = MORNING_BRIEF_TIME || "08:00",
+  eveningTimeIst = AGENT_TICK_TIME_EVENING || "20:00",
   api = null,
 } = {}) {
   if (dailyBriefInterval) return dailyBriefInterval;
@@ -1125,18 +1913,38 @@ export function startDailyBriefScheduler({
   const [targetHour, targetMin] = String(targetTimeIst)
     .split(":")
     .map((n) => parseInt(n, 10));
+  const [eveningHour, eveningMin] = String(eveningTimeIst)
+    .split(":")
+    .map((n) => parseInt(n, 10));
 
   dailyBriefInterval = setInterval(async () => {
     try {
+      await flushAllPendingNudges({ now: new Date(), api }).catch(() => {});
+
       const istNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
       const h = istNow.getHours();
       const m = istNow.getMinutes();
-      if (h === (Number.isFinite(targetHour) ? targetHour : 8) && m >= (Number.isFinite(targetMin) ? targetMin : 0) && m <= (Number.isFinite(targetMin) ? targetMin : 0) + 5) {
-        const todayYmd = getTodayIstYmd();
-        await triggerDailyMorningBriefsForAllUsers({ todayYmd, force: false, api });
+      const todayYmd = getTodayIstYmd();
+
+      if (
+        h === (Number.isFinite(targetHour) ? targetHour : 8) &&
+        m >= (Number.isFinite(targetMin) ? targetMin : 0) &&
+        m <= (Number.isFinite(targetMin) ? targetMin : 0) + 5
+      ) {
+        const { runMorningTick } = await import("../agent/tick.js");
+        await runMorningTick({ todayYmd, force: false, api });
+      }
+
+      if (
+        h === (Number.isFinite(eveningHour) ? eveningHour : 20) &&
+        m >= (Number.isFinite(eveningMin) ? eveningMin : 0) &&
+        m <= (Number.isFinite(eveningMin) ? eveningMin : 0) + 5
+      ) {
+        const { runEveningTick } = await import("../agent/tick.js");
+        await runEveningTick({ todayYmd, force: false, api });
       }
     } catch (err) {
-      console.log(`Daily morning brief scheduler error: ${err.message}`);
+      console.log(`Daily study tick scheduler error: ${err.message}`);
     }
   }, checkIntervalMs);
 
