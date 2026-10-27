@@ -1,5 +1,5 @@
 // src/agent/tick.js
-import "./tz.js";
+import "../tz.js";
 import { Api } from "grammy";
 
 import {
@@ -12,6 +12,8 @@ import {
   getAllActiveStudyUserIds,
   getMorningBriefSentDate,
   getRecentAgentActions,
+  hasUserSavedStudyPlan,
+  hasUserUploadedSyllabus,
   logAgentAction,
   patchAgentMemory,
 } from "../db.js";
@@ -265,6 +267,27 @@ export async function runMorningTickForUser(
     };
   }
 
+  const [hasSyllabus, hasPlan] = await Promise.all([
+    hasUserUploadedSyllabus(uid),
+    hasUserSavedStudyPlan(uid),
+  ]);
+  if (!hasPlan) {
+    const reason = !hasSyllabus ? "no_syllabus" : "no_plan";
+    return {
+      ok: true,
+      skipped: true,
+      noSyllabus: !hasSyllabus,
+      noPlan: true,
+      status: reason,
+      reason,
+      tickType: "morning",
+      userId: uid,
+      chatId: uid,
+      date: effectiveTodayYmd,
+      briefSent: false,
+    };
+  }
+
   if (!force && (await hasTickRunToday(uid, "morning", effectiveTodayYmd))) {
     return {
       ok: true,
@@ -374,6 +397,26 @@ export async function runEveningTickForUser(
       paused: true,
       status: "paused",
       reason: "paused",
+      tickType: "evening",
+      userId: uid,
+      chatId: uid,
+      date: effectiveTodayYmd,
+    };
+  }
+
+  const [hasSyllabus, hasPlan] = await Promise.all([
+    hasUserUploadedSyllabus(uid),
+    hasUserSavedStudyPlan(uid),
+  ]);
+  if (!hasPlan) {
+    const reason = !hasSyllabus ? "no_syllabus" : "no_plan";
+    return {
+      ok: true,
+      skipped: true,
+      noSyllabus: !hasSyllabus,
+      noPlan: true,
+      status: reason,
+      reason,
       tickType: "evening",
       userId: uid,
       chatId: uid,

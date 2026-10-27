@@ -944,7 +944,14 @@ function buildQuizHistorySummary(chapters = []) {
 
 // GET /api/planner/state?telegramUserId=...
 export const plannerState = safe(async (query = {}, ctx = {}) => {
-  const id = resolveUserId(query.telegramUserId, ctx);
+  const id = quizUserId(query.telegramUserId, ctx);
+  if (Number.isNaN(id)) {
+    return fail(400, "Missing or invalid Telegram user id", {
+      has_syllabus: false,
+      chapters: [],
+      plan: null,
+    });
+  }
   const [chapters, geminiKeys, profile, todoistKey, savedPlanData] = await Promise.all([
     getChaptersWithResults(id),
     getUserKeys(id),
@@ -967,6 +974,7 @@ export const plannerState = safe(async (query = {}, ctx = {}) => {
   }));
 
   const syllabusChaptersOnly = normalizedChapters.filter((c) => !c.is_custom);
+  const hasSyllabus = syllabusChaptersOnly.length > 0;
   const quizHistory = buildQuizHistorySummary(normalizedChapters);
 
   return ok({
@@ -977,14 +985,15 @@ export const plannerState = safe(async (query = {}, ctx = {}) => {
     todoist_source: profile?.todoist_api_key ? "user" : TODOIST_API_KEY ? "env" : ctx?.cookies?.sa_todoist_key ? "cookie" : null,
     todoist_upcoming_url: "https://app.todoist.com/app/upcoming",
     has_gemini_key: geminiKeys.length > 0 || Boolean(ctx?.cookies?.sa_gemini_key) || Boolean(GEMINI_API_KEY),
-    has_syllabus: syllabusChaptersOnly.length > 0,
-    chapters: normalizedChapters,
+    has_syllabus: hasSyllabus,
+    message: hasSyllabus ? null : "No syllabus has been processed yet. Upload your syllabus to get started.",
+    chapters: hasSyllabus ? normalizedChapters : [],
     quiz_history: quizHistory,
     session_styles: Object.values(SESSION_STYLE_PRESETS),
     config: normalizePlannerConfig(savedPlanData?.config || DEFAULT_PLANNER_CONFIG),
-    plan: savedPlanData?.plan || null,
-    synced_tasks: savedPlanData?.syncedTasks || [],
-    todoist_synced_at: savedPlanData?.todoistSyncedAt || null,
+    plan: hasSyllabus ? (savedPlanData?.plan || null) : null,
+    synced_tasks: hasSyllabus ? (savedPlanData?.syncedTasks || []) : [],
+    todoist_synced_at: hasSyllabus ? (savedPlanData?.todoistSyncedAt || null) : null,
   });
 });
 
@@ -1093,7 +1102,10 @@ export const plannerSyllabusSave = safe(async (body = {}, ctx = {}) => {
 
 // POST /api/planner/generate { telegramUserId?, config?, syllabusText?, autoSyncTodoist?, todoistApiKey?, geminiKey? }
 export const plannerGenerate = safe(async (body = {}, ctx = {}) => {
-  const id = resolveUserId(body.telegramUserId, ctx);
+  const id = quizUserId(body.telegramUserId, ctx);
+  if (Number.isNaN(id)) {
+    return fail(400, "Missing or invalid Telegram user id", { has_syllabus: false });
+  }
 
   // If the user also pasted inline syllabus text while generating, save it first
   if (typeof body.syllabusText === "string" && body.syllabusText.trim().length >= 3) {
@@ -1114,6 +1126,14 @@ export const plannerGenerate = safe(async (body = {}, ctx = {}) => {
     getChaptersWithResults(id),
     getUserKeys(id),
   ]);
+
+  const syllabusChaptersOnly = (chapters || []).filter((c) => !c?.is_custom);
+  if (!syllabusChaptersOnly.length) {
+    return fail(400, "No syllabus has been processed yet. Upload your syllabus to get started.", {
+      has_syllabus: false,
+      chapters: [],
+    });
+  }
 
   const extraGemini = [body.geminiKey, ctx?.cookies?.sa_gemini_key].filter(
     (k) => typeof k === "string" && k.length >= 20
@@ -1158,7 +1178,18 @@ export const plannerGenerate = safe(async (body = {}, ctx = {}) => {
 
 // POST /api/planner/sync-todoist { telegramUserId?, todoistApiKey?, plan?, config? }
 export const plannerSyncTodoist = safe(async (body = {}, ctx = {}) => {
-  const id = resolveUserId(body.telegramUserId, ctx);
+  const id = quizUserId(body.telegramUserId, ctx);
+  if (Number.isNaN(id)) {
+    return fail(400, "Missing or invalid Telegram user id", { has_syllabus: false });
+  }
+
+  const chapters = await getChaptersWithResults(id);
+  const syllabusChaptersOnly = (chapters || []).filter((c) => !c?.is_custom);
+  if (!syllabusChaptersOnly.length) {
+    return fail(400, "No syllabus has been processed yet. Upload your syllabus to get started.", {
+      has_syllabus: false,
+    });
+  }
 
   if (body.todoistApiKey) await saveTodoistKeyIfReal(id, body.todoistApiKey);
 
@@ -1175,9 +1206,13 @@ export const plannerSyncTodoist = safe(async (body = {}, ctx = {}) => {
   const config = normalizePlannerConfig(body.config || existingData?.config || DEFAULT_PLANNER_CONFIG);
 
   if (!planToSync || !Array.isArray(planToSync.days) || !planToSync.days.length) {
-    const chapters = await getChaptersWithResults(id);
     const geminiKeys = await getUserKeys(id);
-    planToSync = await generateAiStudyPlan({ chapters, config, geminiKeys, classLevel: await getUserClass(id) });
+    planToSync = await generateAiStudyPlan({
+      chapters: syllabusChaptersOnly,
+      config,
+      geminiKeys,
+      classLevel: await getUserClass(id),
+    });
   }
 
   try {

@@ -105,13 +105,11 @@
     if (/^\d+$/.test(fromCookie) && fromCookie !== FALLBACK_GUEST_ID) return fromCookie;
     const st = getSetupState();
     const id = String(st?.telegram?.userId || st?.telegram?.chatId || '').trim();
-    if (/^\d+$/.test(id)) {
+    if (/^\d+$/.test(id) && id !== FALLBACK_GUEST_ID) {
       setCookie('sa_telegram_id', id);
       return id;
     }
-    if (/^\d+$/.test(fromCookie)) return fromCookie;
-    setCookie('sa_telegram_id', FALLBACK_GUEST_ID);
-    return FALLBACK_GUEST_ID;
+    return '';
   }
 
   function getLocalTodoistKey() {
@@ -704,30 +702,7 @@
     });
 
     if (!units.length) {
-      const defaults = [
-        { subject: 'Physics', number: 1, title: 'Light, Electricity & Laws of Motion — Concepts & Numericals', priority: 'High' },
-        { subject: 'Chemistry', number: 1, title: 'Chemical Reactions, Acids, Bases & Atomic Structure', priority: 'High' },
-        { subject: 'Mathematics', number: 1, title: 'Quadratic Equations, Polynomials & Triangles Practice', priority: 'High' },
-        { subject: 'Biology', number: 1, title: 'Life Processes, Cell Structure & Control and Coordination', priority: 'Medium' },
-        { subject: 'History', number: 1, title: 'The Rise of Nationalism in Europe & India', priority: 'Medium' },
-        { subject: 'Geography', number: 1, title: 'Resources, Water, Agriculture & Climate', priority: 'Medium' },
-      ];
-      defaults.forEach((u, i) => {
-        units.push({
-          id: `fallback_${i + 1}`,
-          subject: u.subject,
-          number: u.number,
-          title: u.title,
-          pdfUrl: null,
-          exam: 'CBSE Curriculum',
-          examDate: null,
-          priority: cfg.subjectPriorities?.[u.subject] || u.priority,
-          quizPercentage: null,
-          revisionTier: 'untested',
-          weakSubtopics: [],
-          urgencyScore: 80 - i * 5,
-        });
-      });
+      return null;
     }
 
     units.sort((a, b) => b.urgencyScore - a.urgencyScore);
@@ -2241,33 +2216,94 @@
     return `hsl(${h} 62% 52%)`;
   }
 
-  async function refreshPlannerState() {
-    const cached = loadLocalPlannerCache();
-    if (cached?.config) state.config = { ...state.config, ...cached.config };
-    if (Array.isArray(cached?.chapters) && cached.chapters.length) state.chapters = cached.chapters;
-    if (cached?.plan && Array.isArray(cached.plan.days) && cached.plan.days.length) {
-      state.plan = cached.plan;
-    } else {
-      state.plan = generateLocalStudyPlan(state.chapters, state.config);
+  function setPlannerGateState(gateMode, customMessage) {
+    const gateEl = $('pl-gate-message');
+    const workspaceSections = [
+      $('syllabus-section'),
+      $('planner-config-section'),
+      $('plan-summary-section'),
+      document.querySelector('.pl-workspace-bar'),
+      document.querySelector('.pl-hero-actions'),
+      $('planner-todoist-badge')?.parentElement,
+    ];
+
+    if (gateMode === 'unlocked') {
+      if (gateEl) {
+        gateEl.hidden = true;
+        gateEl.replaceChildren();
+      }
+      workspaceSections.forEach((el) => {
+        if (el) el.hidden = false;
+      });
+      return;
     }
-    renderTodoistStatus();
-    renderSyllabusAndQuizFallback();
-    syncConfigControlsFromState();
-    renderPlanSummary();
+
+    workspaceSections.forEach((el) => {
+      if (el) el.hidden = true;
+    });
+
+    if (!gateEl) return;
+    gateEl.className = 'rs-state';
+    gateEl.replaceChildren();
+
+    const icon = document.createElement('i');
+    icon.setAttribute('aria-hidden', 'true');
+    const p = document.createElement('p');
+    const a = document.createElement('a');
+    a.className = 'btn btn-solid';
+
+    if (gateMode === 'no_user') {
+      icon.className = 'rs-state-icon fa-solid fa-id-card';
+      p.textContent = customMessage || "We couldn't tell who you are. Finish the setup (Telegram ID) first, then come back here.";
+      a.href = 'setup.html';
+      a.innerHTML = '<i class="fa-solid fa-gear" aria-hidden="true"></i> Go to Setup';
+    } else {
+      icon.className = 'rs-state-icon fa-solid fa-book-open';
+      p.textContent = customMessage || 'No syllabus has been processed yet. Upload your syllabus to get started.';
+      a.href = 'quizzes.html';
+      a.innerHTML = '<i class="fa-solid fa-upload" aria-hidden="true"></i> Add your syllabus';
+    }
+
+    gateEl.append(icon, p, a);
+    gateEl.hidden = false;
+  }
+
+  async function refreshPlannerState() {
+    state.telegramUserId = getUserId();
+    if (!state.telegramUserId) {
+      state.chapters = [];
+      state.plan = null;
+      setPlannerGateState('no_user');
+      return;
+    }
 
     try {
       const res = await fetch(`/api/planner/state?telegramUserId=${encodeURIComponent(state.telegramUserId)}`, {
         cache: 'no-store',
       });
+      if (res.status === 400) {
+        state.chapters = [];
+        state.plan = null;
+        setPlannerGateState('no_user');
+        return;
+      }
       if (res.ok) {
         const data = await res.json();
         if (data && data.ok) {
+          const syllabusChapters = (data.chapters || []).filter((c) => !c.is_custom);
+          if (!data.has_syllabus || !syllabusChapters.length) {
+            state.chapters = [];
+            state.plan = null;
+            try { localStorage.removeItem(PLAN_CACHE_KEY); } catch {}
+            setPlannerGateState('no_syllabus', data.message || 'No syllabus has been processed yet. Upload your syllabus to get started.');
+            return;
+          }
+
+          setPlannerGateState('unlocked');
           state.hasTodoistKey = Boolean(data.has_todoist_key || getLocalTodoistKey());
           state.todoistMasked = data.todoist_masked || state.todoistMasked;
           state.todoistSource = data.todoist_source || state.todoistSource;
-          if (Array.isArray(data.chapters) && data.chapters.length) {
-            state.chapters = data.chapters;
-          }
+          state.chapters = data.chapters;
           if (data.quiz_history) state.quizHistory = data.quiz_history;
           if (data.config && Object.keys(data.config).length) {
             state.config = { ...state.config, ...data.config };
@@ -2293,19 +2329,38 @@
         fetch(`/api/quizzes/chapters?telegramUserId=${encodeURIComponent(state.telegramUserId)}`).catch(() => null),
         fetch(`/api/user-keys/${encodeURIComponent(state.telegramUserId)}`).catch(() => null),
       ]);
+      if (chRes && chRes.status === 400) {
+        state.chapters = [];
+        state.plan = null;
+        setPlannerGateState('no_user');
+        return;
+      }
       if (keyRes && keyRes.ok) {
         const kd = await keyRes.json().catch(() => ({}));
         if (kd.has_todoist_key) state.hasTodoistKey = true;
       }
       if (chRes && chRes.ok) {
         const cd = await chRes.json().catch(() => ({}));
-        if (Array.isArray(cd.chapters) && cd.chapters.length) {
-          state.chapters = cd.chapters;
-          state.plan = generateLocalStudyPlan(state.chapters, state.config);
-          saveLocalPlannerCache();
+        const syllabusChapters = (cd.chapters || []).filter((c) => !c.is_custom);
+        if (!syllabusChapters.length) {
+          state.chapters = [];
+          state.plan = null;
+          try { localStorage.removeItem(PLAN_CACHE_KEY); } catch {}
+          setPlannerGateState('no_syllabus');
+          return;
         }
+        setPlannerGateState('unlocked');
+        state.chapters = cd.chapters;
+        state.plan = generateLocalStudyPlan(state.chapters, state.config);
+        saveLocalPlannerCache();
+      } else {
+        setPlannerGateState('no_syllabus');
+        return;
       }
-    } catch {}
+    } catch {
+      setPlannerGateState('no_syllabus');
+      return;
+    }
 
     renderTodoistStatus();
     renderSyllabusAndQuizFallback();

@@ -851,60 +851,7 @@ export function buildPrioritizedStudyQueue({ chapters = [], config = {}, todayYm
     });
   }
 
-  if (!normalizedChapters.length) {
-    if (Array.isArray(config.examDates) && config.examDates.length) {
-      config.examDates.forEach((ex, i) => {
-        const subject = storedSubject(ex.subject, ex.examName, "", "", i + 1);
-        const priority = config.subjectPriorities?.[subject] || "High";
-        normalizedChapters.push({
-          id: `exam-unit-${i + 1}`,
-          subject,
-          number: 1,
-          title: `${ex.examName || ex.subject} — Core Syllabus & Past Paper Practice`,
-          pdfUrl: null,
-          exam: ex.examName,
-          examDate: ex.date,
-          daysUntilExam: Math.max(
-            0,
-            Math.round((new Date(`${ex.date}T00:00:00`) - new Date(`${todayYmd}T00:00:00`)) / 86400000)
-          ),
-          priority,
-          quizPercentage: null,
-          revisionTier: "untested",
-          weakSubtopics: [],
-          urgencyScore: 85 - i * 5,
-        });
-      });
-    } else {
-      const fallbackUnits = [
-        { subject: "Physics", number: 1, title: "Light, Electricity & Laws of Motion — Concepts & Numericals", priority: "High" },
-        { subject: "Chemistry", number: 1, title: "Chemical Reactions, Acids, Bases & Atomic Structure", priority: "High" },
-        { subject: "Mathematics", number: 1, title: "Quadratic Equations, Polynomials & Triangles Practice", priority: "High" },
-        { subject: "Biology", number: 1, title: "Life Processes, Cell Structure & Control and Coordination", priority: "Medium" },
-        { subject: "History", number: 1, title: "The Rise of Nationalism in Europe & India", priority: "Medium" },
-        { subject: "Geography", number: 1, title: "Resources, Water, Agriculture & Climate", priority: "Medium" },
-        { subject: "Civics", number: 1, title: "Power-Sharing, Federalism & Constitutional Design", priority: "Low" },
-        { subject: "Economics", number: 1, title: "Development & Sectors of the Indian Economy", priority: "Low" },
-      ];
-      fallbackUnits.forEach((u, i) => {
-        normalizedChapters.push({
-          id: `fallback-${i + 1}`,
-          subject: u.subject,
-          number: u.number,
-          title: u.title,
-          pdfUrl: null,
-          exam: "CBSE Curriculum",
-          examDate: null,
-          daysUntilExam: null,
-          priority: config.subjectPriorities?.[u.subject] || u.priority,
-          quizPercentage: null,
-          revisionTier: "untested",
-          weakSubtopics: [],
-          urgencyScore: 75 - i * 4,
-        });
-      });
-    }
-  }
+  // Do not inject fake fallback units when no syllabus has been uploaded.
 
   normalizedChapters.sort((a, b) => b.urgencyScore - a.urgencyScore);
   return normalizedChapters;
@@ -964,11 +911,15 @@ export async function generateAiStudyPlan({
   const baseDate = new Date(`${planStartYmd}T00:00:00`);
   const todayYmd = planStartYmd;
 
+  const syllabusChaptersOnly = Array.isArray(chapters) ? chapters.filter((c) => !c?.is_custom) : [];
   const prioritizedUnits = buildPrioritizedStudyQueue({
-    chapters,
+    chapters: syllabusChaptersOnly,
     config,
     todayYmd,
   });
+  if (!prioritizedUnits.length) {
+    return null;
+  }
 
   let aiEnrichment = null;
   const allGeminiKeys = [...new Set([...(geminiKeys || []), GEMINI_API_KEY].filter(Boolean))];
@@ -1420,33 +1371,79 @@ export async function ensureUserStudyPlan(
   telegramUserId,
   { todayYmd = getTodayIstYmd(), forceRegenerate = false } = {}
 ) {
-  const existing = await getStudyPlanForUser(telegramUserId);
+  const [chapters, existing] = await Promise.all([
+    getChaptersWithResults(telegramUserId),
+    getStudyPlanForUser(telegramUserId),
+  ]);
+  const syllabusChapters = (chapters || []).filter((c) => !c?.is_custom);
+  const hasSyllabus = syllabusChapters.length > 0;
   const config = normalizePlannerConfig(existing?.config || DEFAULT_PLANNER_CONFIG);
-  let plan = existing?.plan || null;
 
-  const hasCurrentOrFutureDays =
+  let plan = existing?.plan || null;
+  const hasFallbackBlocks =
     plan &&
     Array.isArray(plan.days) &&
-    plan.days.length > 0 &&
-    plan.days.some((d) => d.date >= todayYmd);
+    plan.days.some((d) =>
+      (d.studyBlocks || []).some((b) => String(b.chapterId || "").startsWith("fallback-"))
+    );
 
-  if (!hasCurrentOrFutureDays || forceRegenerate) {
-    const [chapters, geminiKeys, classLevel] = await Promise.all([
-      getChaptersWithResults(telegramUserId),
+  const hasSavedPlan = Boolean(
+    plan && !hasFallbackBlocks && Array.isArray(plan.days) && plan.days.length > 0
+  );
+
+  // If no syllabus is uploaded and no valid study plan is saved, do not generate a plan
+  if (!hasSyllabus && !hasSavedPlan) {
+    return {
+      hasSyllabus: false,
+      hasPlan: false,
+      noPlan: true,
+      chapters: [],
+      plan: null,
+      config,
+      todayYmd,
+    };
+  }
+
+  // If the user has not saved any study plan yet (and forceRegenerate was not requested),
+  // do not auto-generate a plan in Telegram — return hasPlan: false / noPlan: true.
+  if (!hasSavedPlan && !forceRegenerate) {
+    return {
+      hasSyllabus,
+      hasPlan: false,
+      noPlan: true,
+      chapters: syllabusChapters,
+      plan: null,
+      config,
+      todayYmd,
+    };
+  }
+
+  if (forceRegenerate && hasSyllabus) {
+    const [geminiKeys, classLevel] = await Promise.all([
       getUserKeys(telegramUserId),
       getUserClass(telegramUserId),
     ]);
     plan = await generateAiStudyPlan({
-      chapters,
+      chapters: syllabusChapters,
       config,
       geminiKeys,
       startDate: todayYmd,
       classLevel,
     });
-    await saveStudyPlanForUser(telegramUserId, { config, plan });
+    if (plan) {
+      await saveStudyPlanForUser(telegramUserId, { config, plan });
+    }
   }
 
-  return { plan, config, todayYmd };
+  return {
+    hasSyllabus: hasSyllabus || hasSavedPlan,
+    hasPlan: Boolean(plan && Array.isArray(plan.days) && plan.days.length > 0),
+    noPlan: !(plan && Array.isArray(plan.days) && plan.days.length > 0),
+    chapters: syllabusChapters,
+    plan: hasFallbackBlocks ? null : plan,
+    config,
+    todayYmd,
+  };
 }
 
 /**
@@ -1456,18 +1453,48 @@ export async function getTodayScheduleForUser(
   telegramUserId,
   { todayYmd = getTodayIstYmd(), forceRegenerate = false } = {}
 ) {
-  const { plan, config } = await ensureUserStudyPlan(telegramUserId, { todayYmd, forceRegenerate });
+  const { hasSyllabus, hasPlan, chapters, plan, config } = await ensureUserStudyPlan(telegramUserId, {
+    todayYmd,
+    forceRegenerate,
+  });
+
+  if (!hasPlan || !plan) {
+    return {
+      hasSyllabus,
+      hasPlan: false,
+      noPlan: true,
+      chapters,
+      plan: null,
+      config,
+      day: null,
+      todayYmd,
+      stats: { total: 0, completed: 0, partial: 0, rescheduled: 0, remaining: 0, pct: 0 },
+    };
+  }
+
   const days = Array.isArray(plan?.days) ? plan.days : [];
   let day = days.find((d) => d.date === todayYmd) || days.find((d) => d.date >= todayYmd) || days[0] || null;
 
   if (!day) {
-    day = buildEmptyPlanDay(todayYmd, 1, config, todayYmd);
-    plan.days = [day];
-    await saveStudyPlanForUser(telegramUserId, { plan });
+    return {
+      hasSyllabus,
+      hasPlan: false,
+      noPlan: true,
+      chapters,
+      plan: null,
+      config,
+      day: null,
+      todayYmd,
+      stats: { total: 0, completed: 0, partial: 0, rescheduled: 0, remaining: 0, pct: 0 },
+    };
   }
 
   const stats = getDailyProgressStats(day);
   return {
+    hasSyllabus,
+    hasPlan: true,
+    noPlan: false,
+    chapters,
     plan,
     config,
     day,
@@ -1481,7 +1508,17 @@ export async function getTodayScheduleForUser(
  * returning updated daily progress stats.
  */
 export async function completeStudyTask(telegramUserId, taskId, { todayYmd = getTodayIstYmd() } = {}) {
-  await ensureUserStudyPlan(telegramUserId, { todayYmd });
+  const { hasSyllabus, hasPlan, plan } = await ensureUserStudyPlan(telegramUserId, { todayYmd });
+  if (!hasPlan || !plan) {
+    return {
+      ok: false,
+      noSyllabus: !hasSyllabus,
+      noPlan: true,
+      error: !hasSyllabus
+        ? "No syllabus has been processed yet. Upload your syllabus to get started."
+        : "You don't have any study plans saved yet. Generate your study plan on the Web Planner first.",
+    };
+  }
   const res = await markStudyTaskDone(telegramUserId, taskId);
   if (!res.ok) return res;
 
@@ -1504,7 +1541,17 @@ export async function completeStudyTask(telegramUserId, taskId, { todayYmd = get
  * of the topic into tomorrow's schedule.
  */
 export async function carryOverPartialTask(telegramUserId, taskId, { todayYmd = getTodayIstYmd() } = {}) {
-  const { plan, config } = await ensureUserStudyPlan(telegramUserId, { todayYmd });
+  const { hasSyllabus, hasPlan, plan, config } = await ensureUserStudyPlan(telegramUserId, { todayYmd });
+  if (!hasPlan || !plan) {
+    return {
+      ok: false,
+      noSyllabus: !hasSyllabus,
+      noPlan: true,
+      error: !hasSyllabus
+        ? "No syllabus has been processed yet. Upload your syllabus to get started."
+        : "You don't have any study plans saved yet. Generate your study plan on the Web Planner first.",
+    };
+  }
   const found = findTaskInPlan(plan, taskId);
   if (!found) {
     return { ok: false, error: `Task "${taskId}" not found in your study plan.` };
@@ -1627,7 +1674,17 @@ export async function rescheduleTasks(
   telegramUserId,
   { taskId = null, todayYmd = getTodayIstYmd() } = {}
 ) {
-  const { plan, config } = await ensureUserStudyPlan(telegramUserId, { todayYmd });
+  const { hasSyllabus, hasPlan, plan, config } = await ensureUserStudyPlan(telegramUserId, { todayYmd });
+  if (!hasPlan || !plan) {
+    return {
+      ok: false,
+      noSyllabus: !hasSyllabus,
+      noPlan: true,
+      error: !hasSyllabus
+        ? "No syllabus has been processed yet. Upload your syllabus to get started."
+        : "You don't have any study plans saved yet. Generate your study plan on the Web Planner first.",
+    };
+  }
   const maxDailyMins = Math.round((Number(config.dailyStudyHours) || 5) * 60);
   const maxBlocksPerDay = Math.max(3, Math.ceil(maxDailyMins / 75) + 1);
 

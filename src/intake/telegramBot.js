@@ -439,10 +439,35 @@ export async function sendDailyMorningBrief(chatId, options = {}) {
   }
 
   const todayYmd = options.todayYmd || getTodayIstYmd();
-  const { day, stats, plan } = await getTodayScheduleForUser(numericChatId, {
+  const { hasSyllabus, hasPlan, day, stats, plan } = await getTodayScheduleForUser(numericChatId, {
     todayYmd,
     forceRegenerate: Boolean(options.forceRegenerate),
   });
+
+  if (!hasPlan || !plan || !day) {
+    const noPlanText = !hasSyllabus
+      ? "📭 *You don't have any study plans saved yet* (and no syllabus has been processed yet).\nUpload your syllabus first and generate a study plan on the Web Planner to get started!"
+      : "📭 *You don't have any study plans saved yet.*\nGenerate and save your study plan on the Web Planner first, then use /today here!";
+    let sentMessage = null;
+    if (options.ctx && typeof options.ctx.reply === "function") {
+      sentMessage = await options.ctx.reply(noPlanText);
+    }
+    return {
+      ok: false,
+      noSyllabus: !hasSyllabus,
+      noPlan: true,
+      skipped: true,
+      reason: !hasSyllabus ? "no_syllabus" : "no_plan",
+      chatId: numericChatId,
+      date: todayYmd,
+      text: options.ctx ? noPlanText : null,
+      reply_markup: null,
+      message: sentMessage,
+      day: null,
+      stats: null,
+      plan: null,
+    };
+  }
 
   const payload = buildDailyBriefPayload(day, stats, {
     statusBanner: options.statusBanner || null,
@@ -516,6 +541,11 @@ export async function triggerDailyMorningBriefsForAllUsers({
         }
       }
       const res = await sendDailyMorningBrief(id, { todayYmd, api });
+      if (res?.noSyllabus || res?.skipped || !res?.ok) {
+        skippedCount++;
+        results.push({ chatId: id, status: res?.reason || "no_syllabus", date: todayYmd });
+        continue;
+      }
       sentCount++;
       results.push({ chatId: id, status: "sent", date: todayYmd, tasksCount: res.stats?.total || 0 });
     } catch (err) {
@@ -671,7 +701,24 @@ export async function startPomodoroForUser({
   let topicTitle = customTopic ? String(customTopic).trim() : "";
 
   try {
-    const { plan, day } = await getTodayScheduleForUser(uid);
+    const { hasSyllabus, hasPlan, plan, day } = await getTodayScheduleForUser(uid);
+    if (!hasPlan || !plan) {
+      const noPlanText = !hasSyllabus
+        ? "📭 *You don't have any study plans saved yet* (and no syllabus has been processed yet).\nUpload your syllabus first and generate a study plan on the Web Planner to get started!"
+        : "📭 *You don't have any study plans saved yet.*\nGenerate and save your study plan on the Web Planner first to start focus sessions!";
+      let sentMsg = null;
+      if (ctx && typeof ctx.reply === "function") {
+        sentMsg = await ctx.reply(noPlanText);
+      }
+      return {
+        ok: false,
+        noSyllabus: !hasSyllabus,
+        noPlan: true,
+        error: noPlanText,
+        text: noPlanText,
+        message: sentMsg,
+      };
+    }
     if (resolvedTaskId && resolvedTaskId !== "general") {
       const found = findTaskInPlan(plan, resolvedTaskId);
       if (found?.block) {
@@ -1325,6 +1372,13 @@ export async function handleRescheduleCommand(ctx) {
   const res = await rescheduleTasks(userId, { taskId: null });
 
   if (!res.ok) {
+    if (res.noPlan || res.noSyllabus) {
+      const msg = res.noSyllabus
+        ? "📭 *You don't have any study plans saved yet* (and no syllabus has been processed yet).\nUpload your syllabus first and generate a study plan on the Web Planner to get started!"
+        : "📭 *You don't have any study plans saved yet.*\nGenerate and save your study plan on the Web Planner first before rescheduling tasks!";
+      await ctx.reply(msg);
+      return res;
+    }
     await ctx.reply(`⚠️ Could not reschedule tasks: ${res.error || "Unknown error"}`);
     return res;
   }
@@ -1524,6 +1578,13 @@ export async function handleCallbackQuery(ctx) {
     const res = await completeStudyTask(userId, taskId);
 
     if (!res.ok) {
+      if (res.noPlan || res.noSyllabus) {
+        await safeEditMessageText(
+          ctx,
+          "📭 *You don't have any study plans saved yet.*\nGenerate and save your study plan on the Web Planner first!"
+        );
+        return res;
+      }
       const { day, stats } = await getTodayScheduleForUser(userId);
       const fallbackPayload = buildDailyBriefPayload(day, stats, {
         statusBanner: `✅ Task marked completed!`,
@@ -1553,6 +1614,13 @@ export async function handleCallbackQuery(ctx) {
 
     const confirmText = "⏳ Logged partial progress! Remaining portion moved to tomorrow.";
     if (!res.ok) {
+      if (res.noPlan || res.noSyllabus) {
+        await safeEditMessageText(
+          ctx,
+          "📭 *You don't have any study plans saved yet.*\nGenerate and save your study plan on the Web Planner first!"
+        );
+        return res;
+      }
       await safeEditMessageText(ctx, confirmText);
       return res;
     }
@@ -1571,6 +1639,16 @@ export async function handleCallbackQuery(ctx) {
   if (data.startsWith("task_reschedule:")) {
     const taskId = data.slice("task_reschedule:".length).trim();
     const res = await rescheduleTasks(userId, { taskId });
+
+    if (!res.ok) {
+      if (res.noPlan || res.noSyllabus) {
+        await safeEditMessageText(
+          ctx,
+          "📭 *You don't have any study plans saved yet.*\nGenerate and save your study plan on the Web Planner first!"
+        );
+        return res;
+      }
+    }
 
     if (!res.ok || !res.movedTasks?.length) {
       await safeEditMessageText(

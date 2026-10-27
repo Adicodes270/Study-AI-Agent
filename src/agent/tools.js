@@ -118,11 +118,21 @@ export async function previewTasksToReschedule(
   { taskId = null, todayYmd = getTodayIstYmd() } = {}
 ) {
   const uid = Number(telegramUserId);
-  let plan = (await getStudyPlanForUser(uid).catch(() => null))?.plan || null;
-  if (!plan || !Array.isArray(plan.days) || !plan.days.length) {
-    const ensured = await ensureUserStudyPlan(uid, { todayYmd }).catch(() => null);
-    plan = ensured?.plan || null;
+  const ensured = await ensureUserStudyPlan(uid, { todayYmd }).catch(() => null);
+  if (!ensured?.hasPlan || !ensured?.plan) {
+    const noSyllabus = !ensured?.hasSyllabus;
+    return {
+      ok: false,
+      noSyllabus,
+      noPlan: true,
+      reason: noSyllabus ? "no_syllabus" : "no_plan",
+      error: noSyllabus
+        ? "No syllabus has been processed yet. Upload your syllabus to get started."
+        : "You don't have any study plans saved yet.",
+      tasksToMove: [],
+    };
   }
+  const plan = ensured.plan;
   if (!plan || !Array.isArray(plan.days)) {
     return { ok: true, tasksToMove: [] };
   }
@@ -829,6 +839,15 @@ export const TOOL_EXECUTORS = {
     // Check how many tasks would be moved before executing
     const preview = await previewTasksToReschedule(uid, { taskId });
     if (!preview.ok) {
+      if (preview.noPlan || preview.noSyllabus) {
+        const reason = preview.reason || (preview.noSyllabus ? "no_syllabus" : "no_plan");
+        return {
+          status: "skipped",
+          reasoning: reason,
+          messageSent: null,
+          result: { status: "skipped", reason, noPlan: true, taskId },
+        };
+      }
       return {
         status: "error",
         reasoning: preview.error || "reschedule_failed",
@@ -1007,6 +1026,15 @@ export const TOOL_EXECUTORS = {
       statusBanner: appendedBanner,
       api,
     });
+    if (briefRes?.noPlan || briefRes?.noSyllabus || !briefRes?.ok) {
+      const reason = briefRes?.reason || (briefRes?.noSyllabus ? "no_syllabus" : "no_plan");
+      return {
+        status: "skipped",
+        reasoning: reason,
+        messageSent: null,
+        result: { status: "skipped", reason, noPlan: true },
+      };
+    }
     await setMorningBriefSentDate(uid, briefRes.date || todayYmd);
 
     return {

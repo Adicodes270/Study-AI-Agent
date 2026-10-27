@@ -468,16 +468,34 @@ const chapterKey = (r) => [
 
 /** Every syllabus chapter for this student, each with its latest quiz result (including review) and any Pending quiz session. */
 function getLocalSyllabusFallback(telegramUserId) {
+  if (telegramUserId == null || Number.isNaN(Number(telegramUserId))) return [];
   const store = readLocalStore();
   const direct = store.syllabi?.[String(telegramUserId)];
   if (Array.isArray(direct) && direct.length) return direct;
-  for (const list of Object.values(store.syllabi || {})) {
-    if (Array.isArray(list) && list.length) return list;
-  }
   return [];
 }
 
+export async function hasUserUploadedSyllabus(telegramUserId) {
+  if (telegramUserId == null || Number.isNaN(Number(telegramUserId))) return false;
+  const chapters = await getChaptersWithResults(telegramUserId);
+  return Array.isArray(chapters) && chapters.some((c) => !c.is_custom);
+}
+
+export async function hasUserSavedStudyPlan(telegramUserId) {
+  if (telegramUserId == null || Number.isNaN(Number(telegramUserId))) return false;
+  const saved = await getStudyPlanForUser(telegramUserId);
+  const plan = saved?.plan || null;
+  if (!plan || !Array.isArray(plan.days) || !plan.days.length) return false;
+  const hasFallbackBlocks = plan.days.some((d) =>
+    (d.studyBlocks || []).some((b) => String(b.chapterId || "").startsWith("fallback-"))
+  );
+  return !hasFallbackBlocks;
+}
+
 export async function getChaptersWithResults(telegramUserId) {
+  if (telegramUserId == null || Number.isNaN(Number(telegramUserId))) {
+    return [];
+  }
   if (!DATABASE_URL) {
     return getLocalSyllabusFallback(telegramUserId);
   }
@@ -497,21 +515,6 @@ export async function getChaptersWithResults(telegramUserId) {
     [telegramUserId]
   ).catch(() => ({ rows: [] }));
 
-  if (!chapters.length) {
-    const fallbackChat = await p.query(
-      `SELECT chat_id FROM syllabus_chapters GROUP BY chat_id ORDER BY MAX(id) DESC LIMIT 1`
-    ).catch(() => ({ rows: [] }));
-    if (fallbackChat.rows[0]?.chat_id) {
-      const fbRes = await p.query(
-        `SELECT id, class, subject, exam, number, title, note, pdf_url, match_status, recommended_questions
-           FROM syllabus_chapters
-          WHERE chat_id = $1
-          ORDER BY subject, exam, number NULLS LAST, id`,
-        [fallbackChat.rows[0].chat_id]
-      ).catch(() => ({ rows: [] }));
-      chapters = fbRes.rows || [];
-    }
-  }
   if (!chapters.length) {
     const localList = getLocalSyllabusFallback(telegramUserId);
     if (localList.length) return localList;

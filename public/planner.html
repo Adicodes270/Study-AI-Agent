@@ -49,6 +49,24 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Study Agent">
+    <style>
+        .pl-main [hidden] { display: none !important; }
+        .rs-state {
+            margin-top: 1.75rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.9rem;
+            text-align: center;
+            padding: 2.5rem 1.25rem;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-card);
+        }
+        .rs-state p { color: var(--text-secondary); max-width: 52ch; }
+        .rs-state-icon { font-size: 1.8rem; color: var(--accent-primary); }
+        .rs-state.is-error .rs-state-icon { color: var(--accent-danger); }
+    </style>
 </head>
 
 <body class="perf-lite">
@@ -170,6 +188,9 @@
                 </div>
             </div>
         </section>
+
+        <!-- Empty / Gate state (shown when no Telegram ID or no syllabus has been uploaded, matching resources.html) -->
+        <div id="pl-gate-message" class="rs-state" role="alert" hidden></div>
 
         <!-- SECTION 1: SYLLABUS & QUIZ PERFORMANCE DATA (COLLAPSIBLE ACCORDION) -->
         <section class="pl-section pl-collapsible-section is-collapsed" id="syllabus-section">
