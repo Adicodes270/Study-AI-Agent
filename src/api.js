@@ -67,6 +67,7 @@ import {
   normalizePlannerConfig,
   setTodoistTaskCompleted,
   syncPlanToTodoist,
+  trimEmptyDaysPastHorizon,
   verifyTodoistToken,
 } from "./plannerEngine.js";
 
@@ -975,6 +976,9 @@ export const plannerState = safe(async (query = {}, ctx = {}) => {
 
   const syllabusChaptersOnly = normalizedChapters.filter((c) => !c.is_custom);
   const hasSyllabus = syllabusChaptersOnly.length > 0;
+  const savedConfig = normalizePlannerConfig(savedPlanData?.config || DEFAULT_PLANNER_CONFIG);
+  // Older saved plans may carry empty padding days past the chosen horizon (e.g. an 8th day on a 7-day plan).
+  if (savedPlanData?.plan) trimEmptyDaysPastHorizon(savedPlanData.plan, savedConfig.planDays);
   const quizHistory = buildQuizHistorySummary(normalizedChapters);
 
   return ok({

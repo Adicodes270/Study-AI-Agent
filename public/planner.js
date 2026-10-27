@@ -706,14 +706,18 @@
     }
 
     units.sort((a, b) => b.urgencyScore - a.urgencyScore);
+    // Round-robin passes: pass 1 holds every chapter once, later passes repeat only the Medium/High
+    // priority ones. This way every chapter is reached before any chapter repeats.
     const rotationPool = [];
-    units.forEach((u) => {
-      const reps = u.priority === 'High' ? 3 : u.priority === 'Medium' ? 2 : 1;
-      for (let r = 0; r < reps; r++) rotationPool.push(u);
-    });
+    for (let r = 0; r < 3; r++) {
+      units.forEach((u) => {
+        const reps = u.priority === 'High' ? 3 : u.priority === 'Medium' ? 2 : 1;
+        if (r < reps) rotationPool.push(u);
+      });
+    }
 
     const days = [];
-    let unitCursor = 0;
+    let rotationQueue = [];
     const planDays = Math.max(1, Math.min(30, parseInt(cfg.planDays, 10) || 7));
 
     for (let dOffset = 0; dOffset < planDays; dOffset++) {
@@ -744,6 +748,7 @@
       let cursor = windows[0]?.start ?? 16 * 60;
       const studyBlocks = [];
       const usedToday = new Set();
+      const usedUnitsToday = new Set();
 
       while (rem > 0 && studyBlocks.length < 8) {
         const win = windows[wIdx];
@@ -769,12 +774,14 @@
         const endTime = minsToTimeStr(cursor + span);
         const breakEnd = minsToTimeStr(cursor + span + interBreak);
 
-        let chosen = rotationPool[unitCursor % rotationPool.length];
-        if (rotationPool.length > 1 && usedToday.has(chosen.subject)) {
-          const alt = rotationPool.find((u, i) => i > unitCursor % rotationPool.length && !usedToday.has(u.subject));
-          if (alt) chosen = alt;
-        }
-        unitCursor++;
+        // Next chapter in the rotation, preferring a subject not used yet today and never the same chapter twice in a day.
+        if (!rotationQueue.length) rotationQueue = [...rotationPool];
+        // Always scan from the front: chapters skipped earlier (same subject already used today) come first next time.
+        let pickIdx = rotationQueue.findIndex((u) => !usedToday.has(u.subject) && !usedUnitsToday.has(u.id));
+        if (pickIdx < 0) pickIdx = rotationQueue.findIndex((u) => !usedUnitsToday.has(u.id));
+        if (pickIdx < 0) pickIdx = 0;
+        const chosen = rotationQueue.splice(pickIdx, 1)[0];
+        usedUnitsToday.add(chosen.id);
         usedToday.add(chosen.subject);
 
         const sIdx = studyBlocks.length + 1;
@@ -2309,6 +2316,11 @@
             state.config = { ...state.config, ...data.config };
           }
           if (data.plan && Array.isArray(data.plan.days) && data.plan.days.length) {
+            // Drop empty padding days past the chosen horizon (older saved plans could show 8 days for a 7-day plan).
+            const horizon = Math.max(1, parseInt(state.config.planDays, 10) || 7);
+            while (data.plan.days.length > horizon && !(data.plan.days[data.plan.days.length - 1].studyBlocks || []).length) {
+              data.plan.days.pop();
+            }
             state.plan = data.plan;
           } else {
             await triggerGeneratePlan(false, true);

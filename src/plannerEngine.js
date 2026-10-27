@@ -990,13 +990,15 @@ Provide:
   }
 
   const days = [];
-  let unitCursor = 0;
+  let rotationQueue = [];
 
+  // Round-robin passes: pass 1 holds every chapter once, later passes repeat only the Medium/High
+  // priority ones, so every chapter is reached before any chapter repeats.
   const rotationPool = [];
-  for (const unit of prioritizedUnits) {
-    const repeats = unit.priority === "High" ? 3 : unit.priority === "Medium" ? 2 : 1;
-    for (let r = 0; r < repeats; r++) {
-      rotationPool.push({ ...unit, occurrenceIndex: r + 1 });
+  for (let r = 0; r < 3; r++) {
+    for (const unit of prioritizedUnits) {
+      const repeats = unit.priority === "High" ? 3 : unit.priority === "Medium" ? 2 : 1;
+      if (r < repeats) rotationPool.push({ ...unit, occurrenceIndex: r + 1 });
     }
   }
 
@@ -1025,17 +1027,18 @@ Provide:
     const slots = buildDailyTimeSlots(isSchoolDay ? "school_day" : "full_day", config, preset);
     const studyBlocks = [];
     const usedSubjectsToday = new Set();
+    const usedUnitsToday = new Set();
 
     for (let sIdx = 0; sIdx < slots.length; sIdx++) {
       const slot = slots[sIdx];
-      let chosenUnit = rotationPool[unitCursor % rotationPool.length];
-      if (rotationPool.length > 1 && usedSubjectsToday.has(chosenUnit.subject)) {
-        const altIdx = rotationPool.findIndex(
-          (u, idx) => idx > unitCursor % rotationPool.length && !usedSubjectsToday.has(u.subject)
-        );
-        if (altIdx >= 0) chosenUnit = rotationPool[altIdx];
-      }
-      unitCursor++;
+      // Next chapter in the rotation, preferring a subject not used yet today and never the same chapter twice in a day.
+      if (!rotationQueue.length) rotationQueue = [...rotationPool];
+      // Always scan from the front: chapters skipped earlier (same subject already used today) come first next time.
+      let pickIdx = rotationQueue.findIndex((u) => !usedSubjectsToday.has(u.subject) && !usedUnitsToday.has(u.id));
+      if (pickIdx < 0) pickIdx = rotationQueue.findIndex((u) => !usedUnitsToday.has(u.id));
+      if (pickIdx < 0) pickIdx = 0;
+      const chosenUnit = rotationQueue.splice(pickIdx, 1)[0];
+      usedUnitsToday.add(chosenUnit.id);
       usedSubjectsToday.add(chosenUnit.subject);
 
       const aiStrat = strategyByTitle.get(String(chosenUnit.title).toLowerCase().trim());
@@ -1254,6 +1257,22 @@ Provide:
 // ---------------------------------------------------------------------------
 // 4. Telegram Bot Daily Study Brief, Partial Carry-Over & Dynamic Rescheduling
 // ---------------------------------------------------------------------------
+
+/**
+ * Rescheduling pads the plan with empty look-ahead days so it has somewhere to move tasks.
+ * Drop the empty ones past the chosen horizon so the plan never shows more days than the student asked for.
+ */
+export function trimEmptyDaysPastHorizon(plan, planDays) {
+  if (!plan || !Array.isArray(plan.days)) return plan;
+  const limit = Math.max(1, Number(planDays) || 7);
+  while (
+    plan.days.length > limit &&
+    !(plan.days[plan.days.length - 1].studyBlocks || []).length
+  ) {
+    plan.days.pop();
+  }
+  return plan;
+}
 
 export function getTodayIstYmd() {
   const istNow = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
@@ -1858,6 +1877,7 @@ export async function rescheduleTasks(
   }
 
   plan.days.sort((a, b) => a.date.localeCompare(b.date));
+  trimEmptyDaysPastHorizon(plan, config.planDays);
   plan.days.forEach((d, idx) => {
     d.dayIndex = idx + 1;
   });
