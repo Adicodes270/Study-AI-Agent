@@ -16,6 +16,7 @@ import {
 } from "./notebooklmLogin.js";
 import { initDb } from "./db.js";
 import {
+  doubtAsk,
   generationStatus,
   getKeys,
   getPairing,
@@ -248,6 +249,14 @@ export function startWebServer(port = 3000) {
         return sendWelcome(body).then(send);
       }
       return send({ status: 404, body: { error: "Not found" } });
+    }
+
+    // Ask a doubt (AI chat popup on the Quizzes and Resources pages): POST /api/doubt/ask
+    if (req.method === "POST" && url.pathname.replace(/\/+$/, "") === "/api/doubt/ask") {
+      if (tgRateLimited(clientIp + "|d", 20)) return send({ status: 429, body: { error: "Too many questions. Wait a minute." } });
+      const body = await readJsonBody(req, res, 60_000);
+      if (!body) return;
+      return doubtAsk(body, { cookies: parseCookies(req) }).then(send);
     }
 
     // Quizzes: GET /api/quizzes/chapters, POST /api/quizzes/generate, POST /api/quizzes/progress, POST /api/quizzes/generate-custom, POST /api/quizzes/submit, POST /api/quizzes/transcribe

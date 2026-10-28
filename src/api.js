@@ -2064,3 +2064,64 @@ export const resourcesGenerate = safe(async (body = {}, ctx = {}) => {
     skipped,
   });
 });
+
+// ---------------------------------------------------------------------------
+// "Ask a doubt" popup (Quizzes + Resources pages)
+// ---------------------------------------------------------------------------
+const DOUBT_SYSTEM_PROMPT = `You are "Study Agent", a friendly, accurate study helper for a school student following the NCERT / CBSE syllabus.
+
+How to answer:
+- Explain simply and clearly, in the style of a good teacher. Use short paragraphs, small bullet lists and a quick example when it helps.
+- Keep answers focused and fairly short (usually under 180 words) unless the student asks for more detail.
+- Match the student's class level when it is given. Prefer NCERT terms, definitions and formulas.
+- If the student is clearly asking for the final answer to a quiz question they are being tested on right now, explain the concept and give hints instead of the direct answer, and say you are doing that.
+- If you are not sure about something, say so instead of guessing. Never invent facts, formulas or textbook references.
+- Only help with studies and learning. For anything unrelated, politely steer the student back to their studies.
+- Reply in the same language the student writes in. Use plain text with light markdown (bold, bullets). No tables, no headings.`;
+
+// POST /api/doubt/ask { telegramUserId?, message, history?: [{ role: "user" | "model", text }], page?, context?, geminiKey? }
+export const doubtAsk = safe(async (body = {}, ctx = {}) => {
+  const message = String(body.message ?? "").trim().slice(0, 2000);
+  if (!message) return fail(400, "Type your doubt first");
+
+  const id = quizUserId(body.telegramUserId, ctx);
+  const saved = Number.isNaN(id) ? [] : await getUserKeys(id);
+  const extra = [body.geminiKey, ctx?.cookies?.sa_gemini_key].filter((k) => typeof k === "string" && k.length >= 20);
+  const keys = [...new Set([...saved, ...extra, GEMINI_API_KEY].filter(Boolean))];
+  if (!keys.length) return fail(400, "No Gemini API key found. Save one on the setup page first.");
+
+  const cls = Number.isNaN(id) ? null : await getUserClass(id).catch(() => null);
+  const page = body.page === "resources" ? "Resources" : "Quizzes";
+  const topic = String(body.context ?? "").trim().slice(0, 200);
+  const systemInstruction = [
+    DOUBT_SYSTEM_PROMPT,
+    cls ? `The student is in Class ${cls}.` : "",
+    `The student is on the ${page} page${topic ? ` and is looking at: ${topic}` : ""}.`,
+  ].filter(Boolean).join("\n\n");
+
+  const history = (Array.isArray(body.history) ? body.history : [])
+    .filter((m) => m && (m.role === "user" || m.role === "model") && typeof m.text === "string" && m.text.trim())
+    .slice(-10)
+    .map((m) => ({ role: m.role, parts: [{ text: m.text.slice(0, 2000) }] }));
+  // Gemini requires the conversation to start with a user turn
+  while (history.length && history[0].role !== "user") history.shift();
+  const contents = [...history, { role: "user", parts: [{ text: message }] }];
+
+  let lastErr;
+  for (const key of keys) {
+    try {
+      const res = await getGenClient(key).models.generateContent({
+        model: GEMINI_MODEL,
+        contents,
+        config: { systemInstruction, temperature: 0.4, maxOutputTokens: 900 },
+      });
+      const answer = String(res.text ?? "").trim();
+      if (answer) return ok({ answer });
+      lastErr = new Error("Empty answer");
+    } catch (e) {
+      lastErr = e;
+      console.log(`Doubt: Gemini key ...${key.slice(-4)} failed (${e.message}); trying next`);
+    }
+  }
+  return fail(502, `Could not get an answer right now. ${lastErr?.message ? "Please try again in a moment." : ""}`.trim());
+});
