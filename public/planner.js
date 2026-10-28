@@ -25,6 +25,9 @@
     'English',
   ];
 
+  // Must match PLAN_ENGINE_VERSION in src/plannerEngine.js. Saved plans from older versions are rebuilt on load.
+  const PLAN_ENGINE_VERSION = 3;
+
   const SAMPLE_SYLLABUS_TEXT = [
     'Physics: Light - Reflection and Refraction, The Human Eye and the Colourful World, Electricity',
     'Chemistry: Chemical Reactions and Equations, Acids Bases and Salts, Metals and Non-metals',
@@ -652,6 +655,8 @@
     return parsed;
   }
 
+  const unitKey = (u) => `${u.subject}|${u.number}|${u.title}`;
+
   function generateLocalStudyPlan(chaptersInput = state.chapters, cfg = state.config) {
     const preset = cfg.sessionStyle === 'custom'
       ? {
@@ -777,11 +782,11 @@
         // Next chapter in the rotation, preferring a subject not used yet today and never the same chapter twice in a day.
         if (!rotationQueue.length) rotationQueue = [...rotationPool];
         // Always scan from the front: chapters skipped earlier (same subject already used today) come first next time.
-        let pickIdx = rotationQueue.findIndex((u) => !usedToday.has(u.subject) && !usedUnitsToday.has(u.id));
-        if (pickIdx < 0) pickIdx = rotationQueue.findIndex((u) => !usedUnitsToday.has(u.id));
+        let pickIdx = rotationQueue.findIndex((u) => !usedToday.has(u.subject) && !usedUnitsToday.has(unitKey(u)));
+        if (pickIdx < 0) pickIdx = rotationQueue.findIndex((u) => !usedUnitsToday.has(unitKey(u)));
         if (pickIdx < 0) pickIdx = 0;
         const chosen = rotationQueue.splice(pickIdx, 1)[0];
-        usedUnitsToday.add(chosen.id);
+        usedUnitsToday.add(unitKey(chosen));
         usedToday.add(chosen.subject);
 
         const sIdx = studyBlocks.length + 1;
@@ -920,6 +925,7 @@
         `Start each session with your High-priority subjects and weak quiz subtopics while mental energy is highest.`,
         `Protect your ${cfg.dailySleepHours}-hour sleep window (${cfg.sleepStartTime}–${cfg.wakeUpTime}) every night so memory consolidation stays strong before exams.`,
       ],
+      planVersion: PLAN_ENGINE_VERSION,
       metrics: {
         totalDays: days.length,
         schoolDaysCount: days.filter((d) => d.dayType === 'school_day').length,
@@ -2314,6 +2320,11 @@
           if (data.quiz_history) state.quizHistory = data.quiz_history;
           if (data.config && Object.keys(data.config).length) {
             state.config = { ...state.config, ...data.config };
+          }
+          if (data.plan && Number(data.plan.planVersion) !== PLAN_ENGINE_VERSION) {
+            // Saved by an older planner (could have 8 days on a 7-day plan, or the same chapters repeating): rebuild it.
+            await triggerGeneratePlan(false, true);
+            return;
           }
           if (data.plan && Array.isArray(data.plan.days) && data.plan.days.length) {
             // Drop empty padding days past the chosen horizon (older saved plans could show 8 days for a 7-day plan).

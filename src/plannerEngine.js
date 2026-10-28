@@ -16,10 +16,14 @@ import {
   storedSubject,
 } from "./db.js";
 import { revisionFor } from "./quizEngine.js";
+import { classifyGranularSubject } from "./intake/syllabusParser.js";
 
 // ---------------------------------------------------------------------------
 // 1. Default Planner Configuration
 // ---------------------------------------------------------------------------
+// Bump when plan generation changes in a way old saved plans should be rebuilt for.
+export const PLAN_ENGINE_VERSION = 3;
+
 export const DEFAULT_PLANNER_CONFIG = {
   dailyStudyHours: 5,
   dailySleepHours: 8,
@@ -782,7 +786,8 @@ export function buildPrioritizedStudyQueue({ chapters = [], config = {}, todayYm
   const normalizedChapters = [];
 
   for (const ch of chapters) {
-    const subject = storedSubject(ch.subject, ch.title, ch.pdf_url, "", ch.number);
+    // Same subject split the Quizzes page uses (Science -> Physics / Chemistry / Biology, etc.)
+    const subject = classifyGranularSubject(ch.subject, ch.title, ch.pdf_url, "", ch.number);
     const res = ch.result || null;
     const pct = res?.percentage != null ? Number(res.percentage) : null;
     const tierInfo = pct != null ? revisionFor(pct) : null;
@@ -890,6 +895,8 @@ function getGenClient(key) {
   if (!genClients.has(key)) genClients.set(key, new GoogleGenAI({ apiKey: key }));
   return genClients.get(key);
 }
+
+const unitKey = (u) => `${u.subject}|${u.number}|${u.title}`;
 
 export async function generateAiStudyPlan({
   chapters = [],
@@ -1034,11 +1041,11 @@ Provide:
       // Next chapter in the rotation, preferring a subject not used yet today and never the same chapter twice in a day.
       if (!rotationQueue.length) rotationQueue = [...rotationPool];
       // Always scan from the front: chapters skipped earlier (same subject already used today) come first next time.
-      let pickIdx = rotationQueue.findIndex((u) => !usedSubjectsToday.has(u.subject) && !usedUnitsToday.has(u.id));
-      if (pickIdx < 0) pickIdx = rotationQueue.findIndex((u) => !usedUnitsToday.has(u.id));
+      let pickIdx = rotationQueue.findIndex((u) => !usedSubjectsToday.has(u.subject) && !usedUnitsToday.has(unitKey(u)));
+      if (pickIdx < 0) pickIdx = rotationQueue.findIndex((u) => !usedUnitsToday.has(unitKey(u)));
       if (pickIdx < 0) pickIdx = 0;
       const chosenUnit = rotationQueue.splice(pickIdx, 1)[0];
-      usedUnitsToday.add(chosenUnit.id);
+      usedUnitsToday.add(unitKey(chosenUnit));
       usedSubjectsToday.add(chosenUnit.subject);
 
       const aiStrat = strategyByTitle.get(String(chosenUnit.title).toLowerCase().trim());
@@ -1229,6 +1236,7 @@ Provide:
       Array.isArray(aiEnrichment?.keyRecommendations) && aiEnrichment.keyRecommendations.length
         ? aiEnrichment.keyRecommendations
         : defaultRecs,
+    planVersion: PLAN_ENGINE_VERSION,
     metrics: {
       totalDays: days.length,
       schoolDaysCount: days.filter((d) => d.dayType === "school_day").length,

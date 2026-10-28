@@ -963,7 +963,7 @@ export const plannerState = safe(async (query = {}, ctx = {}) => {
 
   const normalizedChapters = chapters.map((c) => ({
     id: c.id,
-    subject: storedSubject(c.subject, c.title, c.pdf_url, "", c.number),
+    subject: classifyGranularSubject(c.subject, c.title, c.pdf_url, "", c.number),
     exam: c.exam || "",
     number: c.number,
     title: c.title,
