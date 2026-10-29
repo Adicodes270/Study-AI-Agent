@@ -59,6 +59,7 @@ import {
   classifyGranularSubject,
   parseSyllabus,
   splitSyllabusIntoGranularSubjects,
+  splitSyllabusIntoGranularSubjectsAsync,
 } from "./intake/syllabusParser.js";
 import {
   DEFAULT_PLANNER_CONFIG,
@@ -821,7 +822,7 @@ export const syllabusUpload = safe(async (body = {}, ctx = {}) => {
         ],
       };
     }
-    syllabus = splitSyllabusIntoGranularSubjects(syllabus);
+    syllabus = await splitSyllabusIntoGranularSubjectsAsync(syllabus, keys);
   } else {
     return fail(400, 'kind must be "pdf" or "text"');
   }

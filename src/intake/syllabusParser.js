@@ -136,7 +136,9 @@ export function classifyGranularSubject(rawSubject, title = "", pdfUrl = "", boo
     ) {
       return "History";
     }
-    if (isSocialScience) return "History";
+    // No confident keyword match: do NOT guess History. Leave it as "Social Science" so
+    // resolveGranularSubjectsWithGemini() can ask Gemini to classify it.
+    if (isSocialScience) return "Social Science";
   }
 
   if (isScience || !subj) {
@@ -161,7 +163,8 @@ export function classifyGranularSubject(rawSubject, title = "", pdfUrl = "", boo
     ) {
       return "Physics";
     }
-    if (isScience) return "Physics";
+    // Same rule as above: no guess; Gemini classifies it later.
+    if (isScience) return "Science";
   }
 
   return subj || "General";
@@ -396,6 +399,96 @@ export function splitSyllabusIntoGranularSubjects(syllabus) {
   return syllabus;
 }
 
+
+const GRANULAR_SUBJECTS = ["History", "Civics", "Geography", "Economics", "Physics", "Chemistry", "Biology"];
+const isUnresolvedSubject = (name) =>
+  /^(social\s*science|social\s*studies|sst|s\.s\.t\.?|science|general\s*science|sci)$/i.test(String(name || "").trim());
+
+/**
+ * Chapters that the keyword classifier could not place (still "Social Science" / "Science") are sent
+ * to Gemini, which picks History/Civics/Geography/Economics or Physics/Chemistry/Biology for each.
+ * If Gemini is unavailable or fails, those chapters keep their generic subject (never guessed as History).
+ */
+export async function resolveGranularSubjectsWithGemini(syllabus, apiKeys) {
+  if (!syllabus || !Array.isArray(syllabus.subjects)) return syllabus;
+  const pending = [];
+  for (const sub of syllabus.subjects) {
+    if (!isUnresolvedSubject(sub.name)) continue;
+    for (const ch of sub.chapters || []) {
+      pending.push({ idx: pending.length, kind: /sci/i.test(sub.name) && !/social/i.test(sub.name) ? "Science" : "Social Science", title: ch.title, ref: ch, from: sub });
+    }
+  }
+  if (!pending.length) return syllabus;
+
+  const classLevel = syllabus.class_level || "9/10";
+  const prompt = `Classify each Class ${classLevel} NCERT-style chapter into exactly one discipline.
+- "Social Science" chapters: History, Civics, Geography or Economics.
+- "Science" chapters: Physics, Chemistry or Biology.
+Use the chapter title and what the chapter actually teaches (e.g. "Development" is Economics, "Resources" is Geography, "Diversity" or "Government" are Civics, "Print Culture" is History).
+Return one entry per item with the same "idx".
+
+Items:
+${JSON.stringify(pending.map(({ idx, kind, title }) => ({ idx, kind, title })), null, 2)}`;
+
+  try {
+    const response = await generate(apiKeys, {
+      model: GEMINI_MODEL,
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              idx: { type: Type.INTEGER },
+              subject: { type: Type.STRING, enum: GRANULAR_SUBJECTS },
+            },
+            required: ["idx", "subject"],
+          },
+        },
+      },
+    });
+    const list = JSON.parse(response.text);
+    const buckets = new Map();
+    const resolved = new Set();
+    for (const item of Array.isArray(list) ? list : []) {
+      const p = pending[item?.idx];
+      if (!p || !GRANULAR_SUBJECTS.includes(item.subject)) continue;
+      // keep social-science chapters in social-science subjects, science in science
+      const social = ["History", "Civics", "Geography", "Economics"].includes(item.subject);
+      if (social !== (p.kind === "Social Science")) continue;
+      if (!buckets.has(item.subject)) buckets.set(item.subject, []);
+      buckets.get(item.subject).push(p.ref);
+      resolved.add(p.ref);
+    }
+    if (!resolved.size) return syllabus;
+
+    // Rebuild subjects: drop resolved chapters from generic subjects, merge into granular ones.
+    const byName = new Map(syllabus.subjects.map((s) => [s.name, s]));
+    for (const sub of syllabus.subjects) {
+      if (isUnresolvedSubject(sub.name)) sub.chapters = (sub.chapters || []).filter((c) => !resolved.has(c));
+    }
+    for (const [name, chapters] of buckets) {
+      if (!byName.has(name)) {
+        const created = { name, chapters: [] };
+        byName.set(name, created);
+        syllabus.subjects.push(created);
+      }
+      byName.get(name).chapters.push(...chapters);
+    }
+    syllabus.subjects = syllabus.subjects.filter((s) => (s.chapters || []).length);
+  } catch (e) {
+    console.log(`Gemini subject classification skipped: ${e.message}`);
+  }
+  return syllabus;
+}
+
+/** splitSyllabusIntoGranularSubjects + Gemini classification of whatever the keywords could not place. */
+export async function splitSyllabusIntoGranularSubjectsAsync(syllabus, apiKeys) {
+  return resolveGranularSubjectsWithGemini(splitSyllabusIntoGranularSubjects(syllabus), apiKeys);
+}
+
 /**
  * If the uploaded file name matches an NCERT chapter code (e.g. "iesc101.pdf" or "jesc105.pdf"),
  * return a ready-made Syllabus object immediately with the specific subject (Physics/Chemistry/Biology/History/Civics/Geography/Economics).
@@ -628,7 +721,7 @@ ${JSON.stringify(payloadForAi, null, 2)}`;
     }
   }
 
-  return splitSyllabusIntoGranularSubjects(syllabus);
+  return splitSyllabusIntoGranularSubjectsAsync(syllabus, apiKey);
 }
 
 /**
@@ -657,7 +750,7 @@ ${CLASS_9_AND_10_NCERT_REFERENCE}`;
     });
     const result = Syllabus.safeParse(JSON.parse(response.text));
     if (result.success && result.data.subjects.length > 0) {
-      return splitSyllabusIntoGranularSubjects(result.data);
+      return splitSyllabusIntoGranularSubjectsAsync(result.data, apiKey);
     }
   } catch (e) {
     console.log(`Single-document fallback extraction failed: ${e.message}`);
