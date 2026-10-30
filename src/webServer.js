@@ -38,6 +38,8 @@ import {
   resourcesGenerate,
   resourcesList,
   resourcesStart,
+  reviewsCreate,
+  reviewsList,
   saveKeys,
   sendWelcome,
   syllabusUpload,
@@ -249,6 +251,22 @@ export function startWebServer(port = 3000) {
         return sendWelcome(body).then(send);
       }
       return send({ status: 404, body: { error: "Not found" } });
+    }
+
+    // Feedback & Reviews: GET /api/reviews, POST /api/reviews
+    if (url.pathname.replace(/\/+$/, "") === "/api/reviews") {
+      if (req.method === "GET") {
+        return reviewsList().then(send);
+      }
+      if (req.method === "POST") {
+        if (tgRateLimited(clientIp + "|rv", 10)) {
+          return send({ status: 429, body: { error: "Too many reviews submitted. Wait a minute." } });
+        }
+        const body = await readJsonBody(req, res, 20_000);
+        if (!body) return;
+        return reviewsCreate(body).then(send);
+      }
+      return send({ status: 405, body: { error: "Method not allowed" } });
     }
 
     // Ask a doubt (AI chat popup on the Quizzes and Resources pages): POST /api/doubt/ask

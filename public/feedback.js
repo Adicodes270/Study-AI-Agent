@@ -2,32 +2,33 @@
 // Wrapped in an IIFE because script.js already declares $, $$ and reduce at the top level.
 (() => {
   // ==========================================================================
-  // Data layer
+  // Data layer (Database-backed via GET/POST /api/reviews)
   // --------------------------------------------------------------------------
-  // The page only talks to `store` (list + create). Today it is the localStorage
-  // mockup. To move to NeonDB, add GET/POST /api/reviews to src/webServer.js and
-  // set SOURCE to 'api'; nothing else on this page has to change.
-  //
-  // Suggested table (NeonDB / PostgreSQL):
-  //   CREATE TABLE reviews (
+  // Reviews are stored in the PostgreSQL `reviews` table (see src/db.js):
+  //   CREATE TABLE IF NOT EXISTS reviews (
   //     id          BIGSERIAL PRIMARY KEY,
   //     name        TEXT        NOT NULL CHECK (char_length(name) BETWEEN 1 AND 60),
   //     rating      SMALLINT    NOT NULL CHECK (rating BETWEEN 1 AND 5),
   //     body        TEXT        NOT NULL CHECK (char_length(body) BETWEEN 1 AND 1000),
   //     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
   //   );
-  //   CREATE INDEX reviews_created_at_idx ON reviews (created_at DESC);
+  //   CREATE INDEX IF NOT EXISTS reviews_created_at_idx ON reviews (created_at DESC);
   //
-  // Expected API shape:
+  // API endpoints:
   //   GET  /api/reviews  -> { reviews: [{ id, name, rating, body, createdAt }] }  (newest first)
   //   POST /api/reviews  { name, rating, body } -> { review: { id, name, rating, body, createdAt } }
   //   Errors: non-2xx with { error: "message" }
   // ==========================================================================
-  const SOURCE = 'local'; // 'local' | 'api'
   const API_URL = '/api/reviews';
-  const LOCAL_KEY = 'study_agent_reviews';
+  const LEGACY_LOCAL_KEY = 'study_agent_reviews';
 
-  /** Normalise a row from either source into the shape the UI renders. */
+  // Clear any legacy client-side review data from cookies or localStorage
+  try {
+    localStorage.removeItem(LEGACY_LOCAL_KEY);
+    document.cookie = `${LEGACY_LOCAL_KEY}=; max-age=0; path=/; SameSite=Lax`;
+  } catch {}
+
+  /** Normalise a review row from the database API into the shape the UI renders. */
   function toReview(r) {
     return {
       id: String(r.id),
@@ -38,31 +39,7 @@
     };
   }
 
-  const localStore = {
-    read() {
-      try {
-        const rows = JSON.parse(localStorage.getItem(LOCAL_KEY) || '[]');
-        return Array.isArray(rows) ? rows.map(toReview) : [];
-      } catch { return []; }
-    },
-    async list() {
-      return this.read().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-    },
-    async create({ name, rating, body }) {
-      const review = toReview({
-        id: (crypto.randomUUID && crypto.randomUUID()) || `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-        name, rating, body, createdAt: new Date().toISOString(),
-      });
-      try {
-        localStorage.setItem(LOCAL_KEY, JSON.stringify([review, ...this.read()]));
-      } catch {
-        throw new Error('Your browser blocked saving the review. Check that site storage is allowed.');
-      }
-      return review;
-    },
-  };
-
-  const apiStore = {
+  const store = {
     async list() {
       const res = await fetch(API_URL, { headers: { Accept: 'application/json' }, cache: 'no-store' });
       const data = await res.json().catch(() => null);
@@ -81,8 +58,6 @@
       return toReview(data?.review || data);
     },
   };
-
-  const store = SOURCE === 'api' ? apiStore : localStore;
 
   // ==========================================================================
   // Helpers

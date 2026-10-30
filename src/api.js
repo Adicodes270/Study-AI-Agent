@@ -14,6 +14,7 @@ import {
 } from "./config.js";
 import {
   createQuizSession,
+  createReview,
   getChapterForUser,
   getChapterResource,
   getChaptersWithResources,
@@ -25,6 +26,7 @@ import {
   hasDatabaseUrl,
   hasQuizResult,
   initDb,
+  listReviews,
   ncertSubjectName,
   readLocalStore,
   relinkUserChapters,
@@ -2125,4 +2127,37 @@ export const doubtAsk = safe(async (body = {}, ctx = {}) => {
     }
   }
   return fail(502, `Could not get an answer right now. ${lastErr?.message ? "Please try again in a moment." : ""}`.trim());
+});
+
+// ---------------------------------------------------------------------------
+// Feedback & Reviews (GET /api/reviews, POST /api/reviews)
+// ---------------------------------------------------------------------------
+export const reviewsList = safe(async () => {
+  const reviews = await listReviews();
+  return ok({ reviews });
+});
+
+export const reviewsCreate = safe(async (body = {}) => {
+  const name = String(body.name ?? "").trim().replace(/\s+/g, " ");
+  const text = String(body.body ?? "").trim();
+  const rating = Number(body.rating);
+
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+    return fail(400, "Pick a rating from 1 to 5 stars.");
+  }
+  if (!name) {
+    return fail(400, "Please add your name.");
+  }
+  if (name.length > 60) {
+    return fail(400, "Keep your name under 60 characters.");
+  }
+  if (!text) {
+    return fail(400, "Tell us a little about your experience.");
+  }
+  if (text.length > 1000) {
+    return fail(400, "Keep your review under 1000 characters.");
+  }
+
+  const review = await createReview({ name, rating, body: text });
+  return { status: 201, body: { review } };
 });

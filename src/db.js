@@ -25,6 +25,7 @@ function defaultLocalStore() {
     agentMemory: {},
     reviewSchedule: [],
     pendingFollowups: [],
+    reviews: [],
   };
 }
 
@@ -350,6 +351,17 @@ CREATE TABLE IF NOT EXISTS pending_followups (
 
 CREATE INDEX IF NOT EXISTS idx_pending_followups_user_status
     ON pending_followups (telegram_user_id, status, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS reviews (
+    id          BIGSERIAL PRIMARY KEY,
+    name        TEXT        NOT NULL CHECK (char_length(name) BETWEEN 1 AND 60),
+    rating      SMALLINT    NOT NULL CHECK (rating BETWEEN 1 AND 5),
+    body        TEXT        NOT NULL CHECK (char_length(body) BETWEEN 1 AND 1000),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS reviews_created_at_idx
+    ON reviews (created_at DESC);
 `;
 
 // Runs once per process; concurrent callers share the same promise.
@@ -2494,4 +2506,92 @@ export async function closeFollowup(id, status = "answered") {
   }
 
   return localMatch ? formatFollowupRow(localMatch) : null;
+}
+
+// ---------------------------------------------------------------------------
+// Feedback & Reviews (stored in Postgres `reviews` table + local fallback)
+// ---------------------------------------------------------------------------
+function formatSiteReviewRow(r) {
+  if (!r) return null;
+  return {
+    id: String(r.id),
+    name: String(r.name || "").trim(),
+    rating: Math.min(5, Math.max(1, Math.round(Number(r.rating) || 5))),
+    body: String(r.body || "").trim(),
+    createdAt:
+      r.created_at instanceof Date
+        ? r.created_at.toISOString()
+        : String(r.createdAt ?? r.created_at ?? new Date().toISOString()),
+  };
+}
+
+/**
+ * List student reviews ordered newest-first from the database.
+ */
+export async function listReviews(limit = 200) {
+  const safeLimit = Math.max(1, Math.min(500, Number(limit) || 200));
+
+  if (hasDatabaseUrl()) {
+    try {
+      await initDb();
+      const { rows } = await getPool().query(
+        `SELECT id, name, rating, body, created_at
+           FROM reviews
+          ORDER BY created_at DESC, id DESC
+          LIMIT $1`,
+        [safeLimit]
+      );
+      return rows.map(formatSiteReviewRow);
+    } catch (e) {
+      console.log(`Could not list reviews from Postgres (reading local fallback): ${e.message}`);
+    }
+  }
+
+  const store = readLocalStore();
+  const list = Array.isArray(store.reviews) ? store.reviews : [];
+  return [...list]
+    .sort(
+      (a, b) =>
+        new Date(b.created_at ?? b.createdAt ?? 0).getTime() -
+          new Date(a.created_at ?? a.createdAt ?? 0).getTime() ||
+        Number(b.id || 0) - Number(a.id || 0)
+    )
+    .slice(0, safeLimit)
+    .map(formatSiteReviewRow);
+}
+
+/**
+ * Insert a new student review into the `reviews` table in the database.
+ */
+export async function createReview({ name, rating, body } = {}) {
+  const cleanName = String(name ?? "").trim().replace(/\s+/g, " ").slice(0, 60);
+  const cleanRating = Math.min(5, Math.max(1, Math.round(Number(rating) || 0)));
+  const cleanBody = String(body ?? "").trim().slice(0, 1000);
+  const createdAt = new Date().toISOString();
+
+  if (hasDatabaseUrl()) {
+    await initDb();
+    const { rows } = await getPool().query(
+      `INSERT INTO reviews (name, rating, body)
+       VALUES ($1, $2, $3)
+       RETURNING id, name, rating, body, created_at`,
+      [cleanName, cleanRating, cleanBody]
+    );
+    if (rows[0]) {
+      return formatSiteReviewRow(rows[0]);
+    }
+  }
+
+  const store = readLocalStore();
+  store.reviews = Array.isArray(store.reviews) ? store.reviews : [];
+  const localRow = {
+    id: nextLocalRowId(store.reviews),
+    name: cleanName,
+    rating: cleanRating,
+    body: cleanBody,
+    created_at: createdAt,
+  };
+  store.reviews.unshift(localRow);
+  writeLocalStore(store);
+  return formatSiteReviewRow(localRow);
 }

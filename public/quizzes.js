@@ -19,7 +19,11 @@
   const RETURN_KEY = 'sa_quiz_return';
   const GLOBAL_QCOUNT_KEY = 'sa_default_quiz_questions'; // 'auto' or '1'..'50'
   const CHAPTER_QCOUNT_KEY = 'sa_chapter_qcounts_v1'; // { [chapterKey]: number }
-  const LOCAL_REVIEWS_KEY = 'sa_quiz_reviews_v1'; // backup cache of review arrays per chapter
+  const LEGACY_LOCAL_REVIEWS_KEY = 'sa_quiz_reviews_v1';
+  try {
+    localStorage.removeItem(LEGACY_LOCAL_REVIEWS_KEY);
+    document.cookie = `${LEGACY_LOCAL_REVIEWS_KEY}=; max-age=0; path=/; SameSite=Lax`;
+  } catch {}
   const PENDING_QUIZZES_KEY = 'sa_pending_quizzes_v1'; // { [chapterKey]: { quizId, attempt, chapter, questions, answers, currentIndex, updatedAt } }
   const MIN_AI_DEFAULT_QUESTIONS = 10;
   const MAX_QUESTIONS = 50;
@@ -385,29 +389,6 @@
     }
   }
 
-  // Backup storage for reviews in localStorage
-  function saveLocalReviewBackup(chapter, resultObj) {
-    if (!chapter || !resultObj) return;
-    try {
-      const map = JSON.parse(localStorage.getItem(LOCAL_REVIEWS_KEY) || '{}');
-      map[chapterStorageKey(chapter)] = resultObj;
-      localStorage.setItem(LOCAL_REVIEWS_KEY, JSON.stringify(map));
-    } catch {}
-  }
-
-  function getLocalReviewBackup(chapter) {
-    if (!chapter) return null;
-    try {
-      const map = JSON.parse(localStorage.getItem(LOCAL_REVIEWS_KEY) || '{}');
-      return (
-        map[chapterStorageKey(chapter)] ||
-        map[`${String(chapter.subject || '').toLowerCase()}||${String(chapter.title || '').toLowerCase()}`] ||
-        null
-      );
-    } catch {
-      return null;
-    }
-  }
 
   // ---------- View Management ----------
   const VIEWS = ['view-setup', 'view-gate', 'view-loading', 'view-chapters', 'view-quiz', 'view-done'];
@@ -669,15 +650,6 @@
         };
       });
 
-      // Merge any local review backup if a chapter result doesn't have review_json populated yet
-      for (const c of chapters) {
-        if (c.result && (!Array.isArray(c.result.review) || c.result.review.length === 0)) {
-          const localBackup = getLocalReviewBackup(c);
-          if (localBackup?.review?.length) {
-            c.result.review = localBackup.review;
-          }
-        }
-      }
 
       if (forceChaptersView || (manualGateOpen && chapters.length !== prevCount && !gateLatestUploadedChapter)) {
         manualGateOpen = false;
@@ -1239,13 +1211,7 @@
   function openSavedChapterReview(c) {
     if (!c || !c.result) return;
     hidePop();
-    const localBackup = getLocalReviewBackup(c);
-    const reviewList =
-      Array.isArray(c.result.review) && c.result.review.length
-        ? c.result.review
-        : Array.isArray(localBackup?.review)
-          ? localBackup.review
-          : [];
+    const reviewList = Array.isArray(c.result.review) ? c.result.review : [];
 
     const payload = {
       score: c.result.score,
@@ -1863,7 +1829,6 @@
     // Quiz is finished! Clear Pending status for this chapter and store the completed review
     clearPendingQuizForChapter(quiz.chapter);
     clearPendingQuizForChapter(result.chapter);
-    saveLocalReviewBackup(result.chapter, result);
 
     const chInList = chapters.find(
       (x) =>
