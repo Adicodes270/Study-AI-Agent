@@ -1,0 +1,346 @@
+/* ==========================================================================
+   feedback-modal.css — standalone feedback taker (rating popup)
+   Liquid frosted-glass card over drifting colour blobs, floating 3D stars around the edges.
+   Self-contained: works on any page that loads feedback-modal.js.
+   ========================================================================== */
+
+.fm {
+  --fm-card: hsla(224, 42%, 12%, 0.42);
+  --fm-text: hsl(220, 30%, 97%);
+  --fm-muted: hsl(218, 22%, 76%);
+  --fm-placeholder: hsla(218, 22%, 76%, 0.62);
+  --fm-border: hsla(0, 0%, 100%, 0.14);
+  --fm-border-hover: hsla(0, 0%, 100%, 0.28);
+  --fm-field: hsla(225, 40%, 6%, 0.34);
+  --fm-btn: hsl(220, 30%, 97%);
+  --fm-btn-text: hsl(224, 28%, 12%);
+  --fm-btn-hover: hsl(0, 0%, 100%);
+  --fm-star-empty: hsla(0, 0%, 100%, 0.4);
+  --fm-star-edge: hsl(40, 96%, 54%);
+  --fm-star-shadow: hsla(38, 100%, 45%, 0.45);
+  --fm-danger: hsl(0, 92%, 72%);
+  --fm-ok: hsl(45, 100%, 64%);
+  --fm-ring: hsla(222, 95%, 62%, 0.35);
+
+  width: min(420px, calc(100vw - 32px));
+  max-width: none;
+  max-height: none;
+  margin: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--fm-text);
+  overflow: visible;
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.fm::backdrop {
+  background: hsla(225, 40%, 2%, 0.62);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+.fm-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.fm-defs { position: absolute; width: 0; height: 0; }
+
+/* ---------- Floating decoration stars ---------- */
+
+.fm-deco {
+  position: absolute;
+  z-index: 2;
+  line-height: 0;
+  pointer-events: none;
+}
+
+.fm-deco svg {
+  width: 100%;
+  height: auto;
+  fill: url(#fm-grad);
+  filter: drop-shadow(0 10px 14px var(--fm-star-shadow));
+}
+
+.fm-deco-1 { width: 54px; top: -30px; left: 40%; transform: rotate(-12deg); }
+.fm-deco-2 { width: 32px; top: 54%; right: -30px; z-index: 0; filter: blur(2.5px); transform: rotate(18deg); }
+.fm-deco-3 { width: 62px; bottom: -34px; left: 12%; transform: rotate(14deg); }
+.fm-deco-4 { width: 24px; top: 24%; left: -36px; z-index: 0; filter: blur(3px); transform: rotate(-20deg); }
+
+/* ---------- Liquid blobs (behind the glass, moved by GSAP) ---------- */
+
+.fm-blob {
+  position: absolute;
+  z-index: 0;
+  border-radius: 50%;
+  filter: blur(34px);
+  pointer-events: none;
+}
+
+.fm-blob-1 { width: 210px; height: 210px; top: -40px; left: -50px; background: hsla(222, 95%, 62%, 0.6); }
+.fm-blob-2 { width: 180px; height: 180px; bottom: -30px; right: -40px; background: hsla(190, 95%, 52%, 0.42); }
+.fm-blob-3 { width: 150px; height: 150px; top: 38%; left: 40%; background: hsla(42, 100%, 58%, 0.3); }
+
+/* ---------- Card (frosted glass) ---------- */
+
+.fm-card {
+  position: relative;
+  z-index: 1;
+  padding: 2.4rem 1.75rem 1.4rem;
+  text-align: center;
+  overflow: hidden;
+  background: linear-gradient(150deg, hsla(0, 0%, 100%, 0.16), hsla(0, 0%, 100%, 0.03) 55%), var(--fm-card);
+  -webkit-backdrop-filter: blur(26px) saturate(175%);
+  backdrop-filter: blur(26px) saturate(175%);
+  border: 1px solid var(--fm-border);
+  border-radius: 22px;
+  box-shadow:
+    inset 0 1px 0 hsla(0, 0%, 100%, 0.3),
+    inset 0 -1px 0 hsla(0, 0%, 100%, 0.06),
+    0 40px 90px -24px hsla(0, 0%, 0%, 0.7);
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .fm-card { background: hsl(224, 38%, 11%); }
+}
+
+/* Light sheen that GSAP sweeps across the glass */
+.fm-sheen {
+  position: absolute;
+  inset: -40% auto -40% 0;
+  width: 45%;
+  z-index: 0;
+  background: linear-gradient(100deg, transparent, hsla(0, 0%, 100%, 0.12), transparent);
+  transform: translateX(-160%) rotate(12deg);
+  pointer-events: none;
+}
+
+.fm-form,
+.fm-done { position: relative; z-index: 1; }
+
+.fm-card [hidden] { display: none !important; }
+
+.fm-form {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.fm-title {
+  font-size: 1.45rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  color: var(--fm-text);
+}
+
+.fm-sub {
+  margin: -0.25rem auto 0.6rem;
+  max-width: 28ch;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  color: var(--fm-muted);
+}
+
+/* Star picker: real radios, styled labels */
+.fm-rate {
+  display: flex;
+  justify-content: center;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0.6rem;
+  background: var(--fm-field);
+  border: 1px solid var(--fm-border);
+  border-radius: 12px;
+  transition: border-color 0.2s ease;
+}
+
+.fm-rate:hover { border-color: var(--fm-border-hover); }
+
+.fm-rate input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.fm-rate label {
+  padding: 0.15rem;
+  border-radius: 8px;
+  line-height: 0;
+  cursor: pointer;
+}
+
+.fm-rate svg {
+  width: 36px;
+  height: 36px;
+  fill: transparent;
+  stroke: var(--fm-star-empty);
+  stroke-width: 1.3;
+  stroke-linejoin: round;
+  transition: stroke 0.15s ease, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.fm-rate label.is-on svg {
+  fill: url(#fm-grad);
+  stroke: var(--fm-star-edge);
+  filter: drop-shadow(0 3px 4px var(--fm-star-shadow));
+}
+
+.fm-rate label:hover svg { transform: scale(1.12); }
+
+.fm-rate input:focus-visible + label {
+  outline: 2px solid var(--fm-text);
+  outline-offset: 1px;
+}
+
+.fm-rate.has-error { border-color: var(--fm-danger); }
+
+.fm-rate-word {
+  margin-top: -0.3rem;
+  min-height: 1.2em;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--fm-muted);
+}
+
+.fm-rate-word.is-set { color: var(--fm-ok); }
+
+/* Inputs */
+.fm-input {
+  width: 100%;
+  padding: 0.8rem 0.95rem;
+  font: 500 0.95rem 'Plus Jakarta Sans', sans-serif;
+  color: var(--fm-text);
+  background: var(--fm-field);
+  border: 1px solid var(--fm-border);
+  border-radius: 12px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.fm-input::placeholder { color: var(--fm-placeholder); }
+.fm-input:hover { border-color: var(--fm-border-hover); }
+
+.fm-input:focus {
+  outline: none;
+  border-color: hsla(0, 0%, 100%, 0.45);
+  box-shadow: 0 0 0 3px var(--fm-ring);
+}
+
+.fm-input.has-error { border-color: var(--fm-danger); }
+
+.fm-textwrap { position: relative; }
+
+textarea.fm-input {
+  display: block;
+  min-height: 104px;
+  padding-bottom: 1.6rem;
+  resize: none;
+  line-height: 1.5;
+}
+
+.fm-count {
+  position: absolute;
+  right: 0.8rem;
+  bottom: 0.5rem;
+  font-size: 0.7rem;
+  color: var(--fm-placeholder);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.fm-err {
+  margin-top: -0.4rem;
+  font-size: 0.76rem;
+  text-align: left;
+  color: var(--fm-danger);
+}
+
+.fm-err:empty { display: none; }
+
+/* Buttons */
+.fm-submit {
+  width: 100%;
+  margin-top: 0.4rem;
+  padding: 0.9rem 1rem;
+  font: 600 1rem 'Plus Jakarta Sans', sans-serif;
+  color: var(--fm-btn-text);
+  background: var(--fm-btn);
+  border: 0;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.15s ease;
+}
+
+.fm-submit:hover { background: var(--fm-btn-hover); }
+.fm-submit:active { transform: scale(0.985); }
+.fm-submit:disabled { opacity: 0.6; cursor: progress; }
+
+.fm-skip {
+  justify-self: center;
+  margin-top: 0.15rem;
+  padding: 0.3rem 0.5rem;
+  font: 500 0.9rem 'Plus Jakarta Sans', sans-serif;
+  color: var(--fm-muted);
+  background: none;
+  border: 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.fm-skip:hover { color: var(--fm-text); }
+
+.fm-submit:focus-visible,
+.fm-skip:focus-visible {
+  outline: 2px solid var(--fm-text);
+  outline-offset: 3px;
+}
+
+.fm-status {
+  font-size: 0.8rem;
+  color: var(--fm-danger);
+}
+
+.fm-status:empty { display: none; }
+
+/* ---------- Thank-you state ---------- */
+
+.fm-done {
+  display: grid;
+  justify-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0 0.25rem;
+}
+
+.fm-done-star {
+  width: 72px;
+  height: 72px;
+  fill: url(#fm-grad);
+  filter: drop-shadow(0 10px 16px var(--fm-star-shadow));
+}
+
+.fm-done p {
+  max-width: 30ch;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  color: var(--fm-muted);
+}
+
+/* ---------- Small screens ---------- */
+
+@media (max-width: 420px) {
+  .fm-card { padding: 2.2rem 1.15rem 1.2rem; }
+  .fm-title { font-size: 1.28rem; }
+  .fm-rate { gap: 0.1rem; padding: 0.5rem 0.35rem; }
+  .fm-rate svg { width: 34px; height: 34px; }
+  .fm-deco-1 { width: 46px; top: -26px; }
+  .fm-deco-3 { width: 50px; bottom: -28px; }
+  .fm-deco-2 { right: -14px; }
+  .fm-deco-4 { left: -12px; }
+}

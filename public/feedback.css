@@ -1,0 +1,447 @@
+/* ==========================================================================
+   feedback.css — Feedback & Reviews page (linked from the footer only)
+   Built on the theme.css tokens; the only new colours are the star yellows.
+   ========================================================================== */
+
+:root {
+  --star: hsl(45, 100%, 58%);
+  --star-glow: hsla(45, 100%, 58%, 0.35);
+  --star-empty: hsla(220, 18%, 48%, 0.32);
+  --star-soft: hsla(45, 100%, 58%, 0.12);
+  --fb-radius-input: 14px;
+}
+
+html.light {
+  --star: hsl(42, 96%, 50%);
+  --star-glow: hsla(42, 96%, 50%, 0.3);
+  --star-empty: hsla(220, 15%, 56%, 0.3);
+  --star-soft: hsla(42, 96%, 50%, 0.14);
+}
+
+.fb-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 55% 35% at 50% -5%, var(--orb-primary), transparent 70%),
+    radial-gradient(ellipse 35% 30% at 85% 30%, var(--orb-secondary), transparent 70%),
+    linear-gradient(var(--grid-line) 1px, transparent 1px) 0 0 / 56px 56px,
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px) 0 0 / 56px 56px;
+  -webkit-mask-image: linear-gradient(to bottom, #000 25%, transparent 85%);
+  mask-image: linear-gradient(to bottom, #000 25%, transparent 85%);
+}
+
+.fb-main {
+  position: relative;
+  z-index: 1;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 7.5rem 1.25rem 3rem;
+}
+
+.fb-main [hidden] { display: none !important; }
+:where(.fb-main) :focus-visible { outline: 2px solid var(--accent-secondary); outline-offset: 3px; }
+
+.fb-eyebrow {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.fb-head h1 {
+  margin-top: 0.5rem;
+  font-size: clamp(1.8rem, 4vw, 2.6rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.12;
+  color: var(--text-primary);
+}
+
+.fb-head p {
+  margin-top: 0.6rem;
+  max-width: 54ch;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+/* Liquid background: soft colour blobs that GSAP drifts behind the glass cards */
+.fb-liquid {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.fb-liquid span {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(70px);
+  opacity: 0.55;
+}
+
+.fb-liquid span:nth-child(1) { width: 420px; height: 420px; top: 8%; left: -6%; background: hsla(222, 95%, 58%, 0.55); }
+.fb-liquid span:nth-child(2) { width: 360px; height: 360px; top: 38%; right: -8%; background: hsla(190, 95%, 50%, 0.35); }
+.fb-liquid span:nth-child(3) { width: 300px; height: 300px; top: 70%; left: 25%; background: hsla(42, 100%, 56%, 0.18); }
+
+html.light .fb-liquid span { opacity: 0.35; }
+
+/* Frosted glass card */
+.fb-card {
+  --glass-bg: hsla(224, 38%, 9%, 0.5);
+  --glass-edge: hsla(0, 0%, 100%, 0.09);
+  --glass-shine: hsla(0, 0%, 100%, 0.07);
+  position: relative;
+  overflow: hidden;
+  margin-top: 1.75rem;
+  background: linear-gradient(150deg, var(--glass-shine), transparent 55%), var(--glass-bg);
+  -webkit-backdrop-filter: blur(22px) saturate(160%);
+  backdrop-filter: blur(22px) saturate(160%);
+  border: 1px solid var(--glass-edge);
+  border-radius: var(--radius-card);
+  box-shadow: inset 0 1px 0 hsla(0, 0%, 100%, 0.1), 0 24px 60px -30px hsla(225, 60%, 2%, 0.8);
+}
+
+html.light .fb-card {
+  --glass-bg: hsla(0, 0%, 100%, 0.55);
+  --glass-edge: hsla(222, 45%, 15%, 0.1);
+  --glass-shine: hsla(0, 0%, 100%, 0.6);
+  box-shadow: inset 0 1px 0 hsla(0, 0%, 100%, 0.8), 0 24px 60px -34px hsla(222, 60%, 30%, 0.25);
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .fb-card { --glass-bg: var(--bg-surface); }
+}
+
+/* Cursor spotlight on the glass (position set from feedback.js) */
+.fb-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(320px circle at var(--mx, 50%) var(--my, 50%), hsla(0, 0%, 100%, 0.07), transparent 65%);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+}
+
+.fb-card:hover::after { opacity: 1; }
+
+.fb-card > * { position: relative; z-index: 1; }
+
+/* Heading words, split by feedback.js for the reveal */
+.fb-head h1 .w { display: inline-block; overflow: hidden; vertical-align: top; padding-bottom: 0.08em; }
+.fb-head h1 .w > span { display: inline-block; }
+
+/* ---------- Stars (shared) ---------- */
+
+.stars {
+  position: relative;
+  display: inline-flex;
+  line-height: 0;
+}
+
+.stars svg {
+  width: var(--size, 18px);
+  height: var(--size, 18px);
+  flex: none;
+}
+
+.stars-base svg { fill: var(--star-empty); }
+
+.stars-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  display: inline-flex;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.stars-fill svg { fill: var(--star); }
+
+/* ---------- Summary: average + distribution ---------- */
+
+.fb-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2rem;
+  align-items: center;
+  padding: 1.75rem;
+}
+
+.fb-avg {
+  display: grid;
+  justify-items: start;
+  gap: 0.55rem;
+  padding-right: 2rem;
+  border-right: 1px solid var(--border-subtle);
+}
+
+.fb-avg-score {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  color: var(--text-primary);
+}
+
+.fb-avg-num {
+  font-size: 3.4rem;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.fb-avg-of {
+  font-size: 0.95rem;
+  color: var(--text-muted);
+}
+
+.fb-avg .stars { --size: 22px; gap: 0; }
+.fb-avg .stars svg + svg { margin-left: 3px; }
+
+.fb-avg-count {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.fb-dist {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fb-dist li {
+  display: grid;
+  grid-template-columns: 2.1rem minmax(0, 1fr) 2.2rem;
+  gap: 0.75rem;
+  align-items: center;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.fb-dist-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--text-secondary);
+}
+
+.fb-dist-label svg { width: 11px; height: 11px; fill: var(--star); }
+
+.fb-dist-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  overflow: hidden;
+}
+
+.fb-dist-bar span {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: var(--star);
+  transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.fb-dist-count { text-align: right; }
+
+/* ---------- Feedback taker call-to-action ---------- */
+
+.fb-cta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.25rem;
+  padding: 1.5rem 1.75rem;
+}
+
+.fb-cta h2 {
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+
+.fb-cta p {
+  margin-top: 0.25rem;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+.fb-cta .btn,
+.fb-empty-btn {
+  flex: none;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.fb-cta .btn i { color: var(--star); }
+
+/* ---------- Review feed ---------- */
+
+.fb-feed { margin-top: 3rem; }
+
+.fb-feed-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.fb-feed-head h2 {
+  font-size: 1.3rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+
+.fb-feed-count {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.fb-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fb-review {
+  display: grid;
+  grid-template-columns: 2.75rem minmax(0, 1fr);
+  gap: 1rem;
+  padding: 1.5rem 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.fb-avatar {
+  width: 2.75rem;
+  height: 2.75rem;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: hsl(var(--h, 222), 80%, 82%);
+  background: hsla(var(--h, 222), 70%, 55%, 0.16);
+  border: 1px solid hsla(var(--h, 222), 70%, 60%, 0.3);
+  text-transform: uppercase;
+}
+
+html.light .fb-avatar { color: hsl(var(--h, 222), 60%, 35%); }
+
+.fb-review-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.75rem;
+}
+
+.fb-review-name {
+  font-size: 0.98rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.fb-review-date {
+  margin-left: auto;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.fb-review .stars { --size: 14px; margin-top: 0.4rem; }
+.fb-review .stars svg + svg { margin-left: 2px; }
+
+.fb-review-body {
+  margin-top: 0.6rem;
+  color: var(--text-secondary);
+  line-height: 1.65;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.fb-review.is-new .fb-review-name::after {
+  content: "New";
+  margin-left: 0.5rem;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  vertical-align: 2px;
+  color: var(--star);
+  background: var(--star-soft);
+}
+
+.fb-empty {
+  padding: 3rem 1rem;
+  text-align: center;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.fb-empty svg {
+  width: 34px;
+  height: 34px;
+  margin-bottom: 0.75rem;
+  fill: none;
+  stroke: var(--star);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+}
+
+.fb-empty-btn { display: flex; width: fit-content; margin: 1.25rem auto 0; }
+
+.fb-empty strong {
+  display: block;
+  margin-bottom: 0.25rem;
+  color: var(--text-primary);
+}
+
+.fb-more {
+  display: block;
+  margin: 1.5rem auto 0;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+/* ---------- Responsive ---------- */
+
+@media (max-width: 640px) {
+  .fb-main { padding: 6.5rem 1rem 2rem; }
+  .fb-summary { grid-template-columns: 1fr; gap: 1.5rem; padding: 1.35rem; }
+  .fb-avg {
+    padding: 0 0 1.5rem;
+    border-right: 0;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .fb-cta { flex-direction: column; align-items: stretch; padding: 1.35rem; }
+  .fb-cta .btn { justify-content: center; }
+  .fb-review { grid-template-columns: 2.4rem minmax(0, 1fr); gap: 0.85rem; }
+  .fb-avatar { width: 2.4rem; height: 2.4rem; font-size: 0.8rem; }
+  .fb-review-date { margin-left: 0; width: 100%; }
+}
+
+
+.fb-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

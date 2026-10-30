@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Feedback &amp; Reviews · Study Agent</title>
+    <meta name="description" content="Read what students say about Study Agent and leave your own rating and review.">
+
+
+    <link rel="icon" type="image/x-icon" href="./assets/folder.ico">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+        rel="stylesheet">
+
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/7.3.1/css/all.min.css">
+
+
+    <link rel="stylesheet" href="./theme.css">
+    <link rel="stylesheet" href="./style.css">
+    <link rel="stylesheet" href="./feedback.css">
+    <link rel="stylesheet" href="./feedback-modal.css">
+</head>
+
+
+<body>
+    <div class="fb-bg" aria-hidden="true"></div>
+    <div class="fb-liquid" aria-hidden="true"><span></span><span></span><span></span></div>
+
+
+    <!-- Same navbar as the other pages. Feedback is deliberately not in it: the page is linked from the footer. -->
+    <header class="header">
+        <nav class="nav" aria-label="Main Navigation">
+
+            <a href="index.html" class="brand-logo">Study Agent</a>
+
+
+            <ul class="nav-links" id="nav-menu">
+                <li class="nav-home-mobile"><a href="index.html">Home</a></li>
+                <li><a href="setup.html">Setup</a></li>
+                <li><a href="quizzes.html">Quizzes</a></li>
+                <li><a href="planner.html">Planner</a></li>
+                <li><a href="resources.html">Resources</a></li>
+                <li class="nav-cta-mobile"><a href="https://web.telegram.org/a/#8996972210" target="_blank" rel="noopener noreferrer">Start</a></li>
+            </ul>
+
+
+            <button class="nav-toggle" type="button" aria-label="Open menu" aria-expanded="false"
+                aria-controls="nav-menu"><i class="fa-solid fa-bars" aria-hidden="true"></i></button>
+
+            <div class="nav-actions">
+                <a href="setup.html" class="nav-btn nav-btn-text">Setup Telegram</a>
+                <a href="https://web.telegram.org/a/#8996972210" class="nav-btn nav-btn-primary" target="_blank" rel="noopener noreferrer">Start</a>
+            </div>
+        </nav>
+    </header>
+
+
+    <main class="fb-main">
+        <div class="fb-head">
+            <span class="fb-eyebrow">Feedback &amp; reviews</span>
+            <h1>What students think of Study Agent</h1>
+            <p>Honest ratings from the people who use it. Tell us what's working, what isn't, and what you'd like next.</p>
+        </div>
+
+        <!-- Average rating -->
+        <section class="fb-card fb-summary" aria-labelledby="fb-avg-title">
+            <div class="fb-avg">
+                <h2 id="fb-avg-title" class="fb-eyebrow">Average rating</h2>
+                <div class="fb-avg-score" aria-hidden="true">
+                    <span class="fb-avg-num" id="fb-avg-num">–</span>
+                    <span class="fb-avg-of">out of 5</span>
+                </div>
+                <span class="fb-sr" id="fb-avg-sr" aria-live="polite"></span>
+                <span id="fb-avg-stars"></span>
+                <span class="fb-avg-count" id="fb-avg-count">Loading reviews…</span>
+            </div>
+
+            <ul class="fb-dist" id="fb-dist" aria-label="Rating breakdown">
+                <li data-star="5"><span class="fb-dist-label">5 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.6l2.9 5.88 6.49.94-4.7 4.58 1.11 6.46L12 17.41l-5.8 3.05 1.11-6.46-4.7-4.58 6.49-.94z"/></svg></span><span class="fb-dist-bar"><span></span></span><span class="fb-dist-count">0</span></li>
+                <li data-star="4"><span class="fb-dist-label">4 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.6l2.9 5.88 6.49.94-4.7 4.58 1.11 6.46L12 17.41l-5.8 3.05 1.11-6.46-4.7-4.58 6.49-.94z"/></svg></span><span class="fb-dist-bar"><span></span></span><span class="fb-dist-count">0</span></li>
+                <li data-star="3"><span class="fb-dist-label">3 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.6l2.9 5.88 6.49.94-4.7 4.58 1.11 6.46L12 17.41l-5.8 3.05 1.11-6.46-4.7-4.58 6.49-.94z"/></svg></span><span class="fb-dist-bar"><span></span></span><span class="fb-dist-count">0</span></li>
+                <li data-star="2"><span class="fb-dist-label">2 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.6l2.9 5.88 6.49.94-4.7 4.58 1.11 6.46L12 17.41l-5.8 3.05 1.11-6.46-4.7-4.58 6.49-.94z"/></svg></span><span class="fb-dist-bar"><span></span></span><span class="fb-dist-count">0</span></li>
+                <li data-star="1"><span class="fb-dist-label">1 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.6l2.9 5.88 6.49.94-4.7 4.58 1.11 6.46L12 17.41l-5.8 3.05 1.11-6.46-4.7-4.58 6.49-.94z"/></svg></span><span class="fb-dist-bar"><span></span></span><span class="fb-dist-count">0</span></li>
+            </ul>
+        </section>
+
+        <!-- Feedback taker: opens the popup from feedback-modal.js -->
+        <section class="fb-card fb-cta" aria-labelledby="fb-cta-title">
+            <div class="fb-cta-text">
+                <h2 id="fb-cta-title">Used Study Agent lately?</h2>
+                <p>Rate it and tell us what to improve. It takes less than a minute.</p>
+            </div>
+            <button type="button" class="btn btn-solid" data-open-feedback><i class="fa-solid fa-star" aria-hidden="true"></i> Write a review</button>
+        </section>
+
+        <!-- Live review feed -->
+        <section class="fb-feed" aria-labelledby="fb-feed-title">
+            <div class="fb-feed-head">
+                <h2 id="fb-feed-title">All reviews</h2>
+                <span class="fb-feed-count" id="fb-feed-count"></span>
+            </div>
+            <div class="fb-empty" id="fb-empty" hidden>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.6l2.9 5.88 6.49.94-4.7 4.58 1.11 6.46L12 17.41l-5.8 3.05 1.11-6.46-4.7-4.58 6.49-.94z"/></svg>
+                <strong>No reviews yet</strong>
+                Be the first to share how Study Agent is working for you.
+                <button type="button" class="btn btn-ghost fb-empty-btn" data-open-feedback>Write the first review</button>
+            </div>
+            <ul class="fb-list" id="fb-list" aria-live="polite"></ul>
+            <button type="button" class="btn btn-ghost fb-more" id="fb-more" hidden>Show more reviews</button>
+        </section>
+    </main>
+
+    <footer class="foot">
+        <div class="foot-grid">
+            <div class="foot-brand">
+                <a href="index.html" class="brand-logo">Study Agent</a>
+                <p>A Telegram-first study planner for CBSE students in Classes 8 to 12.</p>
+                <div class="socials">
+                    <a href="https://web.telegram.org/a/#8996972210" aria-label="Telegram"><i
+                            class="fa-brands fa-telegram"></i></a>
+                    <a href="https://github.com/Adicodes270/Study-AI-Agent" aria-label="GitHub"><i
+                            class="fa-brands fa-github"></i></a>
+                </div>
+            </div>
+            <nav aria-label="Product">
+                <h4>Product</h4><a href="setup.html">Setup</a><a href="planner.html">Planner</a><a
+                    href="quizzes.html">Quizzes</a><a href="resources.html">Resources</a>
+            </nav>
+            <nav aria-label="Project">
+                <h4>Project</h4><a href="https://github.com/Adicodes270/Study-AI-Agent">GitHub repo</a><a
+                    href="https://web.telegram.org/a/#8996972210">Telegram bot</a><a href="index.html">Home</a><a
+                    href="feedback.html" aria-current="page">Feedback &amp; reviews</a>
+            </nav>
+            <nav aria-label="Built with">
+                <h4>Built with</h4><a href="https://ai.google.dev/">Gemini API</a><a
+                    href="https://developer.todoist.com/">Todoist API</a><a href="https://ncert.nic.in/">NCERT</a>
+                <a href="https://neon.com/">NeonDB</a>
+            </nav>
+        </div>
+        <div class="foot-bottom">
+            <span>&copy; 2026 Study Agent. NCERT books belong to NCERT.</span>
+            <button type="button" class="to-top">Back to top <i class="fa-solid fa-arrow-up"></i></button>
+        </div>
+    </footer>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lenis@1.1.20/dist/lenis.min.js"></script>
+    <script src="./script.js"></script>
+    <script src="./feedback-modal.js"></script>
+    <script src="./feedback.js"></script>
+</body>
+
+</html>
